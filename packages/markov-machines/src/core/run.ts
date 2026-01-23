@@ -5,7 +5,8 @@ import type { Command, Resume } from "../types/commands.js";
 import type { Message } from "../types/messages.js";
 import type { YieldReason } from "../executor/types.js";
 import { getActiveLeaves, isWorkerInstance, getSuspendedInstances, findInstanceById, clearSuspension } from "../types/instance.js";
-import { userMessage } from "../types/messages.js";
+import { userMessage, assistantMessage } from "../types/messages.js";
+import type { OutputBlock } from "../types/messages.js";
 import { isCommand, isResume } from "../types/commands.js";
 import { runCommand } from "./commands.js";
 
@@ -271,21 +272,40 @@ export async function* runMachine<AppMessage = unknown>(
 
   // Handle Command input
   if (isCommand(input)) {
-    const { machine: updatedMachine, result } = await runCommand<AppMessage>(
+    const { machine: updatedMachine, result, replyMessages } = await runCommand<AppMessage>(
       machine,
       input.name,
       input.input,
       input.instanceId,
     );
 
-    // Create a message for history tracking
+    // Determine instance ID for message attribution
+    const targetInstanceId = input.instanceId ?? updatedMachine.instance.id;
+
+    // If command returned a reply, create assistant message for user
+    if (replyMessages) {
+      // Create the user-facing assistant message
+      const userContent = typeof replyMessages.userMessage === "string"
+        ? replyMessages.userMessage
+        : [{ type: "output" as const, data: replyMessages.userMessage as AppMessage } as OutputBlock<AppMessage>];
+
+      yield {
+        instance: updatedMachine.instance,
+        messages: [assistantMessage<AppMessage>(userContent, targetInstanceId)],
+        yieldReason: "command",
+        done: true,
+      };
+      return;
+    }
+
+    // Fallback: Create a message for history tracking
     const commandMessage = result.success
       ? `[Command: ${input.name} executed]`
       : `[Command: ${input.name} failed - ${result.error}]`;
 
     yield {
       instance: updatedMachine.instance,
-      messages: [userMessage(commandMessage)],
+      messages: [userMessage(commandMessage, targetInstanceId)],
       yieldReason: "command",
       done: true,
     };
