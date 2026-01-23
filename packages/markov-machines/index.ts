@@ -8,8 +8,8 @@ export { createMachine } from "./src/core/machine.js";
 export { createTransition } from "./src/core/transition.js";
 export { cede, spawn, suspend } from "./src/helpers/cede-spawn.js";
 export type { TransitionConfig } from "./src/core/transition.js";
-export { runMachine, runMachineToCompletion } from "./src/core/run.js";
-export type { RunMachineInput } from "./src/core/run.js";
+export { runMachine, runMachineToCompletion, mergeLeafResults } from "./src/core/run.js";
+export type { RunMachineInput, LeafResult, MergedResult } from "./src/core/run.js";
 export { createPack } from "./src/core/pack.js";
 export { getAvailableCommands, runCommand, createCommand } from "./src/core/commands.js";
 export type { CommandConfig } from "./src/core/commands.js";
@@ -35,6 +35,9 @@ export type {
   SuspendedInstanceInfo,
 } from "./src/executor/types.js";
 
+// Tools
+export { generateToolDefinitions } from "./src/tools/index.js";
+
 // Serialization
 export { serializeNode, serializeInstance, serializeMachine } from "./src/serialization/serialize.js";
 export { deserializeMachine, deserializeInstance, deserializeNode } from "./src/serialization/deserialize.js";
@@ -54,6 +57,7 @@ export type {
   Instance,
   NodeState,
   SuspendInfo,
+  ActiveLeafInfo,
   // Machine
   Machine,
   MachineConfig,
@@ -170,7 +174,8 @@ export {
 } from "./src/types/messages.js";
 
 // System prompt helpers
-export type { SystemPromptOptions } from './src/runtime/system-prompt.js'
+export type { SystemPromptOptions } from './src/runtime/system-prompt.js';
+export { buildSystemPrompt, buildDefaultSystemPrompt } from './src/runtime/system-prompt.js';
 
 // State helpers
 export { shallowMerge } from "./src/types/state.js";

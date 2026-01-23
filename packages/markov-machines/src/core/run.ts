@@ -26,8 +26,9 @@ const hasPackStates = (ps?: Record<string, unknown>): boolean =>
 
 /**
  * Flattened result from executor.run() + tree metadata for parallel merging.
+ * Exported for use by voice package.
  */
-interface LeafResult<AppMessage = unknown> {
+export interface LeafResult<AppMessage = unknown> {
   /** Index path to this leaf in the tree */
   leafIndex: number[];
   /** Whether this is a worker instance */
@@ -48,8 +49,9 @@ interface LeafResult<AppMessage = unknown> {
 
 /**
  * Result of merging all leaf results.
+ * Exported for use by voice package.
  */
-interface MergedResult<AppMessage = unknown> {
+export interface MergedResult<AppMessage = unknown> {
   /** Updated instance tree */
   instance: Instance;
   /** All messages from all leaves */
@@ -153,8 +155,9 @@ function updateInstanceById(
 /**
  * Merge results from parallel leaf execution.
  * Processes in descending index order so removals don't invalidate later indices.
+ * Exported for use by voice package.
  */
-function mergeLeafResults<AppMessage>(
+export function mergeLeafResults<AppMessage>(
   root: Instance,
   results: LeafResult<AppMessage>[],
 ): MergedResult<AppMessage> {
