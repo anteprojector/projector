@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect } from "react";
-import { useAtom, useAtomValue } from "jotai";
+import { useCallback, useEffect, useRef } from "react";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useAction, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -11,6 +11,9 @@ import {
   scanlinesEnabledAtom,
   selectedStepIdAtom,
   isPreviewingAtom,
+  activeAgentTabAtom,
+  shiftHeldAtom,
+  type AgentTab,
 } from "@/src/atoms";
 import { useSessionId } from "@/src/hooks";
 import { TerminalPane } from "./components/terminal/TerminalPane";
@@ -28,6 +31,11 @@ export function HomeClient({
   const scanlinesEnabled = useAtomValue(scanlinesEnabledAtom);
   const selectedStepId = useAtomValue(selectedStepIdAtom);
   const isPreviewing = useAtomValue(isPreviewingAtom);
+  const setActiveTab = useSetAtom(activeAgentTabAtom);
+  const setShiftHeld = useSetAtom(shiftHeldAtom);
+
+  const terminalInputRef = useRef<HTMLTextAreaElement>(null);
+  const agentPaneRef = useRef<HTMLDivElement>(null);
 
   const createSession = useAction(api.chat.createSession);
   const sendMessage = useAction(api.chat.send);
@@ -65,6 +73,70 @@ export function HomeClient({
       createSession().then(setSessionId);
     }
   }, [sessionId, session, createSession, setSessionId]);
+
+  // Global keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Skip if typing in an input/textarea (except for M which focuses the input)
+      const target = e.target as HTMLElement;
+      const isTyping = target.tagName === "INPUT" || target.tagName === "TEXTAREA";
+
+      // M - focus left pane (terminal input)
+      if (e.key.toLowerCase() === "m" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        terminalInputRef.current?.focus();
+        return;
+      }
+
+      // Skip other shortcuts if typing
+      if (isTyping) return;
+
+      // A - focus right pane (agent pane)
+      if (e.key.toLowerCase() === "a" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        agentPaneRef.current?.focus();
+        return;
+      }
+
+      // Tab shortcuts (T/S/H/C/D)
+      const tabMap: Record<string, AgentTab> = {
+        t: "tree",
+        s: "state",
+        h: "history",
+        c: "commands",
+        d: "dev",
+      };
+      const tab = tabMap[e.key.toLowerCase()];
+      if (tab && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        setActiveTab(tab);
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [setActiveTab]);
+
+  // Track shift key for showing hotkey hints
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Shift") setShiftHeld(true);
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === "Shift") setShiftHeld(false);
+    };
+    // Also reset on blur in case shift is released while window unfocused
+    const handleBlur = () => setShiftHeld(false);
+
+    document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", handleBlur);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", handleBlur);
+    };
+  }, [setShiftHeld]);
 
   const handleSend = async () => {
     if (!sessionId || !input.trim() || isLoading) return;
@@ -109,6 +181,7 @@ export function HomeClient({
         <div className="w-1/2 h-full border-r border-terminal-green-dimmer relative">
           {scanlinesEnabled && <div className="terminal-scanlines absolute inset-0" />}
           <TerminalPane
+            ref={terminalInputRef}
             messages={messages ?? []}
             input={input}
             onInputChange={setInput}
@@ -121,6 +194,7 @@ export function HomeClient({
         <div className="w-1/2 h-full relative">
           {scanlinesEnabled && <div className="terminal-scanlines absolute inset-0" />}
           <AgentPane
+            ref={agentPaneRef}
             sessionId={sessionId}
             instance={session?.instance}
             displayInstance={session?.displayInstance}

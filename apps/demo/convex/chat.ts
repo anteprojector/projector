@@ -16,12 +16,12 @@ import {
   type Message,
   type MachineStep,
 } from "markov-machines";
-import { demoCharter, rootNode } from "../src/agent/charter";
+import { demoCharter, nameGateNode } from "../src/agent/charter";
 import { serializeInstanceForDisplay } from "../src/serializeForDisplay";
 
 function getActiveNodeInstructions(instance: Instance): string {
   const instructions = instance.node.instructions || "";
-  return instructions.slice(0, 100);
+  return instructions.slice(0, 10000);
 }
 
 // Filter out messages with empty content (Anthropic API requires non-empty content)
@@ -146,8 +146,8 @@ function initPackStates(node: Node<unknown>): Record<string, unknown> {
 export const createSession = action({
   args: {},
   handler: async (ctx): Promise<Id<"sessions">> => {
-    const packStates = initPackStates(rootNode as Node<unknown>);
-    const instance: Instance = createInstance(rootNode as Node<unknown>, {}, undefined, packStates);
+    const packStates = initPackStates(nameGateNode as Node<unknown>);
+    const instance: Instance = createInstance(nameGateNode as Node<unknown>, {}, undefined, packStates);
 
     const serializedInstance = serializeInstance(instance, demoCharter);
     const displayInstance = serializeInstanceForDisplay(instance, demoCharter);
@@ -157,6 +157,64 @@ export const createSession = action({
       instance: serializedInstance,
       displayInstance,
     });
+
+    // Trigger initial agent response
+    const machine = createMachine(demoCharter, {
+      instance,
+      history: [],
+    });
+
+    const turnId = await ctx.runMutation(api.machineTurns.create, {
+      sessionId,
+      parentId: undefined,
+      instanceId: machine.instance.id,
+      instance: serializeInstance(machine.instance, demoCharter),
+      displayInstance: serializeInstanceForDisplay(machine.instance, demoCharter),
+    });
+
+    let stepNumber = 0;
+    let lastStep: MachineStep | null = null;
+    const allMessages: Message[] = [];
+
+    // Run with empty input to trigger initial greeting
+    for await (const step of runMachine(machine, "[session started]", { maxSteps: 10 })) {
+      stepNumber++;
+      allMessages.push(...step.messages);
+
+      await ctx.runMutation(api.machineSteps.add, {
+        sessionId,
+        turnId,
+        stepNumber,
+        yieldReason: step.yieldReason,
+        response: getStepResponse(step),
+        done: step.done,
+        messages: step.messages,
+        instance: serializeInstance(step.instance, demoCharter),
+        displayInstance: serializeInstanceForDisplay(step.instance, demoCharter),
+        activeNodeInstructions: getActiveNodeInstructions(step.instance),
+      });
+
+      lastStep = step;
+    }
+
+    if (lastStep) {
+      await ctx.runMutation(api.sessions.finalizeTurn, {
+        turnId,
+        instance: serializeInstance(lastStep.instance, demoCharter),
+        displayInstance: serializeInstanceForDisplay(lastStep.instance, demoCharter),
+        messages: allMessages,
+      });
+
+      const responseText = getStepResponse(lastStep);
+      if (responseText) {
+        await ctx.runMutation(api.messages.add, {
+          sessionId,
+          role: "assistant",
+          content: responseText,
+          turnId,
+        });
+      }
+    }
 
     return sessionId;
   },

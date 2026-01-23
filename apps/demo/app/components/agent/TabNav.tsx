@@ -1,18 +1,19 @@
 "use client";
 
-import { useAtom } from "jotai";
-import { activeAgentTabAtom, type AgentTab } from "@/src/atoms";
+import { useAtom, useAtomValue } from "jotai";
+import { activeAgentTabAtom, shiftHeldAtom, type AgentTab } from "@/src/atoms";
 
-const tabs: { id: AgentTab; label: string }[] = [
-  { id: "tree", label: "Tree" },
-  { id: "state", label: "State" },
-  { id: "history", label: "History" },
-  { id: "commands", label: "Commands" },
-  { id: "dev", label: "Dev" },
+const tabs: { id: AgentTab; hotkey: string; rest: string }[] = [
+  { id: "tree", hotkey: "T", rest: "ree" },
+  { id: "state", hotkey: "S", rest: "tate" },
+  { id: "history", hotkey: "H", rest: "istory" },
+  { id: "commands", hotkey: "C", rest: "ommands" },
+  { id: "dev", hotkey: "D", rest: "ev" },
 ];
 
 export function TabNav() {
   const [activeTab, setActiveTab] = useAtom(activeAgentTabAtom);
+  const shiftHeld = useAtomValue(shiftHeldAtom);
 
   return (
     <div className="flex border-b border-terminal-green-dimmer">
@@ -29,7 +30,7 @@ export function TabNav() {
             }
           `}
         >
-          [{tab.label}]
+          [{shiftHeld ? <u>{tab.hotkey}</u> : tab.hotkey}{tab.rest}]
         </button>
       ))}
     </div>

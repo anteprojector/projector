@@ -12,21 +12,14 @@ export const fooStateValidator = z.object({
 export type FooState = z.infer<typeof fooStateValidator>;
 
 export const fooNode = createNode({
-  instructions: `You are a friendly guide for the markov-machines demo.
-Your name is stored in your state - greet the user with it!
+  instructions: `You guide the markov-machines demo. Your name is in your state - greet the user with it when you first become active.
 
-You can demonstrate three key features by spawning child nodes:
-1. Memory Demo - Shows the Pack system with persistent key-value storage
-2. Ping Demo - Shows Commands that bypass the LLM for instant responses
-3. Favorites Demo - Shows Node State with real-time state updates
+Three demos available:
+1. Memory Demo - Pack system, persistent key-value storage
+2. Ping Demo - Commands that bypass the LLM
+3. Favorites Demo - Node State with real-time updates
 
-Explain what each demo will show, then use the appropriate spawn transition.
-When a child node cedes back to you, you'll receive their summary message.
-
-The user can watch the Instance Tree tab to see nodes spawn and cede.
-Encourage them to explore the right panel as you navigate!
-
-When the user is done, you can use cedeToParent to say goodbye.`,
+Spawn the appropriate demo node when requested. When a child cedes back, you receive their summary.`,
 
   validator: fooStateValidator,
   packs: [themePack],

@@ -1,94 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
-interface SerializedSuspendInfo {
-  suspendId: string;
-  reason: string;
-  suspendedAt: string;
-  metadata?: Record<string, unknown>;
-}
+// ============================================================================
+// Shared Tree Components (exported for reuse)
+// ============================================================================
 
-// Display format node (from serializeInstanceForDisplay)
-interface DisplayCommand {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-}
-
-interface DisplayNode {
-  name: string;
-  instructions: string;
-  validator: Record<string, unknown>;
-  tools: string[]; // Just tool names
-  transitions: Record<string, string>; // name -> target
-  commands: Record<string, DisplayCommand>;
-  initialState?: unknown;
-  packs?: string[];
-  worker?: boolean;
-}
-
-// Standard serialized format node
-interface SerialNode {
-  instructions: string;
-  validator: Record<string, unknown>;
-  transitions: Record<string, unknown>;
-  tools?: Record<string, unknown>;
-  initialState?: unknown;
-}
-
-interface Ref {
-  ref: string;
-}
-
-type NodeType = DisplayNode | SerialNode | Ref;
-
-interface DisplayInstance {
-  id: string;
-  node: NodeType;
-  state: unknown;
-  children?: DisplayInstance[];
-  packStates?: Record<string, unknown>;
-  executorConfig?: Record<string, unknown>;
-  suspended?: SerializedSuspendInfo;
-}
-
-interface TreeViewProps {
-  instance: DisplayInstance;
-  depth?: number;
-  isLast?: boolean;
-}
-
-function isRef(value: unknown): value is Ref {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "ref" in value &&
-    typeof (value as Ref).ref === "string" &&
-    Object.keys(value).length === 1
-  );
-}
-
-function isDisplayNode(node: NodeType): node is DisplayNode {
-  return (
-    !isRef(node) &&
-    "tools" in node &&
-    Array.isArray((node as DisplayNode).tools)
-  );
-}
-
-function truncate(str: string, maxLen: number): string {
+export function truncate(str: string, maxLen: number): string {
   if (str.length <= maxLen) return str;
   return str.slice(0, maxLen - 3) + "...";
 }
 
-function jsonPreview(data: unknown, maxLen: number = 40): string {
+export function jsonPreview(data: unknown, maxLen: number = 40): string {
   const str = JSON.stringify(data);
   if (str.length <= maxLen) return str;
   return str.slice(0, maxLen - 3) + "...";
 }
 
-function Expander({
+export function Expander({
   label,
   badge,
   preview,
@@ -99,7 +28,7 @@ function Expander({
   badge?: string | number;
   preview?: unknown;
   defaultOpen?: boolean;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
 
@@ -127,13 +56,13 @@ function Expander({
   );
 }
 
-function KeyValue({
+export function KeyValue({
   k,
   v,
   vClass = "text-terminal-green-dim",
 }: {
   k: string;
-  v: React.ReactNode;
+  v: ReactNode;
   vClass?: string;
 }) {
   return (
@@ -144,12 +73,156 @@ function KeyValue({
   );
 }
 
-function JsonBlock({ data }: { data: unknown }) {
+export function JsonBlock({ data }: { data: unknown }) {
   return (
     <pre className="text-terminal-green-dim text-xs whitespace-pre-wrap break-all max-h-40 overflow-auto">
       {JSON.stringify(data, null, 2)}
     </pre>
   );
+}
+
+/**
+ * Generic tree node component with unified styling.
+ * Handles header, vertical line, content, and child rendering.
+ */
+export function TreeNode<T extends { id: string; children?: T[] }>({
+  item,
+  getName,
+  renderContent,
+  getBadge,
+}: {
+  item: T;
+  getName: (item: T) => string;
+  renderContent: (item: T) => ReactNode;
+  getBadge?: (item: T) => ReactNode;
+}) {
+  const hasChildren = item.children && item.children.length > 0;
+  const nodeName = getName(item);
+
+  return (
+    <div className="font-mono">
+      {/* Header row */}
+      <div className="flex items-center text-sm">
+        <span className="font-bold text-terminal-green border border-dashed border-terminal-green-dimmer px-1 m-px">
+          {nodeName}
+        </span>
+        <span className="text-terminal-green-dimmer text-xs ml-2">
+          {item.id.slice(0, 8)}
+        </span>
+        {getBadge && getBadge(item)}
+      </div>
+
+      {/* Content sections with vertical line */}
+      <div className="border-l border-terminal-green-dimmer ml-px pl-3 space-y-1 py-1">
+        {renderContent(item)}
+
+        {/* Children with connectors */}
+        {hasChildren &&
+          item.children!.map((child) => (
+            <div key={child.id} className="mt-2 flex items-start">
+              {/* Horizontal connector from parent's vertical border */}
+              <div
+                className="shrink-0"
+                style={{
+                  width: '23px',
+                  height: '1px',
+                  backgroundColor: 'var(--terminal-green-dimmer)',
+                  marginTop: '0.75em',
+                  marginLeft: '-12px'
+                }}
+              />
+              {/* Child node */}
+              <TreeNode
+                item={child}
+                getName={getName}
+                renderContent={renderContent}
+                getBadge={getBadge}
+              />
+            </div>
+          ))}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// Server TreeView Types & Implementation
+// ============================================================================
+
+interface SerializedSuspendInfo {
+  suspendId: string;
+  reason: string;
+  suspendedAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+interface DisplayCommand {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
+interface DisplayNode {
+  name: string;
+  instructions: string;
+  validator: Record<string, unknown>;
+  tools: string[];
+  transitions: Record<string, string>;
+  commands: Record<string, DisplayCommand>;
+  initialState?: unknown;
+  packs?: string[];
+  worker?: boolean;
+}
+
+interface SerialNode {
+  instructions: string;
+  validator: Record<string, unknown>;
+  transitions: Record<string, unknown>;
+  tools?: Record<string, unknown>;
+  initialState?: unknown;
+}
+
+interface Ref {
+  ref: string;
+}
+
+type NodeType = DisplayNode | SerialNode | Ref;
+
+export interface ServerInstance {
+  id: string;
+  node: NodeType;
+  state: unknown;
+  children?: ServerInstance[];
+  packStates?: Record<string, unknown>;
+  executorConfig?: Record<string, unknown>;
+  suspended?: SerializedSuspendInfo;
+}
+
+function isRef(value: unknown): value is Ref {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "ref" in value &&
+    typeof (value as Ref).ref === "string" &&
+    Object.keys(value).length === 1
+  );
+}
+
+function isDisplayNode(node: NodeType): node is DisplayNode {
+  return (
+    !isRef(node) &&
+    "tools" in node &&
+    Array.isArray((node as DisplayNode).tools)
+  );
+}
+
+function getServerNodeName(instance: ServerInstance): string {
+  if (isRef(instance.node)) {
+    return instance.node.ref;
+  } else if ("name" in instance.node && typeof instance.node.name === "string") {
+    return instance.node.name;
+  }
+  return "[inline]";
 }
 
 function NodeSection({ node }: { node: NodeType }) {
@@ -163,7 +236,6 @@ function NodeSection({ node }: { node: NodeType }) {
 
   const instructionPreview = truncate(node.instructions.replace(/\n/g, " "), 100);
 
-  // Handle display format (tools is string[], transitions is Record<string, string>)
   if (isDisplayNode(node)) {
     const toolNames = node.tools;
     const transitions = node.transitions;
@@ -224,9 +296,7 @@ function NodeSection({ node }: { node: NodeType }) {
           </Expander>
         )}
 
-        {node.worker && (
-          <KeyValue k="worker" v="true" />
-        )}
+        {node.worker && <KeyValue k="worker" v="true" />}
 
         {node.initialState !== undefined && (
           <Expander label="initialState" preview={node.initialState}>
@@ -237,7 +307,7 @@ function NodeSection({ node }: { node: NodeType }) {
     );
   }
 
-  // Handle serial format (tools is Record, transitions is Record with complex values)
+  // Handle serial format
   const serialNode = node as SerialNode;
   const toolNames = serialNode.tools ? Object.keys(serialNode.tools) : [];
   const transitionNames = Object.keys(serialNode.transitions);
@@ -292,109 +362,75 @@ function NodeSection({ node }: { node: NodeType }) {
   );
 }
 
-export function TreeView({
-  instance,
-  depth = 0,
-  isLast = true,
-}: TreeViewProps) {
-  // Determine node name - from display format, ref, or inline
-  let nodeName = "[inline]";
-  if (isRef(instance.node)) {
-    nodeName = instance.node.ref;
-  } else if ("name" in instance.node && typeof instance.node.name === "string") {
-    nodeName = instance.node.name;
-  }
-
-  const isSuspended = !!instance.suspended;
+function ServerInstanceContent({ instance }: { instance: ServerInstance }) {
   const hasPackStates =
     instance.packStates && Object.keys(instance.packStates).length > 0;
-  const hasChildren = instance.children && instance.children.length > 0;
+  const isSuspended = !!instance.suspended;
 
   return (
-    <div className={`font-mono ${depth > 0 ? "mt-4" : ""}`}>
-      {/* Header row with tree branch */}
-      <div className="flex items-center gap-2 text-sm">
-        {depth > 0 && (
-          <span className="text-terminal-green-dimmer -ml-4 mr-1">
-            {isLast ? "└─" : "├─"}
-          </span>
-        )}
-        <span
-          className={`font-bold ${isSuspended ? "text-terminal-yellow" : "text-terminal-green"}`}
+    <>
+      <Expander label="state" preview={instance.state}>
+        <JsonBlock data={instance.state} />
+      </Expander>
+
+      {hasPackStates && (
+        <Expander
+          label="packStates"
+          badge={Object.keys(instance.packStates!).length}
+          preview={instance.packStates}
         >
-          {nodeName}
-        </span>
-        <span className="text-terminal-green-dimmer text-xs">
-          {instance.id.slice(0, 8)}
-        </span>
-        {isSuspended && (
-          <span className="text-terminal-yellow text-xs">[SUSPENDED]</span>
-        )}
-      </div>
-
-      {/* Content sections with vertical line - includes children */}
-      <div className="border-l border-terminal-green-dimmer ml-[3px] pl-3 space-y-1 py-1">
-        {/* State - always show */}
-        <Expander label="state" defaultOpen preview={instance.state}>
-          <JsonBlock data={instance.state} />
+          <div className="space-y-1">
+            {Object.entries(instance.packStates!).map(([name, state]) => (
+              <Expander key={name} label={name} preview={state}>
+                <JsonBlock data={state} />
+              </Expander>
+            ))}
+          </div>
         </Expander>
+      )}
 
-        {/* Pack States */}
-        {hasPackStates && (
-          <Expander
-            label="packStates"
-            badge={Object.keys(instance.packStates!).length}
-            preview={instance.packStates}
-          >
-            <div className="space-y-1">
-              {Object.entries(instance.packStates!).map(([name, state]) => (
-                <Expander key={name} label={name} preview={state}>
-                  <JsonBlock data={state} />
-                </Expander>
-              ))}
-            </div>
-          </Expander>
-        )}
+      <Expander label="node" preview={instance.node}>
+        <NodeSection node={instance.node} />
+      </Expander>
 
-        {/* Node */}
-        <Expander label="node" preview={instance.node}>
-          <NodeSection node={instance.node} />
+      {instance.executorConfig && (
+        <Expander label="executorConfig" preview={instance.executorConfig}>
+          <JsonBlock data={instance.executorConfig} />
         </Expander>
+      )}
 
-        {/* Executor Config */}
-        {instance.executorConfig && (
-          <Expander label="executorConfig" preview={instance.executorConfig}>
-            <JsonBlock data={instance.executorConfig} />
-          </Expander>
-        )}
+      {isSuspended && (
+        <Expander label="suspended" defaultOpen preview={instance.suspended}>
+          <div className="text-terminal-yellow text-xs space-y-0.5">
+            <KeyValue k="reason" v={instance.suspended!.reason} vClass="text-terminal-yellow" />
+            <KeyValue k="id" v={instance.suspended!.suspendId} vClass="text-terminal-yellow" />
+            <KeyValue k="at" v={instance.suspended!.suspendedAt} vClass="text-terminal-yellow" />
+            {instance.suspended!.metadata && (
+              <Expander label="metadata" preview={instance.suspended!.metadata}>
+                <JsonBlock data={instance.suspended!.metadata} />
+              </Expander>
+            )}
+          </div>
+        </Expander>
+      )}
+    </>
+  );
+}
 
-        {/* Suspended */}
-        {isSuspended && (
-          <Expander label="suspended" defaultOpen preview={instance.suspended}>
-            <div className="text-terminal-yellow text-xs space-y-0.5">
-              <KeyValue k="reason" v={instance.suspended!.reason} vClass="text-terminal-yellow" />
-              <KeyValue k="id" v={instance.suspended!.suspendId} vClass="text-terminal-yellow" />
-              <KeyValue k="at" v={instance.suspended!.suspendedAt} vClass="text-terminal-yellow" />
-              {instance.suspended!.metadata && (
-                <Expander label="metadata" preview={instance.suspended!.metadata}>
-                  <JsonBlock data={instance.suspended!.metadata} />
-                </Expander>
-              )}
-            </div>
-          </Expander>
-        )}
+function getServerBadge(instance: ServerInstance): ReactNode {
+  if (instance.suspended) {
+    return <span className="text-terminal-yellow text-xs ml-2">[SUSPENDED]</span>;
+  }
+  return null;
+}
 
-        {/* Children - inside the vertical line container so branches connect */}
-        {hasChildren &&
-          instance.children!.map((child, i) => (
-            <TreeView
-              key={child.id}
-              instance={child}
-              depth={depth + 1}
-              isLast={i === instance.children!.length - 1}
-            />
-          ))}
-      </div>
-    </div>
+export function TreeView({ instance }: { instance: ServerInstance }) {
+  return (
+    <TreeNode
+      item={instance}
+      getName={getServerNodeName}
+      renderContent={(inst) => <ServerInstanceContent instance={inst} />}
+      getBadge={getServerBadge}
+    />
   );
 }

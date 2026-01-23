@@ -27,6 +27,8 @@ export type SystemPromptBuilder<AppMessage = unknown> = <S>(
  */
 export interface CharterConfig<AppMessage = unknown> {
   name: string;
+  /** Charter-level instructions applied to all nodes */
+  instructions?: string;
   /** Single executor for running nodes */
   executor: Executor<AppMessage>;
   /** Registered tools (for ref-based lookup, available to all nodes) */
@@ -55,6 +57,8 @@ export interface CharterConfig<AppMessage = unknown> {
  */
 export interface Charter<AppMessage = unknown> {
   name: string;
+  /** Charter-level instructions applied to all nodes */
+  instructions?: string;
   /**
    * Single executor for running nodes.
    * Uses `any` to break contravariance - allows Charter<Specific> to be assignable to Charter<AppMessage>.

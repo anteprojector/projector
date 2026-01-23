@@ -1,11 +1,12 @@
 "use client";
 
+import { forwardRef } from "react";
 import { useAtomValue } from "jotai";
 import { useAction } from "convex/react";
 import { useEffect, useState } from "react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { activeAgentTabAtom } from "@/src/atoms";
+import { activeAgentTabAtom, shiftHeldAtom } from "@/src/atoms";
 import { TabNav } from "./TabNav";
 import { InstanceTreeTab } from "./InstanceTreeTab";
 import { StateTab } from "./StateTab";
@@ -72,41 +73,48 @@ interface AgentPaneProps {
   onResetSession: () => void;
 }
 
-export function AgentPane({ sessionId, instance, displayInstance, onResetSession }: AgentPaneProps) {
-  const activeTab = useAtomValue(activeAgentTabAtom);
-  const getCommands = useAction(api.commands.getCommands);
-  const [commands, setCommands] = useState<SerializedCommandInfo[]>([]);
+export const AgentPane = forwardRef<HTMLDivElement, AgentPaneProps>(
+  function AgentPane({ sessionId, instance, displayInstance, onResetSession }, ref) {
+    const activeTab = useAtomValue(activeAgentTabAtom);
+    const shiftHeld = useAtomValue(shiftHeldAtom);
+    const getCommands = useAction(api.commands.getCommands);
+    const [commands, setCommands] = useState<SerializedCommandInfo[]>([]);
 
-  useEffect(() => {
-    if (sessionId) {
-      getCommands({ sessionId }).then((cmds) => setCommands(cmds as SerializedCommandInfo[])).catch(console.error);
-    }
-  }, [sessionId, instance, getCommands]);
+    useEffect(() => {
+      if (sessionId) {
+        getCommands({ sessionId }).then((cmds) => setCommands(cmds as SerializedCommandInfo[])).catch(console.error);
+      }
+    }, [sessionId, instance, getCommands]);
 
-  return (
-    <div className="h-full flex flex-col bg-terminal-bg relative z-0">
-      {/* Header */}
-      <div className="px-4 py-2 border-b border-terminal-green-dimmer">
-        <h2 className="text-terminal-green terminal-glow text-sm font-bold">
-          AGENT INSPECTOR
-        </h2>
+    return (
+      <div
+        ref={ref}
+        tabIndex={0}
+        className="h-full flex flex-col bg-terminal-bg relative z-0 pane-focus"
+      >
+        {/* Header */}
+        <div className="px-4 py-2 border-b border-terminal-green-dimmer">
+          <h2 className="text-terminal-green terminal-glow text-sm font-bold">
+            {shiftHeld ? <u>A</u> : "A"}GENT
+          </h2>
+        </div>
+
+        {/* Tab navigation */}
+        <TabNav />
+
+        {/* Tab content */}
+        <div className="flex-1 overflow-hidden p-4">
+          {activeTab === "tree" && (
+            <InstanceTreeTab instance={instance ?? null} displayInstance={displayInstance ?? null} />
+          )}
+          {activeTab === "state" && <StateTab instance={instance ?? null} />}
+          {activeTab === "history" && <HistoryTab sessionId={sessionId} />}
+          {activeTab === "commands" && (
+            <CommandsTab sessionId={sessionId} commands={commands} />
+          )}
+          {activeTab === "dev" && <DevTab onResetSession={onResetSession} />}
+        </div>
       </div>
-
-      {/* Tab navigation */}
-      <TabNav />
-
-      {/* Tab content */}
-      <div className="flex-1 overflow-hidden p-4">
-        {activeTab === "tree" && (
-          <InstanceTreeTab instance={instance ?? null} displayInstance={displayInstance ?? null} />
-        )}
-        {activeTab === "state" && <StateTab instance={instance ?? null} />}
-        {activeTab === "history" && <HistoryTab sessionId={sessionId} />}
-        {activeTab === "commands" && (
-          <CommandsTab sessionId={sessionId} commands={commands} />
-        )}
-        {activeTab === "dev" && <DevTab onResetSession={onResetSession} />}
-      </div>
-    </div>
-  );
-}
+    );
+  }
+);

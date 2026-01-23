@@ -116,7 +116,7 @@ function handleTransitionTool(
     const { to, reason } = toolInput as { to: string; reason: string };
     return {
       queuedTransition: { name: to, reason, args: {} },
-      toolResult: toolResult(id, `Transition to "${to}" queued`),
+      toolResult: toolResult(id, `Transition to "${to}" complete. You are now in the new context - respond to the user.`),
     };
   }
 
@@ -128,7 +128,7 @@ function handleTransitionTool(
   };
   return {
     queuedTransition: { name: transitionName, reason, args },
-    toolResult: toolResult(id, `Transition to "${transitionName}" queued`),
+    toolResult: toolResult(id, `Transition to "${transitionName}" complete. You are now in the new context - respond to the user.`),
   };
 }
 

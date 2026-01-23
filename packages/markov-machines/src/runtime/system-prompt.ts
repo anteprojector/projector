@@ -27,7 +27,14 @@ export function buildSystemPrompt<S>(
   }
 
   // Fall back to default system prompt builder
-  return buildDefaultSystemPrompt(node, state, ancestors, packStates, options)
+  let prompt = buildDefaultSystemPrompt(node, state, ancestors, packStates, options);
+
+  // Prepend charter instructions if present
+  if (charter.instructions) {
+    prompt = `${charter.instructions}\n\n${prompt}`;
+  }
+
+  return prompt;
 }
 
 /**
@@ -99,7 +106,9 @@ export function buildTransitionsSection<S>(
     .join("\n");
 
   return `## Available Transitions
-${transitionList || "None"}`;
+${transitionList || "None"}
+
+**Important**: After calling a transition tool, you MUST respond to the user in your next message. Greet them or acknowledge the transition context - do not end your turn silently.`;
 }
 
 /**

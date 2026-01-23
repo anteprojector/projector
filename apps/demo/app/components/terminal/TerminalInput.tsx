@@ -1,66 +1,50 @@
 "use client";
 
-import { useCallback, KeyboardEvent } from "react";
+import { forwardRef, useCallback, KeyboardEvent } from "react";
 
 interface TerminalInputProps {
   value: string;
   onChange: (value: string) => void;
   onSend: () => void;
   isLoading: boolean;
-  isScrolledUp: boolean;
 }
 
-export function TerminalInput({
-  value,
-  onChange,
-  onSend,
-  isLoading,
-  isScrolledUp,
-}: TerminalInputProps) {
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        onSend();
-      }
-    },
-    [onSend]
-  );
+export const TerminalInput = forwardRef<HTMLTextAreaElement, TerminalInputProps>(
+  function TerminalInput({ value, onChange, onSend, isLoading }, ref) {
+    const handleKeyDown = useCallback(
+      (e: KeyboardEvent<HTMLTextAreaElement>) => {
+        if (e.key === "Escape") {
+          e.currentTarget.blur();
+          return;
+        }
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          onSend();
+        }
+      },
+      [onSend]
+    );
 
-  const baseClasses = `
-    w-full bg-terminal-bg border border-terminal-green-dimmer
-    rounded px-4 py-3 text-terminal-green font-mono
-    focus:border-terminal-green focus:outline-none
-    terminal-glow resize-none
-  `;
-
-  const positionClasses = isScrolledUp
-    ? "fixed bottom-4 left-4 right-[calc(50%+1rem)] z-20"
-    : "sticky bottom-0";
-
-  return (
-    <div className={`${positionClasses} bg-terminal-bg`}>
-      <div className="flex items-start gap-2">
-        <span className="text-terminal-green-dim py-3">&gt;</span>
-        <textarea
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onKeyDown={handleKeyDown}
-          disabled={isLoading}
-          placeholder={isLoading ? "Thinking..." : "Type a message..."}
-          rows={1}
-          className={`${baseClasses} flex-1 min-h-[44px] max-h-[200px]`}
-          style={{
-            height: "auto",
-            minHeight: "44px",
-          }}
-        />
-      </div>
-      {isLoading && (
-        <div className="absolute right-4 top-1/2 -translate-y-1/2">
-          <span className="terminal-cursor text-terminal-green">_</span>
+    return (
+      <div className="sticky bottom-0 mt-4 pt-4 pb-4 bg-terminal-bg border-t border-terminal-green-dimmer">
+        <div className="flex items-start gap-2">
+          <span className="text-terminal-green-dim py-1">&gt;</span>
+          <textarea
+            ref={ref}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            onKeyDown={handleKeyDown}
+            disabled={isLoading}
+            placeholder={isLoading ? "Thinking..." : "Type a message..."}
+            rows={1}
+            className="flex-1 bg-transparent text-terminal-green font-mono focus:outline-none terminal-glow resize-none min-h-[24px] max-h-[200px]"
+            style={{
+              height: "auto",
+              minHeight: "24px",
+            }}
+          />
         </div>
-      )}
-    </div>
-  );
-}
+      </div>
+    );
+  }
+);

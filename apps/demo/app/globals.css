@@ -122,6 +122,38 @@ textarea::placeholder {
   outline-offset: 2px;
 }
 
+/* Pane focus glow - subtle top glow without box outline */
+.pane-focus {
+  position: relative;
+}
+
+.pane-focus::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 20px;
+  background: linear-gradient(
+    to bottom,
+    var(--glow-color, rgba(0, 255, 0, 1)),
+    transparent
+  );
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.pane-focus:focus,
+.pane-focus:focus-within {
+  outline: none;
+}
+
+.pane-focus:focus::after,
+.pane-focus:focus-within::after {
+  opacity: 0.4;
+}
+
 /* Tab underline indicator */
 .tab-indicator {
   position: relative;

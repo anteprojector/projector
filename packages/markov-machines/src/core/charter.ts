@@ -11,6 +11,7 @@ export function createCharter<AppMessage = unknown>(
 ): Charter<AppMessage> {
   const {
     name,
+    instructions,
     executor,
     tools = {},
     transitions = {},
@@ -30,6 +31,7 @@ export function createCharter<AppMessage = unknown>(
 
   return {
     name,
+    ...(instructions && { instructions }),
     executor,
     tools,
     transitions,
