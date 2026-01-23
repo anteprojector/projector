@@ -19,8 +19,8 @@ import { ZOD_JSON_SCHEMA_TARGET_DRAFT_2020_12 } from "../helpers/json-schema.js"
  * Otherwise, serializes the full node.
  */
 export function serializeNode<S>(
-  node: Node<S>,
-  charter?: Charter,
+  node: Node<any, S>,
+  charter?: Charter<any>,
 ): SerialNode<S> | Ref {
   // Check if this node is registered in the charter
   if (charter) {
@@ -106,7 +106,7 @@ function serializeTransition<S>(
  */
 export function serializeInstance(
   instance: Instance,
-  charter?: Charter,
+  charter?: Charter<any>,
 ): SerializedInstance {
   const serializedNode = serializeNode(instance.node, charter);
 
@@ -137,9 +137,9 @@ export function serializeInstance(
 /**
  * Serialize a machine for persistence.
  */
-export function serializeMachine(
-  machine: Machine,
-): SerializedMachine {
+export function serializeMachine<AppMessage = unknown>(
+  machine: Machine<AppMessage>,
+): SerializedMachine<AppMessage> {
   return {
     instance: serializeInstance(machine.instance, machine.charter),
     history: machine.history,

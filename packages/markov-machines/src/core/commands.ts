@@ -30,13 +30,15 @@ export function getAvailableCommands(machine: Machine): CommandInfo[] {
  * If instanceId is provided, targets that specific instance (can be suspended).
  * Otherwise, targets the current active instance.
  * Returns the updated machine and the command result.
+ *
+ * @typeParam AppMessage - The application message type for structured outputs.
  */
-export async function runCommand(
-  machine: Machine,
+export async function runCommand<AppMessage = unknown>(
+  machine: Machine<AppMessage>,
   commandName: string,
   input: unknown = {},
   instanceId?: string,
-): Promise<{ machine: Machine; result: CommandExecutionResult }> {
+): Promise<{ machine: Machine<AppMessage>; result: CommandExecutionResult }> {
   // Find the target instance
   let target: Instance;
   if (instanceId) {

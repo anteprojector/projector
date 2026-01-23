@@ -16,6 +16,7 @@ export function createCharter<AppMessage = unknown>(
     transitions = {},
     nodes = {},
     packs = [],
+    buildSystemPrompt,
   } = config;
 
   // Validate tool names match keys
@@ -34,5 +35,6 @@ export function createCharter<AppMessage = unknown>(
     transitions,
     nodes,
     packs,
+    ...(buildSystemPrompt && { buildSystemPrompt }),
   };
 }

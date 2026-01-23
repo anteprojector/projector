@@ -1,3 +1,6 @@
+// Re-export Zod v4 for consumers to use compatible schemas
+export { z } from 'zod'
+
 // Core functions
 export { createCharter } from "./src/core/charter.js";
 export { createNode, createWorkerNode } from "./src/core/node.js";
@@ -165,6 +168,9 @@ export {
   toolResult,
   getMessageText,
 } from "./src/types/messages.js";
+
+// System prompt helpers
+export type { SystemPromptOptions } from './src/runtime/system-prompt.js'
 
 // State helpers
 export { shallowMerge } from "./src/types/state.js";

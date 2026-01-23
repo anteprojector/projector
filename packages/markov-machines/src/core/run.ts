@@ -271,7 +271,7 @@ export async function* runMachine<AppMessage = unknown>(
 
   // Handle Command input
   if (isCommand(input)) {
-    const { machine: updatedMachine, result } = await runCommand(
+    const { machine: updatedMachine, result } = await runCommand<AppMessage>(
       machine,
       input.name,
       input.input,
@@ -309,7 +309,6 @@ export async function* runMachine<AppMessage = unknown>(
 
     // Get all active leaves for parallel execution
     const activeLeaves = getActiveLeaves(currentInstance);
-
     if (activeLeaves.length === 0) {
       // Check if all leaves are suspended
       const suspendedInstances = getSuspendedInstances(currentInstance);

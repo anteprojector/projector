@@ -33,7 +33,7 @@ export interface CommandContext<S = unknown> {
   cede: <M = unknown>(content?: string | Message<M>[]) => CedeResult<M>;
   /** Spawn one or more child instances */
   spawn: <T = unknown>(
-    nodeOrTargets: Node<T> | SpawnTarget<T>[],
+    nodeOrTargets: Node<any, T> | SpawnTarget<T>[],
     state?: T,
     options?: SpawnOptions,
   ) => SpawnResult<T>;
