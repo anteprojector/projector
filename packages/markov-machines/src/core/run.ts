@@ -12,9 +12,9 @@ import { runCommand } from "./commands.js";
 
 /**
  * Input type for runMachine.
- * Can be a string (user message), a Command object, or a Resume object.
+ * Can be a Command object or a Resume object.
  */
-export type RunMachineInput = string | Command | Resume;
+export type RunMachineInput = Command | Resume;
 
 /** Check if packStates has any entries */
 const hasPackStates = (ps?: Record<string, unknown>): boolean =>
@@ -226,9 +226,11 @@ export function mergeLeafResults<AppMessage>(
 }
 
 /**
- * Run the machine with user input or command.
+ * Run the machine by draining its queue and executing.
  * Yields MachineStep for each inference call or command execution.
  * Continues until there's a text response or max steps exceeded.
+ *
+ * Use machine.enqueue() to add messages before calling runMachine.
  *
  * When input is a Command:
  * - Execute command via runCommand()
@@ -239,11 +241,11 @@ export function mergeLeafResults<AppMessage>(
  */
 export async function* runMachine<AppMessage = unknown>(
   machine: Machine<AppMessage>,
-  input: RunMachineInput,
+  input?: RunMachineInput,
   options?: RunOptions<AppMessage>,
 ): AsyncGenerator<MachineStep<AppMessage>> {
   // Handle Resume input
-  if (isResume(input)) {
+  if (input && isResume(input)) {
     const targetInstance = findInstanceById(machine.instance, input.instanceId);
     if (!targetInstance) {
       throw new Error(`Instance not found: ${input.instanceId}`);
@@ -274,7 +276,7 @@ export async function* runMachine<AppMessage = unknown>(
   }
 
   // Handle Command input
-  if (isCommand(input)) {
+  if (input && isCommand(input)) {
     const { machine: updatedMachine, result, replyMessages } = await runCommand<AppMessage>(
       machine,
       input.name,
@@ -315,12 +317,14 @@ export async function* runMachine<AppMessage = unknown>(
     return;
   }
 
-  // String input - normal execution
+  // Normal execution - drain queue into history
   let currentInstance = machine.instance;
-  let currentInput = input;
 
-  // Base history from before this run
-  const baseHistory: MachineMessage<AppMessage>[] = machine.history ?? [];
+  // Drain queue into initial history
+  const queuedMessages = machine.queue.splice(0, machine.queue.length);
+
+  // Base history from before this run, plus queued messages
+  const baseHistory: MachineMessage<AppMessage>[] = [...(machine.history ?? []), ...queuedMessages];
   let currentHistory: MachineMessage<AppMessage>[] = baseHistory;
 
   const maxSteps = options?.maxSteps ?? 50;
@@ -384,7 +388,7 @@ export async function* runMachine<AppMessage = unknown>(
           machine.charter,
           leaf,
           ancestors,
-          currentInput,
+          "",
           { ...options, history: currentHistory, currentStep: steps, maxSteps },
         );
 
@@ -436,7 +440,6 @@ export async function* runMachine<AppMessage = unknown>(
       } else {
         currentHistory = baseHistory;
       }
-      currentInput = "";
       continue;
     }
 
@@ -482,7 +485,6 @@ export async function* runMachine<AppMessage = unknown>(
           `[System: Your response was cut off due to length limits. Please provide a brief summary of your findings and respond to the user now. Do not use any tools - just give your final answer.]`
         );
         currentHistory = [...currentHistory, ...merged.history, recoveryMessage];
-        currentInput = "";
         continue;
       } else {
         // Recovery already attempted, treat as final
@@ -511,7 +513,6 @@ export async function* runMachine<AppMessage = unknown>(
 
     // Not final - continue to next step
     currentHistory = [...currentHistory, ...(merged.history as MachineMessage<AppMessage>[])];
-    currentInput = "";
   }
 
   throw new Error(`Max steps (${maxSteps}) exceeded`);
@@ -525,7 +526,7 @@ export async function* runMachine<AppMessage = unknown>(
  */
 export async function runMachineToCompletion<AppMessage = unknown>(
   machine: Machine<AppMessage>,
-  input: RunMachineInput,
+  input?: RunMachineInput,
   options?: RunOptions<AppMessage>,
 ): Promise<MachineStep<AppMessage>> {
   let lastStep: MachineStep<AppMessage> | null = null;

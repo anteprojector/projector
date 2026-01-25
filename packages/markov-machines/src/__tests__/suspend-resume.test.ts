@@ -12,6 +12,7 @@ import type { Executor, RunResult, RunOptions, MachineStep, SuspendedInstanceInf
 import type { Charter } from "../types/charter.js";
 import type { Instance, SuspendInfo } from "../types/instance.js";
 import type { Resume, Command } from "../types/commands.js";
+import { userMessage } from "../types/messages.js";
 
 /**
  * Helper to collect all steps from the async generator.
@@ -262,14 +263,16 @@ describe("all-suspended state", () => {
     });
 
     // First run: executor returns, then machine checks leaves
-    const step1 = await runMachineToCompletion(machine, "test input");
+    machine.enqueue([userMessage("test input")]);
+    const step1 = await runMachineToCompletion(machine);
     expect(step1.instance.suspended).toBeDefined();
 
     // Second run: all leaves are suspended
     const machine2 = createMachine(charter, {
       instance: step1.instance,
     });
-    const step2 = await runMachineToCompletion(machine2, "another input");
+    machine2.enqueue([userMessage("another input")]);
+    const step2 = await runMachineToCompletion(machine2);
 
     expect(step2.yieldReason).toBe("awaiting_resume");
     expect(step2.done).toBe(true);

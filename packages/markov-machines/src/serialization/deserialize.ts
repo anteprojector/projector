@@ -5,6 +5,7 @@ import type {
   SerializedInstance,
 } from "../types/machine.js";
 import type { Instance } from "../types/instance.js";
+import type { MachineMessage } from "../types/messages.js";
 import { resolveNodeRef } from "../runtime/transition-executor.js";
 export { deserializeNode } from "../runtime/transition-executor.js";
 
@@ -56,9 +57,14 @@ export function deserializeMachine<AppMessage = unknown>(
   charter: Charter<AppMessage>,
   serialized: SerializedMachine<AppMessage>,
 ): Machine<AppMessage> {
+  const queue: MachineMessage<AppMessage>[] = [];
   return {
     charter,
     instance: deserializeInstance(charter, serialized.instance),
     history: serialized.history,
+    queue,
+    enqueue: (messages: MachineMessage<AppMessage>[]) => {
+      queue.push(...messages);
+    },
   };
 }

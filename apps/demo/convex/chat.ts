@@ -11,9 +11,10 @@ import {
   deserializeInstance,
   createInstance,
   getMessageText,
+  userMessage,
   type Instance,
   type Node,
-  type ModelMessage,
+  type MachineMessage,
   type MachineStep,
 } from "markov-machines";
 import { demoCharter, nameGateNode } from "../src/agent/charter";
@@ -25,7 +26,7 @@ function getActiveNodeInstructions(instance: Instance): string {
 }
 
 // Filter out messages with empty items (Anthropic API requires non-empty content)
-function filterValidMessages(messages: ModelMessage[]): ModelMessage[] {
+function filterValidMessages(messages: MachineMessage[]): MachineMessage[] {
   return messages.filter((msg) => {
     if (!msg.items) return false;
     if (Array.isArray(msg.items)) {
@@ -65,7 +66,7 @@ export const send = action({
 
     const machine = createMachine(demoCharter, {
       instance,
-      history: filterValidMessages(history as ModelMessage[]),
+      history: filterValidMessages(history as MachineMessage[]),
     });
 
     // Create turn first so user message can be associated with it
@@ -87,9 +88,10 @@ export const send = action({
 
     let stepNumber = 0;
     let lastStep: MachineStep | null = null;
-    const allMessages: ModelMessage[] = [];
+    const allMessages: MachineMessage[] = [];
 
-    for await (const step of runMachine(machine, message, { maxSteps: 10 })) {
+    machine.enqueue([userMessage(message)]);
+    for await (const step of runMachine(machine, undefined, { maxSteps: 10 })) {
       stepNumber++;
       allMessages.push(...step.history);
 
@@ -174,10 +176,11 @@ export const createSession = action({
 
     let stepNumber = 0;
     let lastStep: MachineStep | null = null;
-    const allMessages: ModelMessage[] = [];
+    const allMessages: MachineMessage[] = [];
 
-    // Run with empty input to trigger initial greeting
-    for await (const step of runMachine(machine, "[session started]", { maxSteps: 10 })) {
+    // Run with session started message to trigger initial greeting
+    machine.enqueue([userMessage("[session started]")]);
+    for await (const step of runMachine(machine, undefined, { maxSteps: 10 })) {
       stepNumber++;
       allMessages.push(...step.history);
 

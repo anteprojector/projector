@@ -11,9 +11,10 @@ import {
   deserializeInstance,
   createInstance,
   getMessageText,
+  userMessage,
   type Instance,
   type Node,
-  type ModelMessage,
+  type MachineMessage,
   type MachineStep,
 } from "markov-machines";
 import { todoCharter, mainNode, createInitialState } from "../src/agent/charter";
@@ -57,7 +58,7 @@ export const send = action({
     // Create machine with history
     const machine = createMachine(todoCharter, {
       instance,
-      history: history as ModelMessage[],
+      history: history as MachineMessage[],
     });
 
     // Add user message to UI
@@ -78,10 +79,11 @@ export const send = action({
 
     let stepNumber = 0;
     let lastStep: MachineStep | null = null;
-    const allMessages: ModelMessage[] = [];
+    const allMessages: MachineMessage[] = [];
 
     // Iterate through each step and store it
-    for await (const step of runMachine(machine, message, { maxSteps: 10 })) {
+    machine.enqueue([userMessage(message)]);
+    for await (const step of runMachine(machine, undefined, { maxSteps: 10 })) {
       stepNumber++;
       allMessages.push(...step.history);
 

@@ -27,6 +27,10 @@ export interface Machine<AppMessage = unknown> {
   instance: Instance;
   /** Conversation history */
   history: MachineMessage<AppMessage>[];
+  /** Queued messages to be processed on next runMachine call */
+  queue: MachineMessage<AppMessage>[];
+  /** Enqueue messages to be processed on next runMachine call */
+  enqueue: (messages: MachineMessage<AppMessage>[]) => void;
 }
 
 /**

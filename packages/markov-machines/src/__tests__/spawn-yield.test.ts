@@ -11,6 +11,7 @@ import type { Charter } from "../types/charter.js";
 import type { Instance } from "../types/instance.js";
 import type { CodeTransition } from "../types/transitions.js";
 import type { MachineMessage } from "../types/messages.js";
+import { userMessage } from "../types/messages.js";
 
 /**
  * Helper to collect all steps from the async generator.
@@ -119,8 +120,9 @@ describe("spawn behavior", () => {
     const machine = createMachine(charter, {
       instance: createInstance(parentNode, { value: "parent" }),
     });
+    machine.enqueue([userMessage("spawn a child")]);
 
-    const result = await runMachineToCompletion(machine, "spawn a child");
+    const result = await runMachineToCompletion(machine);
 
     // Verify child was added
     expect(result.instance.children).toBeDefined();
@@ -169,7 +171,8 @@ describe("spawn behavior", () => {
     const machine1 = createMachine(charter, {
       instance: createInstance(parentNode, { value: "parent" }),
     });
-    const result1 = await runMachineToCompletion(machine1, "spawn");
+    machine1.enqueue([userMessage("spawn")]);
+    const result1 = await runMachineToCompletion(machine1);
 
     // Verify child is now active
     const activePath = getInstancePath(result1.instance);
@@ -227,7 +230,8 @@ describe("spawn continuation", () => {
     const machine = createMachine(charter, {
       instance: createInstance(parentNode, { value: "parent" }),
     });
-    const result = await runMachineToCompletion(machine, "spawn researcher");
+    machine.enqueue([userMessage("spawn researcher")]);
+    const result = await runMachineToCompletion(machine);
 
     // Should have called executor twice (parent + child)
     expect(callCount).toBe(2);
@@ -273,7 +277,8 @@ describe("spawn continuation", () => {
     const machine = createMachine(charter, {
       instance: createInstance(parentNode, { value: "parent" }),
     });
-    const result = await runMachineToCompletion(machine, "spawn");
+    machine.enqueue([userMessage("spawn")]);
+    const result = await runMachineToCompletion(machine);
 
     // Should only call executor once (spawn had response)
     expect(callCount).toBe(1);
@@ -334,7 +339,8 @@ describe("spawn continuation", () => {
     const machine = createMachine(charter, {
       instance: createInstance(parentNode, { value: "parent" }),
     });
-    const result = await runMachineToCompletion(machine, "do quick task");
+    machine.enqueue([userMessage("do quick task")]);
+    const result = await runMachineToCompletion(machine);
 
     // Should have called executor 3 times: spawn -> cede -> parent responds
     expect(callCount).toBe(3);
@@ -395,8 +401,9 @@ describe("cede behavior", () => {
     const machine = createMachine(charter, {
       instance: parentInstance,
     });
+    machine.enqueue([userMessage("cede back")]);
 
-    const steps = await collectSteps(runMachine(machine, "cede back"));
+    const steps = await collectSteps(runMachine(machine));
 
     // Should have 2 steps: cede then parent response
     expect(steps.length).toBe(2);
@@ -455,7 +462,8 @@ describe("cede behavior", () => {
     const parentInstance = createInstance(parentNode, { value: "parent" }, childInstance);
 
     const machine = createMachine(charter, { instance: parentInstance });
-    const steps = await collectSteps(runMachine(machine, "complete"));
+    machine.enqueue([userMessage("complete")]);
+    const steps = await collectSteps(runMachine(machine));
 
     // Cede content is on the cede step
     expect(steps[0]?.cedeContent).toBe("Findings: item1, item2 (query: test)");
@@ -523,7 +531,8 @@ describe("cede behavior", () => {
     const machine1 = createMachine(charter, {
       instance: createInstance(parentNode, { value: "parent" }),
     });
-    const result1 = await runMachineToCompletion(machine1, "spawn child");
+    machine1.enqueue([userMessage("spawn child")]);
+    const result1 = await runMachineToCompletion(machine1);
 
     expect(result1.instance.children).toBeDefined();
     expect(getActiveInstance(result1.instance).node.id).toBe(childNode.id);
@@ -532,7 +541,8 @@ describe("cede behavior", () => {
     const machine2 = createMachine(charter, {
       instance: result1.instance,
     });
-    const result2 = await runMachineToCompletion(machine2, "do research");
+    machine2.enqueue([userMessage("do research")]);
+    const result2 = await runMachineToCompletion(machine2);
 
     expect(result2.instance.children).toBeDefined();
     const childAfterWork = result2.instance.children![0]!;
@@ -542,7 +552,8 @@ describe("cede behavior", () => {
     const machine3 = createMachine(charter, {
       instance: result2.instance,
     });
-    const steps3 = await collectSteps(runMachine(machine3, "cede results"));
+    machine3.enqueue([userMessage("cede results")]);
+    const steps3 = await collectSteps(runMachine(machine3));
 
     // Should have 2 steps: cede then parent response
     expect(steps3.length).toBe(2);
@@ -606,7 +617,8 @@ describe("cede continuation", () => {
     const parentInstance = createInstance(parentNode, { value: "parent" }, childInstance);
 
     const machine = createMachine(charter, { instance: parentInstance });
-    const result = await runMachineToCompletion(machine, "complete research");
+    machine.enqueue([userMessage("complete research")]);
+    const result = await runMachineToCompletion(machine);
 
     // Should have called executor twice
     expect(callCount).toBe(2);
@@ -661,7 +673,8 @@ describe("cede continuation", () => {
     const parentInstance = createInstance(parentNode, { value: "parent" }, childInstance);
 
     const machine = createMachine(charter, { instance: parentInstance });
-    const steps = await collectSteps(runMachine(machine, "complete"));
+    machine.enqueue([userMessage("complete")]);
+    const steps = await collectSteps(runMachine(machine));
 
     // Should have 2 steps: cede (with text response) then parent
     expect(steps.length).toBe(2);
@@ -721,13 +734,14 @@ describe("cede continuation", () => {
     const level1Instance = createInstance(level1Node, { depth: 1 as const }, level2Instance);
 
     const machine = createMachine(charter, { instance: level1Instance });
+    machine.enqueue([userMessage("loop")]);
 
     // With maxSteps: 2, we get:
     // Step 1: level3 cedes → level2 active
     // Step 2: level2 cedes → level1 active
     // Step 3: level1 cedes → ERROR (root can't cede)
     // So with maxSteps: 2, we should hit max before root tries to cede
-    await expect(runMachineToCompletion(machine, "loop", { maxSteps: 2 })).rejects.toThrow(
+    await expect(runMachineToCompletion(machine, undefined, { maxSteps: 2 })).rejects.toThrow(
       "Max steps (2) exceeded"
     );
   });
@@ -775,7 +789,8 @@ describe("cede continuation", () => {
     const parentInstance = createInstance(parentNode, { value: "parent" }, childInstance);
 
     const machine = createMachine(charter, { instance: parentInstance });
-    const steps = await collectSteps(runMachine(machine, "do work"));
+    machine.enqueue([userMessage("do work")]);
+    const steps = await collectSteps(runMachine(machine));
 
     // Should have 2 steps: cede then parent response
     expect(steps.length).toBe(2);

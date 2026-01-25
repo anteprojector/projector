@@ -17,6 +17,7 @@ import type {
 } from "../executor/types.js";
 import type { Charter } from "../types/charter.js";
 import type { Instance } from "../types/instance.js";
+import { userMessage } from "../types/messages.js";
 
 /**
  * Helper to collect all steps from the async generator.
@@ -253,7 +254,8 @@ describe("parallel execution validation", () => {
 
     const machine = createMachine(charter, { instance: root });
 
-    await expect(runMachineToCompletion(machine, "test")).rejects.toThrow(
+    machine.enqueue([userMessage("test")]);
+    await expect(runMachineToCompletion(machine)).rejects.toThrow(
       /Invalid state: 2 non-worker active leaves/
     );
   });
@@ -301,18 +303,19 @@ describe("parallel execution validation", () => {
     const root = createInstance(standardNode, { value: "root" }, [workerChild, standardChild]);
 
     const machine = createMachine(charter, { instance: root });
-    const result = await runMachineToCompletion(machine, "test");
+    machine.enqueue([userMessage("test")]);
+    const result = await runMachineToCompletion(machine);
 
     // Both should have been called in parallel
     expect(callCount).toBe(2);
 
-    // Verify worker node received empty input
+    // Both receive empty input since user message is now queued
     const calls = getCalls();
     const workerCall = calls.find((c) => c.instance.node.worker);
     expect(workerCall?.input).toBe("");
 
     const nonWorkerCall = calls.find((c) => !c.instance.node.worker);
-    expect(nonWorkerCall?.input).toBe("test");
+    expect(nonWorkerCall?.input).toBe("");
   });
 });
 
@@ -349,9 +352,10 @@ describe("worker node must cede", () => {
     const root = createInstance(standardNode, { value: "root" }, [workerChild, standardChild]);
 
     const machine = createMachine(charter, { instance: root });
+    machine.enqueue([userMessage("test")]);
 
     // Should complete without throwing (worker end_turn is ignored with warning)
-    const result = await runMachineToCompletion(machine, "test");
+    const result = await runMachineToCompletion(machine);
 
     // Verify warning was logged
     expect(warnSpy).toHaveBeenCalledWith(
@@ -420,7 +424,8 @@ describe("worker node must cede", () => {
     const root = createInstance(standardNode, { value: "root" }, [workerChild, standardChild]);
 
     const machine = createMachine(charter, { instance: root });
-    const result = await runMachineToCompletion(machine, "test");
+    machine.enqueue([userMessage("test")]);
+    const result = await runMachineToCompletion(machine);
 
     expect(result.yieldReason).toBe("end_turn");
   });
@@ -466,7 +471,8 @@ describe("parallel execution cede handling", () => {
     const root = createInstance(standardNode, { value: "root" }, [workerChild, standardChild]);
 
     const machine = createMachine(charter, { instance: root });
-    const result = await runMachineToCompletion(machine, "test");
+    machine.enqueue([userMessage("test")]);
+    const result = await runMachineToCompletion(machine);
 
     // After parallel execution, worker child should be removed
     expect(result.instance.children).toBeDefined();
@@ -519,7 +525,8 @@ describe("message attribution", () => {
     const root = createInstance(standardNode, { value: "root" }, [workerChild, standardChild]);
 
     const machine = createMachine(charter, { instance: root });
-    const steps = await collectSteps(runMachine(machine, "test"));
+    machine.enqueue([userMessage("test")]);
+    const steps = await collectSteps(runMachine(machine));
 
     // First step should contain history from both leaves
     const firstStep = steps[0]!;

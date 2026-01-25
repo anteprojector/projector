@@ -3,6 +3,7 @@ import type { Charter } from "../types/charter.js";
 import type { Machine, MachineConfig } from "../types/machine.js";
 import type { Instance } from "../types/instance.js";
 import type { Pack } from "../types/pack.js";
+import type { MachineMessage } from "../types/messages.js";
 
 /**
  * Validate a node instance tree recursively.
@@ -77,9 +78,16 @@ export function createMachine<AppMessage = unknown>(
   // Validate the entire instance tree
   validateInstance(instance);
 
+  // Create mutable queue for enqueuing messages
+  const queue: MachineMessage<AppMessage>[] = [];
+
   return {
     charter,
     instance,
     history,
+    queue,
+    enqueue: (messages: MachineMessage<AppMessage>[]) => {
+      queue.push(...messages);
+    },
   };
 }
