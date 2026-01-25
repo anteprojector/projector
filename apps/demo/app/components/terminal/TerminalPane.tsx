@@ -1,8 +1,8 @@
 "use client";
 
 import { forwardRef, useEffect, useRef } from "react";
-import { useAtomValue } from "jotai";
-import { shiftHeldAtom } from "@/src/atoms";
+import { useAtom, useAtomValue } from "jotai";
+import { shiftHeldAtom, isLiveModeAtom, voiceConnectionStatusAtom, voiceAgentConnectedAtom } from "@/src/atoms";
 import { TerminalMessage } from "./TerminalMessage";
 import { TerminalInput } from "./TerminalInput";
 import { ScanlinesToggle } from "./Scanlines";
@@ -12,6 +12,7 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   createdAt: number;
+  mode?: "text" | "voice";
 }
 
 interface TerminalPaneProps {
@@ -29,6 +30,13 @@ export const TerminalPane = forwardRef<HTMLTextAreaElement, TerminalPaneProps>(
   ) {
     const containerRef = useRef<HTMLDivElement>(null);
     const shiftHeld = useAtomValue(shiftHeldAtom);
+    const [isLiveMode, setIsLiveMode] = useAtom(isLiveModeAtom);
+    const voiceConnectionStatus = useAtomValue(voiceConnectionStatusAtom);
+    const voiceAgentConnected = useAtomValue(voiceAgentConnectedAtom);
+
+    const handleToggleLiveMode = () => {
+      setIsLiveMode((prev) => !prev);
+    };
 
     useEffect(() => {
       if (containerRef.current) {
@@ -80,6 +88,10 @@ export const TerminalPane = forwardRef<HTMLTextAreaElement, TerminalPaneProps>(
             onChange={onInputChange}
             onSend={onSend}
             isLoading={isLoading}
+            isLiveMode={isLiveMode}
+            voiceConnectionStatus={voiceConnectionStatus}
+            voiceAgentConnected={voiceAgentConnected}
+            onToggleLiveMode={handleToggleLiveMode}
           />
         </div>
       </div>

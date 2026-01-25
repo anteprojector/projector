@@ -19,6 +19,7 @@ import { useSessionId } from "@/src/hooks";
 import { TerminalPane } from "./components/terminal/TerminalPane";
 import { AgentPane } from "./components/agent/AgentPane";
 import { ThemeProvider } from "./components/ThemeProvider";
+import { LiveVoiceClient } from "@/src/voice/LiveVoiceClient";
 
 export function HomeClient({
   initialSessionId,
@@ -176,6 +177,9 @@ export function HomeClient({
 
   return (
     <ThemeProvider theme={theme}>
+      {/* Voice mode client - manages LiveKit connection */}
+      <LiveVoiceClient sessionId={sessionId} />
+
       <div className="h-screen flex">
         {/* Left side - Terminal pane */}
         <div className="w-1/2 h-full border-r border-terminal-green-dimmer relative">

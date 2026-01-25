@@ -12,9 +12,12 @@
     "typecheck": "tsgo"
   },
   "dependencies": {
+    "@livekit/components-react": "^2.9.19",
     "convex": "^1.31.2",
     "jotai": "^2.16.1",
     "js-cookie": "^3.0.5",
+    "livekit-client": "^2.17.0",
+    "livekit-server-sdk": "^2.15.0",
     "markov-machines": "workspace:*",
     "next": "16.1.1",
     "react": "19.2.3",

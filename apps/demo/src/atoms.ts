@@ -37,3 +37,9 @@ export const themeGradientAtom = atom<boolean>(false); // gradient overlay
 
 // Derived: current display hue (animated when flux mode is on)
 export const displayHueAtom = atom<number>(120);
+
+// Voice mode state
+export type VoiceConnectionStatus = "disconnected" | "connecting" | "connected";
+export const isLiveModeAtom = atom<boolean>(false);
+export const voiceConnectionStatusAtom = atom<VoiceConnectionStatus>("disconnected");
+export const voiceAgentConnectedAtom = atom<boolean>(false);

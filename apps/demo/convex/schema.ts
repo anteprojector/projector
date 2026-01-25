@@ -40,5 +40,19 @@ export default defineSchema({
     content: v.string(),
     turnId: v.optional(v.id("machineTurns")),
     createdAt: v.number(),
-  }).index("by_session", ["sessionId"]),
+    // Voice mode fields
+    mode: v.optional(v.union(v.literal("text"), v.literal("voice"))),
+    idempotencyKey: v.optional(v.string()),
+  })
+    .index("by_session", ["sessionId"])
+    .index("by_idempotency_key", ["idempotencyKey"]),
+
+  // Voice room state for tracking active voice sessions
+  voiceRooms: defineTable({
+    sessionId: v.id("sessions"),
+    roomName: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_session", ["sessionId"])
+    .index("by_room", ["roomName"]),
 });
