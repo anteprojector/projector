@@ -1,6 +1,6 @@
 import type { z } from "zod";
 import type { Node } from "./node.js";
-import type { Message } from "./messages.js";
+import type { MachineMessage } from "./messages.js";
 import type {
   CedeResult,
   SpawnResult,
@@ -33,9 +33,9 @@ export interface CommandContext<S = unknown> {
   /** ID of the instance executing this command */
   instanceId: string;
   /** Get messages from the conversation history that belong to this instance */
-  getInstanceMessages: () => Message[];
-  /** Cede control back to parent with optional content (string or Message[]) */
-  cede: <M = unknown>(content?: string | Message<M>[]) => CedeResult<M>;
+  getInstanceMessages: () => MachineMessage[];
+  /** Cede control back to parent with optional content (string or MachineMessage[]) */
+  cede: <M = unknown>(content?: string | MachineMessage<M>[]) => CedeResult<M>;
   /** Spawn one or more child instances */
   spawn: <T = unknown>(
     nodeOrTargets: Node<any, T> | SpawnTarget<T>[],

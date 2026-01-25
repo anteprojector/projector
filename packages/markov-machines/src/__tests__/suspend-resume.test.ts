@@ -49,7 +49,7 @@ function createMockExecutor(
       const result = behavior(charter, instance, ancestors, input);
       return {
         instance: result.instance ?? instance,
-        messages: result.messages ?? [],
+        history: result.history ?? [],
         yieldReason: result.yieldReason ?? "end_turn",
         cedeContent: result.cedeContent,
         packStates: result.packStates,
@@ -247,7 +247,7 @@ describe("all-suspended state", () => {
       return {
         instance: suspendedInstance,
         yieldReason: "end_turn",
-        messages: [],
+        history: [],
       };
     });
 
@@ -292,7 +292,7 @@ describe("Resume input", () => {
       return {
         instance,
         yieldReason: "end_turn",
-        messages: [{ role: "assistant" as const, content: "Hello!" }],
+        history: [{ role: "assistant" as const, items: "Hello!" }],
       };
     });
 

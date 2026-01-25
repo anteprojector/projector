@@ -8,8 +8,8 @@ import type { Charter } from "../types/charter.js";
 import type { Instance } from "../types/instance.js";
 import type { Node } from "../types/node.js";
 import type {
-  Message,
-  ContentBlock,
+  MachineMessage,
+  MachineItem,
   OutputBlock,
 } from "../types/messages.js";
 import {
@@ -68,7 +68,7 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
     let currentNode: Node<any, unknown> = instance.node;
     let currentChildren = instance.children;
     let currentExecutorConfig = instance.executorConfig;
-    const newMessages: Message<AppMessage>[] = [];
+    const newMessages: MachineMessage<AppMessage>[] = [];
     const isWorker = instance.node.worker === true;
 
     // Get pack states from root instance (first ancestor or current instance)
@@ -207,7 +207,7 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
 
     // Determine yield reason and process accordingly
     let yieldReason: "end_turn" | "tool_use" | "max_tokens" | "cede" | "suspend" = "end_turn";
-    let cedeContent: string | Message<AppMessage>[] | undefined = undefined;
+    let cedeContent: string | MachineMessage<AppMessage>[] | undefined = undefined;
     let suspendInfo: import("../types/instance.js").SuspendInfo | undefined = undefined;
 
     if (response.stop_reason === "max_tokens") {
@@ -307,7 +307,7 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
 
     return {
       instance: updatedInstance,
-      messages: newMessages,
+      history: newMessages,
       yieldReason,
       cedeContent,
       // Worker instances don't update pack states
@@ -344,12 +344,12 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
 
   /**
    * Convert Anthropic content blocks to our format.
-   * Returns ContentBlock<AppMessage>[] - though the blocks returned here (text, tool_use, thinking)
+   * Returns MachineItem<AppMessage>[] - though the blocks returned here (text, tool_use, thinking)
    * don't use the M parameter, this typing allows proper inference when used with OutputBlocks later.
    */
   private convertContentBlocks(
     blocks: AnthropicContentBlock[],
-  ): ContentBlock<AppMessage>[] {
+  ): MachineItem<AppMessage>[] {
     return blocks.map((block) => {
       if (block.type === "text") {
         return { type: "text", text: block.text };
@@ -378,15 +378,15 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
   }
 
   /**
-   * Convert our Message format to Anthropic MessageParam format.
+   * Convert our MachineMessage format to Anthropic MessageParam format.
    */
-  private convertMessageToParam(msg: Message<AppMessage>): MessageParam {
-    if (typeof msg.content === "string") {
-      return { role: msg.role, content: msg.content };
+  private convertMessageToParam(msg: MachineMessage<AppMessage>): MessageParam {
+    if (typeof msg.items === "string") {
+      return { role: msg.role, content: msg.items };
     }
 
-    // Convert our ContentBlock[] to Anthropic's format
-    const content = msg.content.map((block) => {
+    // Convert our MachineItem[] to Anthropic's format
+    const content = msg.items.map((block) => {
       if (block.type === "text") {
         return { type: "text" as const, text: block.text };
       }

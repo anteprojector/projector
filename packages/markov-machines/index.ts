@@ -90,9 +90,9 @@ export type {
   AnthropicBuiltinTool,
   ToolReply,
   // Messages
-  Message,
+  MachineMessage,
   MessageMetadata,
-  ContentBlock,
+  MachineItem,
   TextBlock,
   ToolUseBlock,
   ToolResultBlock,

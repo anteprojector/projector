@@ -1,6 +1,6 @@
 import type { Charter } from "../types/charter.js";
 import type { Instance } from "../types/instance.js";
-import type { Message } from "../types/messages.js";
+import type { MachineMessage } from "../types/messages.js";
 
 
 /**
@@ -21,7 +21,7 @@ export type YieldReason =
 export interface RunOptions<AppMessage = unknown> {
   maxTurns?: number;
   /** Previous conversation history to include */
-  history?: Message<AppMessage>[];
+  history?: MachineMessage<AppMessage>[];
   /** Max execution steps (for cede continuation). Default 50. */
   maxSteps?: number;
   /** Current step number (1-indexed) */
@@ -37,12 +37,12 @@ export interface RunOptions<AppMessage = unknown> {
 export interface RunResult<AppMessage = unknown> {
   /** Updated instance tree */
   instance: Instance;
-  /** New messages from this turn */
-  messages: Message<AppMessage>[];
+  /** New history from this turn */
+  history: MachineMessage<AppMessage>[];
   /** Why the run yielded */
   yieldReason: YieldReason;
-  /** Content from cede - string or Message[] (only set when yieldReason is "cede") */
-  cedeContent?: string | Message<AppMessage>[];
+  /** Content from cede - string or MachineMessage[] (only set when yieldReason is "cede") */
+  cedeContent?: string | MachineMessage<AppMessage>[];
   /** Updated pack states (to be applied to root instance) */
   packStates?: Record<string, unknown>;
 }
@@ -65,14 +65,14 @@ export interface SuspendedInstanceInfo {
 export interface MachineStep<AppMessage = unknown> {
   /** Updated instance tree after this step */
   instance: Instance;
-  /** Messages generated in this step */
-  messages: Message<AppMessage>[];
+  /** History generated in this step */
+  history: MachineMessage<AppMessage>[];
   /** Why this step yielded */
   yieldReason: "end_turn" | "tool_use" | "cede" | "max_tokens" | "command" | "suspend" | "awaiting_resume";
   /** True if this is the final step (has response or hit limit) */
   done: boolean;
-  /** Cede content if yieldReason is "cede" - string or Message[] */
-  cedeContent?: string | Message<AppMessage>[];
+  /** Cede content if yieldReason is "cede" - string or MachineMessage[] */
+  cedeContent?: string | MachineMessage<AppMessage>[];
   /** Info about suspended instances (when yieldReason is "suspend" or "awaiting_resume") */
   suspendedInstances?: SuspendedInstanceInfo[];
 }

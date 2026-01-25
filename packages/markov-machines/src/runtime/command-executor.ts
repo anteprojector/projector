@@ -1,6 +1,6 @@
 import type { Instance, SuspendInfo } from "../types/instance.js";
 import type { Node } from "../types/node.js";
-import type { Message } from "../types/messages.js";
+import type { MachineMessage } from "../types/messages.js";
 import type {
   CommandContext,
   CommandResult,
@@ -28,7 +28,7 @@ export async function executeCommand(
   commandName: string,
   input: unknown,
   instanceId: string,
-  history: Message<unknown>[],
+  history: MachineMessage<unknown>[],
 ): Promise<{
   result: CommandExecutionResult;
   instance: Instance;
@@ -63,7 +63,7 @@ export async function executeCommand(
   };
 
   // Create getInstanceMessages function that filters by sourceInstanceId
-  const getInstanceMessages = (): Message[] => {
+  const getInstanceMessages = (): MachineMessage[] => {
     return history.filter(
       (msg) => msg.metadata?.sourceInstanceId === instanceId
     );

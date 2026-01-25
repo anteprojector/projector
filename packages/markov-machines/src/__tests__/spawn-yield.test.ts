@@ -10,7 +10,7 @@ import type { Executor, RunResult, RunOptions, MachineStep } from "../executor/t
 import type { Charter } from "../types/charter.js";
 import type { Instance } from "../types/instance.js";
 import type { CodeTransition } from "../types/transitions.js";
-import type { Message } from "../types/messages.js";
+import type { MachineMessage } from "../types/messages.js";
 
 /**
  * Helper to collect all steps from the async generator.
@@ -49,7 +49,7 @@ function createMockExecutor(
       const result = behavior(charter, instance, ancestors, input);
       return {
         instance: result.instance ?? instance,
-        messages: result.messages ?? [],
+        history: result.history ?? [],
         yieldReason: result.yieldReason ?? "end_turn",
         cedeContent: result.cedeContent,
         packStates: result.packStates,
@@ -206,7 +206,7 @@ describe("spawn continuation", () => {
         return {
           instance: { ...instance, children: [newChild] },
           yieldReason: "tool_use", // Spawn returns tool_use to continue on child
-          messages: [],
+          history: [],
         };
       }
 
@@ -214,7 +214,7 @@ describe("spawn continuation", () => {
       return {
         instance,
         yieldReason: "end_turn",
-        messages: [{ role: "assistant" as const, content: "Hello, I'm the child starting my work!" }],
+        history: [{ role: "assistant" as const, items: "Hello, I'm the child starting my work!" }],
       };
     });
 
@@ -260,7 +260,7 @@ describe("spawn continuation", () => {
       return {
         instance: { ...instance, children: [newChild] },
         yieldReason: "end_turn",
-        messages: [{ role: "assistant" as const, content: "I've started the researcher for you!" }],
+        history: [{ role: "assistant" as const, items: "I've started the researcher for you!" }],
       };
     });
 
@@ -303,7 +303,7 @@ describe("spawn continuation", () => {
         return {
           instance: { ...instance, children: [newChild] },
           yieldReason: "tool_use",
-          messages: [],
+          history: [],
         };
       }
 
@@ -313,7 +313,7 @@ describe("spawn continuation", () => {
           instance,
           yieldReason: "cede",
           cedeContent: "Task completed",
-          messages: [],
+          history: [],
         };
       }
 
@@ -321,7 +321,7 @@ describe("spawn continuation", () => {
       return {
         instance,
         yieldReason: "end_turn",
-        messages: [{ role: "assistant" as const, content: "The quick task is done!" }],
+        history: [{ role: "assistant" as const, items: "The quick task is done!" }],
       };
     });
 
@@ -371,14 +371,14 @@ describe("cede behavior", () => {
           instance,
           yieldReason: "cede",
           cedeContent: "Result: done",
-          messages: [],
+          history: [],
         };
       }
       // Parent responds
       return {
         instance,
         yieldReason: "end_turn",
-        messages: [{ role: "assistant" as const, content: "Got the cede result!" }],
+        history: [{ role: "assistant" as const, items: "Got the cede result!" }],
       };
     });
 
@@ -435,13 +435,13 @@ describe("cede behavior", () => {
           instance,
           yieldReason: "cede",
           cedeContent: "Findings: item1, item2 (query: test)",
-          messages: [],
+          history: [],
         };
       }
       return {
         instance,
         yieldReason: "end_turn",
-        messages: [{ role: "assistant" as const, content: "Done!" }],
+        history: [{ role: "assistant" as const, items: "Done!" }],
       };
     });
 
@@ -501,7 +501,7 @@ describe("cede behavior", () => {
           instance,
           yieldReason: "cede",
           cedeContent: "Result: found stuff",
-          messages: [],
+          history: [],
         };
       }
 
@@ -509,7 +509,7 @@ describe("cede behavior", () => {
       return {
         instance,
         yieldReason: "end_turn",
-        messages: [{ role: "assistant" as const, content: "Research complete!" }],
+        history: [{ role: "assistant" as const, items: "Research complete!" }],
       };
     });
 
@@ -583,7 +583,7 @@ describe("cede continuation", () => {
           instance,
           yieldReason: "cede",
           cedeContent: "Result: findings",
-          messages: [],
+          history: [],
         };
       }
 
@@ -591,7 +591,7 @@ describe("cede continuation", () => {
       return {
         instance,
         yieldReason: "end_turn",
-        messages: [{ role: "assistant" as const, content: "Here are the results from the child!" }],
+        history: [{ role: "assistant" as const, items: "Here are the results from the child!" }],
       };
     });
 
@@ -640,14 +640,14 @@ describe("cede continuation", () => {
           instance,
           yieldReason: "cede",
           cedeContent: "Result: findings",
-          messages: [{ role: "assistant" as const, content: "I'm done with my research!" }],
+          history: [{ role: "assistant" as const, items: "I'm done with my research!" }],
         };
       }
       // Parent responds
       return {
         instance,
         yieldReason: "end_turn",
-        messages: [{ role: "assistant" as const, content: "Thanks for the results!" }],
+        history: [{ role: "assistant" as const, items: "Thanks for the results!" }],
       };
     });
 
@@ -705,7 +705,7 @@ describe("cede continuation", () => {
         instance,
         yieldReason: "cede",
         cedeContent: "Done",
-        messages: [],
+        history: [],
       };
     });
 
@@ -754,14 +754,14 @@ describe("cede continuation", () => {
           instance,
           yieldReason: "cede",
           cedeContent: "Findings: item1, item2",
-          messages: [{ role: "assistant" as const, content: "Calling cede..." }],
+          history: [{ role: "assistant" as const, items: "Calling cede..." }],
         };
       }
 
       return {
         instance,
         yieldReason: "end_turn",
-        messages: [{ role: "assistant" as const, content: "Got the results!" }],
+        history: [{ role: "assistant" as const, items: "Got the results!" }],
       };
     });
 
@@ -783,15 +783,15 @@ describe("cede continuation", () => {
     // First step: cede with content
     expect(steps[0]?.yieldReason).toBe("cede");
     expect(steps[0]?.cedeContent).toBe("Findings: item1, item2");
-    expect(steps[0]?.messages).toEqual([
-      expect.objectContaining({ role: "assistant", content: "Calling cede..." }),
+    expect(steps[0]?.history).toEqual([
+      expect.objectContaining({ role: "assistant", items: "Calling cede..." }),
     ]);
     expect(steps[0]?.done).toBe(false);
 
     // Second step: parent responds
     expect(steps[1]?.yieldReason).toBe("end_turn");
-    expect(steps[1]?.messages).toEqual([
-      expect.objectContaining({ role: "assistant", content: "Got the results!" }),
+    expect(steps[1]?.history).toEqual([
+      expect.objectContaining({ role: "assistant", items: "Got the results!" }),
     ]);
     expect(steps[1]?.done).toBe(true);
   });

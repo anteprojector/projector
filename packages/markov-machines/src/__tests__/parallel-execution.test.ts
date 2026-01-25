@@ -59,7 +59,7 @@ function createTrackingMockExecutor(
       const result = behavior(charter, instance, ancestors, input, callIndex++);
       return {
         instance: result.instance ?? instance,
-        messages: result.messages ?? [],
+        history: result.history ?? [],
         yieldReason: result.yieldReason ?? "end_turn",
         cedeContent: result.cedeContent,
         packStates: result.packStates,
@@ -284,7 +284,7 @@ describe("parallel execution validation", () => {
         }
         return {
           yieldReason: "end_turn",
-          messages: [{ role: "assistant" as const, content: "Done!" }],
+          history: [{ role: "assistant" as const, items: "Done!" }],
         };
       }
     );
@@ -335,7 +335,7 @@ describe("worker node must cede", () => {
     const { executor } = createTrackingMockExecutor(() => ({
       // Both nodes return end_turn (worker should have ceded)
       yieldReason: "end_turn",
-      messages: [{ role: "assistant" as const, content: "Done!" }],
+      history: [{ role: "assistant" as const, items: "Done!" }],
     }));
 
     const charter = createCharter({
@@ -386,7 +386,7 @@ describe("worker node must cede", () => {
             // First step: worker uses tool
             return {
               yieldReason: "tool_use",
-              messages: [],
+              history: [],
             };
           }
           // Second step: worker cedes
@@ -399,12 +399,12 @@ describe("worker node must cede", () => {
         if (step <= 2) {
           return {
             yieldReason: "tool_use",
-            messages: [],
+            history: [],
           };
         }
         return {
           yieldReason: "end_turn",
-          messages: [{ role: "assistant" as const, content: "Done!" }],
+          history: [{ role: "assistant" as const, items: "Done!" }],
         };
       }
     );
@@ -450,7 +450,7 @@ describe("parallel execution cede handling", () => {
         }
         return {
           yieldReason: "end_turn",
-          messages: [{ role: "assistant" as const, content: "Main done!" }],
+          history: [{ role: "assistant" as const, items: "Main done!" }],
         };
       }
     );
@@ -498,12 +498,12 @@ describe("message attribution", () => {
           return {
             yieldReason: "cede",
             cedePayload: { result: "background done" },
-            messages: [{ role: "assistant" as const, content: "Worker message" }],
+            history: [{ role: "assistant" as const, items: "Worker message" }],
           };
         }
         return {
           yieldReason: "end_turn",
-          messages: [{ role: "assistant" as const, content: "Standard message" }],
+          history: [{ role: "assistant" as const, items: "Standard message" }],
         };
       }
     );
@@ -521,12 +521,12 @@ describe("message attribution", () => {
     const machine = createMachine(charter, { instance: root });
     const steps = await collectSteps(runMachine(machine, "test"));
 
-    // First step should contain messages from both leaves
+    // First step should contain history from both leaves
     const firstStep = steps[0]!;
-    expect(firstStep.messages.length).toBe(2);
+    expect(firstStep.history.length).toBe(2);
 
-    // Messages should have sourceInstanceId metadata
-    for (const msg of firstStep.messages) {
+    // History should have sourceInstanceId metadata
+    for (const msg of firstStep.history) {
       const metadata = (msg as { metadata?: { sourceInstanceId?: string } }).metadata;
       expect(metadata?.sourceInstanceId).toBeDefined();
     }

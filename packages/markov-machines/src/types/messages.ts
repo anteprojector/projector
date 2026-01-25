@@ -1,3 +1,5 @@
+import type { Command, Resume } from "./commands.js";
+
 /**
  * Text content block (simplified for storage).
  */
@@ -45,21 +47,23 @@ export interface OutputBlock<M = unknown> {
 }
 
 /**
- * Union of all content block types.
+ * Union of all machine item types.
  * @typeParam M - The application message type for OutputBlock (defaults to unknown).
  */
-export type ContentBlock<M = unknown> =
+export type MachineItem<M = unknown> =
   | TextBlock
   | ToolUseBlock
   | ThinkingBlock
   | ToolResultBlock
-  | OutputBlock<M>;
+  | OutputBlock<M>
+  | Command
+  | Resume;
 
 /**
- * Check if a content block is an OutputBlock.
+ * Check if a machine item is an OutputBlock.
  */
 export function isOutputBlock<M>(
-  block: ContentBlock<M>,
+  block: MachineItem<M>,
 ): block is OutputBlock<M> {
   return block.type === "output";
 }
@@ -77,41 +81,41 @@ export interface MessageMetadata {
  * Matches Anthropic SDK format with optional metadata.
  * @typeParam M - The application message type for OutputBlock (defaults to unknown).
  */
-export interface Message<M = unknown> {
+export interface MachineMessage<M = unknown> {
   role: "user" | "assistant";
-  content: string | ContentBlock<M>[];
+  items: string | MachineItem<M>[];
   /** Optional metadata for message attribution */
   metadata?: MessageMetadata;
 }
 
 /**
  * Create a user message.
- * @param content - Message content (string or content blocks)
+ * @param items - Message items (string or machine items)
  * @param sourceInstanceId - Optional ID of the instance that generated this message
  */
 export function userMessage<M = unknown>(
-  content: string | ContentBlock<M>[],
+  items: string | MachineItem<M>[],
   sourceInstanceId?: string,
-): Message<M> {
+): MachineMessage<M> {
   return {
     role: "user",
-    content,
+    items,
     ...(sourceInstanceId && { metadata: { sourceInstanceId } }),
   };
 }
 
 /**
  * Create an assistant message.
- * @param content - Message content (string or content blocks)
+ * @param items - Message items (string or machine items)
  * @param sourceInstanceId - Optional ID of the instance that generated this message
  */
 export function assistantMessage<M = unknown>(
-  content: string | ContentBlock<M>[],
+  items: string | MachineItem<M>[],
   sourceInstanceId?: string,
-): Message<M> {
+): MachineMessage<M> {
   return {
     role: "assistant",
-    content,
+    items,
     ...(sourceInstanceId && { metadata: { sourceInstanceId } }),
   };
 }
@@ -133,13 +137,13 @@ export function toolResult(
 }
 
 /**
- * Extract text from a message's content.
+ * Extract text from a message's items.
  */
-export function getMessageText<M = unknown>(message: Message<M>): string {
-  if (typeof message.content === "string") {
-    return message.content;
+export function getMessageText<M = unknown>(message: MachineMessage<M>): string {
+  if (typeof message.items === "string") {
+    return message.items;
   }
-  return message.content
+  return message.items
     .filter((block): block is TextBlock => block.type === "text")
     .map((block) => block.text)
     .join("");

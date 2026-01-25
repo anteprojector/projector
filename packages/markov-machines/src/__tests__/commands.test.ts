@@ -26,7 +26,7 @@ function createMockExecutor(): Executor {
     ): Promise<RunResult> => {
       return {
         instance,
-        messages: [],
+        history: [],
         yieldReason: "end_turn",
       };
     },

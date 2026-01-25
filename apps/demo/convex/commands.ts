@@ -10,7 +10,7 @@ import {
   serializeInstance,
   deserializeInstance,
   getAvailableCommands,
-  type Message,
+  type ModelMessage,
 } from "markov-machines";
 import { demoCharter } from "../src/agent/charter";
 import { serializeInstanceForDisplay } from "../src/serializeForDisplay";
@@ -32,15 +32,15 @@ function escapeDollarFields(obj: unknown): unknown {
   return obj;
 }
 
-// Filter out messages with empty content (Anthropic API requires non-empty content)
-function filterValidMessages(messages: Message[]): Message[] {
+// Filter out messages with empty items (Anthropic API requires non-empty content)
+function filterValidMessages(messages: ModelMessage[]): ModelMessage[] {
   return messages.filter((msg) => {
-    if (!msg.content) return false;
-    if (Array.isArray(msg.content)) {
-      return msg.content.length > 0;
+    if (!msg.items) return false;
+    if (Array.isArray(msg.items)) {
+      return msg.items.length > 0;
     }
-    if (typeof msg.content === "string") {
-      return msg.content.length > 0;
+    if (typeof msg.items === "string") {
+      return msg.items.length > 0;
     }
     return true;
   });
@@ -65,7 +65,7 @@ export const executeCommand = action({
 
     const machine = createMachine(demoCharter, {
       instance,
-      history: filterValidMessages(history as Message[]),
+      history: filterValidMessages(history as ModelMessage[]),
     });
 
     const { machine: updatedMachine, result, replyMessages } = await runCommand(

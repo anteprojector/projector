@@ -77,9 +77,9 @@ export type { Charter, CharterConfig } from "./charter.js";
 
 // Messages
 export type {
-  Message,
+  MachineMessage,
   MessageMetadata,
-  ContentBlock,
+  MachineItem,
   TextBlock,
   ToolUseBlock,
   ToolResultBlock,

@@ -1,6 +1,6 @@
 import type { Charter } from "./charter.js";
 import type { Instance, SuspendInfo } from "./instance.js";
-import type { Message } from "./messages.js";
+import type { MachineMessage } from "./messages.js";
 import type { Ref, SerialNode } from "./refs.js";
 import type { StandardNodeConfig } from "../executor/types.js";
 
@@ -12,7 +12,7 @@ export interface MachineConfig<AppMessage = unknown> {
   /** Root node instance (may have nested children) */
   instance: Instance;
   /** Conversation history */
-  history?: Message<AppMessage>[];
+  history?: MachineMessage<AppMessage>[];
 }
 
 /**
@@ -26,7 +26,7 @@ export interface Machine<AppMessage = unknown> {
   /** Root node instance (may have nested children) */
   instance: Instance;
   /** Conversation history */
-  history: Message<AppMessage>[];
+  history: MachineMessage<AppMessage>[];
 }
 
 /**
@@ -69,5 +69,5 @@ export interface SerializedMachine<AppMessage = unknown> {
   /** Root instance tree */
   instance: SerializedInstance;
   /** Full conversation history */
-  history: Message<AppMessage>[];
+  history: MachineMessage<AppMessage>[];
 }

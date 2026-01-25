@@ -13,7 +13,7 @@ import {
   getMessageText,
   type Instance,
   type Node,
-  type Message,
+  type ModelMessage,
   type MachineStep,
 } from "markov-machines";
 import { demoCharter, nameGateNode } from "../src/agent/charter";
@@ -24,23 +24,23 @@ function getActiveNodeInstructions(instance: Instance): string {
   return instructions.slice(0, 10000);
 }
 
-// Filter out messages with empty content (Anthropic API requires non-empty content)
-function filterValidMessages(messages: Message[]): Message[] {
+// Filter out messages with empty items (Anthropic API requires non-empty content)
+function filterValidMessages(messages: ModelMessage[]): ModelMessage[] {
   return messages.filter((msg) => {
-    if (!msg.content) return false;
-    if (Array.isArray(msg.content)) {
-      return msg.content.length > 0;
+    if (!msg.items) return false;
+    if (Array.isArray(msg.items)) {
+      return msg.items.length > 0;
     }
-    if (typeof msg.content === "string") {
-      return msg.content.length > 0;
+    if (typeof msg.items === "string") {
+      return msg.items.length > 0;
     }
     return true;
   });
 }
 
 function getStepResponse(step: MachineStep<unknown>): string {
-  for (let i = step.messages.length - 1; i >= 0; i--) {
-    const msg = step.messages[i];
+  for (let i = step.history.length - 1; i >= 0; i--) {
+    const msg = step.history[i];
     if (msg && msg.role === "assistant") {
       return getMessageText(msg);
     }
@@ -65,7 +65,7 @@ export const send = action({
 
     const machine = createMachine(demoCharter, {
       instance,
-      history: filterValidMessages(history as Message[]),
+      history: filterValidMessages(history as ModelMessage[]),
     });
 
     // Create turn first so user message can be associated with it
@@ -87,11 +87,11 @@ export const send = action({
 
     let stepNumber = 0;
     let lastStep: MachineStep | null = null;
-    const allMessages: Message[] = [];
+    const allMessages: ModelMessage[] = [];
 
     for await (const step of runMachine(machine, message, { maxSteps: 10 })) {
       stepNumber++;
-      allMessages.push(...step.messages);
+      allMessages.push(...step.history);
 
       await ctx.runMutation(api.machineSteps.add, {
         sessionId,
@@ -100,7 +100,7 @@ export const send = action({
         yieldReason: step.yieldReason,
         response: getStepResponse(step),
         done: step.done,
-        messages: step.messages,
+        messages: step.history,
         instance: serializeInstance(step.instance, demoCharter),
         displayInstance: serializeInstanceForDisplay(step.instance, demoCharter),
         activeNodeInstructions: getActiveNodeInstructions(step.instance),
@@ -174,12 +174,12 @@ export const createSession = action({
 
     let stepNumber = 0;
     let lastStep: MachineStep | null = null;
-    const allMessages: Message[] = [];
+    const allMessages: ModelMessage[] = [];
 
     // Run with empty input to trigger initial greeting
     for await (const step of runMachine(machine, "[session started]", { maxSteps: 10 })) {
       stepNumber++;
-      allMessages.push(...step.messages);
+      allMessages.push(...step.history);
 
       await ctx.runMutation(api.machineSteps.add, {
         sessionId,
@@ -188,7 +188,7 @@ export const createSession = action({
         yieldReason: step.yieldReason,
         response: getStepResponse(step),
         done: step.done,
-        messages: step.messages,
+        messages: step.history,
         instance: serializeInstance(step.instance, demoCharter),
         displayInstance: serializeInstanceForDisplay(step.instance, demoCharter),
         activeNodeInstructions: getActiveNodeInstructions(step.instance),
