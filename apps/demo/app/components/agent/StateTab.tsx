@@ -4,12 +4,20 @@ import { useAtomValue } from "jotai";
 import { isPreviewingAtom, stepPreviewInstanceAtom } from "@/src/atoms";
 import { JsonViewer } from "../shared/JsonViewer";
 
+interface DisplayPack {
+  name: string;
+  description: string;
+  state: unknown;
+  validator: Record<string, unknown>;
+  commands: Record<string, unknown>;
+}
+
 interface SerializedInstance {
   id: string;
   node: Record<string, unknown>;
   state: unknown;
   children?: SerializedInstance[];
-  packStates?: Record<string, unknown>;
+  packs?: DisplayPack[];
 }
 
 interface StateTabProps {
@@ -53,7 +61,7 @@ export function StateTab({ instance }: StateTabProps) {
 
   const activeState = getActiveLeafState(displayInstance);
   const activeNodeName = getActiveLeafNodeName(displayInstance);
-  const packStates = displayInstance.packStates || {};
+  const packs = displayInstance.packs || [];
 
   return (
     <div className="space-y-6">
@@ -74,19 +82,19 @@ export function StateTab({ instance }: StateTabProps) {
         </div>
       </div>
 
-      {/* Pack States */}
-      {Object.keys(packStates).length > 0 && (
+      {/* Packs */}
+      {packs.length > 0 && (
         <div>
           <h3 className="text-terminal-green text-sm mb-2 terminal-glow">
-            Pack States
+            Packs
           </h3>
-          {Object.entries(packStates).map(([packName, packState]) => (
+          {packs.map((pack) => (
             <div
-              key={packName}
+              key={pack.name}
               className="bg-terminal-bg-lighter p-3 rounded border border-terminal-green-dimmer mb-2"
             >
-              <div className="text-terminal-cyan text-xs mb-2">{packName}</div>
-              <JsonViewer data={packState} />
+              <div className="text-terminal-cyan text-xs mb-2">{pack.name}</div>
+              <JsonViewer data={pack.state} />
             </div>
           ))}
         </div>

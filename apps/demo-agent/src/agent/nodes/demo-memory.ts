@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createNode, createTransition, cede } from "markov-machines";
-import { memoryPack } from "../packs/memory";
-import { themePack } from "../packs/theme";
+import { memoryPack } from "../packs/memory.js";
+import { themePack } from "../packs/theme.js";
 
 export const demoMemoryStateValidator = z.object({});
 

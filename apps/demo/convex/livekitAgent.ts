@@ -8,7 +8,7 @@ import { query, internalQuery, internalMutation } from "./_generated/server";
  * Provides database operations for voice conversations.
  * Voice transcripts are stored as messages with mode="voice".
  *
- * Note: The getToken action is in voiceActions.ts (requires Node.js runtime)
+ * Note: The getToken action is in livekitAgentActions.ts (requires Node.js runtime)
  */
 
 // Internal query to get session (used by action)
@@ -96,5 +96,74 @@ export const getSessionByRoom = internalQuery({
 
     if (!voiceRoom) return null;
     return await ctx.db.get(voiceRoom.sessionId);
+  },
+});
+
+// Public query to lookup session by room name (for agent to resolve sessionId from CONVEX_URL)
+export const getSessionIdByRoom = query({
+  args: { roomName: v.string() },
+  handler: async (ctx, { roomName }) => {
+    const voiceRoom = await ctx.db
+      .query("voiceRooms")
+      .withIndex("by_room", (q) => q.eq("roomName", roomName))
+      .first();
+
+    if (!voiceRoom) return null;
+    return voiceRoom.sessionId;
+  },
+});
+
+// Combined query for agent initialization - returns session, current turn, and full history
+export const getAgentInit = query({
+  args: { roomName: v.string() },
+  handler: async (ctx, { roomName }) => {
+    // 1. Look up voice room by room name
+    const voiceRoom = await ctx.db
+      .query("voiceRooms")
+      .withIndex("by_room", (q) => q.eq("roomName", roomName))
+      .first();
+
+    if (!voiceRoom) return null;
+
+    const sessionId = voiceRoom.sessionId;
+
+    // 2. Get session and current turn
+    const session = await ctx.db.get(sessionId);
+    if (!session?.currentTurnId) return null;
+
+    const currentTurn = await ctx.db.get(session.currentTurnId);
+    if (!currentTurn) return null;
+
+    // 3. Get full history (ordered messages from all turns)
+    const allTurns = await ctx.db
+      .query("machineTurns")
+      .withIndex("by_session", (q) => q.eq("sessionId", sessionId))
+      .collect();
+
+    const turnMap = new Map(allTurns.map((t) => [t._id, t]));
+
+    const orderedTurns: typeof allTurns = [];
+    let currentId: typeof session.currentTurnId | undefined = session.currentTurnId;
+
+    while (currentId) {
+      const turn = turnMap.get(currentId);
+      if (!turn) break;
+      orderedTurns.unshift(turn);
+      currentId = turn.parentId;
+    }
+
+    const history: unknown[] = [];
+    for (const turn of orderedTurns) {
+      history.push(...turn.messages);
+    }
+
+    return {
+      sessionId,
+      turnId: session.currentTurnId,
+      instanceId: currentTurn.instanceId,
+      instance: currentTurn.instance,
+      displayInstance: currentTurn.displayInstance,
+      history,
+    };
   },
 });

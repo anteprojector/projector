@@ -2,7 +2,7 @@ import type { Machine } from "../types/machine.js";
 import type { RunOptions, MachineStep, RunResult, SuspendedInstanceInfo } from "../executor/types.js";
 import type { Instance, ActiveLeafInfo } from "../types/instance.js";
 import type { Command, Resume } from "../types/commands.js";
-import type { MachineMessage } from "../types/messages.js";
+import type { MachineMessage, MessageSource } from "../types/messages.js";
 import type { YieldReason } from "../executor/types.js";
 import { getActiveLeaves, isWorkerInstance, getSuspendedInstances, findInstanceById, clearSuspension } from "../types/instance.js";
 import { userMessage } from "../types/messages.js";
@@ -107,18 +107,20 @@ function removeLeafAtIndex(root: Instance, indices: number[]): Instance {
  */
 function wrapMessages<AppMessage>(
   messages: MachineMessage<AppMessage>[],
-  sourceInstanceId: string,
+  instanceId: string,
 ): MachineMessage<AppMessage>[] {
   return messages.map(msg => {
-    const existing = (msg as { metadata?: Record<string, unknown> }).metadata;
-    if (existing?.sourceInstanceId && existing.sourceInstanceId !== sourceInstanceId) {
+    const existing = msg.metadata;
+    const existingSource = existing?.source;
+    if (existingSource?.instanceId && existingSource.instanceId !== instanceId) {
       console.warn(
-        `[wrapMessages] Overwriting sourceInstanceId: ${existing.sourceInstanceId} -> ${sourceInstanceId}`
+        `[wrapMessages] Overwriting source.instanceId: ${existingSource.instanceId} -> ${instanceId}`
       );
     }
+    const newSource: MessageSource = { ...existingSource, instanceId };
     return {
       ...msg,
-      metadata: { ...existing, sourceInstanceId },
+      metadata: { ...existing, source: newSource },
     };
   }) as MachineMessage<AppMessage>[];
 }
@@ -260,7 +262,7 @@ export async function* runMachine<AppMessage = unknown>(
         if (replyMessages) {
           if (typeof replyMessages === "string") {
             // String becomes a userMessage
-            machine.enqueue([userMessage<AppMessage>(replyMessages, targetInstanceId)]);
+            machine.enqueue([userMessage<AppMessage>(replyMessages, { instanceId: targetInstanceId })]);
           } else {
             // Array of MachineMessages is enqueued directly
             machine.enqueue(replyMessages);
@@ -274,7 +276,7 @@ export async function* runMachine<AppMessage = unknown>(
         // done: false only if there are still items in the queue
         yield {
           instance: updatedMachine.instance,
-          history: [userMessage(commandMsg, targetInstanceId)],
+          history: [userMessage(commandMsg, { instanceId: targetInstanceId })],
           yieldReason: "end_turn",
           done: machine.queue.length === 0,
         };
@@ -326,6 +328,9 @@ export async function* runMachine<AppMessage = unknown>(
   // Base history from before this run, plus queued messages (excluding command messages already processed)
   const baseHistory: MachineMessage<AppMessage>[] = [...(machine.history ?? []), ...nonCommandMessages];
   let currentHistory: MachineMessage<AppMessage>[] = baseHistory;
+
+  // Track input messages for the current step (user messages go on first step only)
+  let stepInputMessages: MachineMessage<AppMessage>[] = [...nonCommandMessages];
 
   const maxSteps = options?.maxSteps ?? 50;
   let steps = 0;
@@ -411,6 +416,12 @@ export async function* runMachine<AppMessage = unknown>(
     // Process all results through unified path
     const merged = mergeLeafResults(currentInstance, results);
     currentInstance = merged.instance;
+    machine.instance = currentInstance;  // Keep machine.instance in sync for external access
+
+    // Combine input messages (first step only) with model output for this step's history
+    const stepHistory = [...stepInputMessages, ...merged.history];
+    // Clear input messages for subsequent steps (they don't have new user input)
+    stepInputMessages = [];
 
     // Single-leaf cede: yield explicit cede step (backwards compatible)
     // Multi-leaf cede (worker cedes while primary continues): just add to history
@@ -421,7 +432,7 @@ export async function* runMachine<AppMessage = unknown>(
       // Yield cede step (never final - parent needs to respond)
       yield {
         instance: currentInstance,
-        history: merged.history,
+        history: stepHistory,
         yieldReason: "cede",
         done: false,
         cedeContent,
@@ -431,7 +442,7 @@ export async function* runMachine<AppMessage = unknown>(
       if (cedeContent !== undefined) {
         if (typeof cedeContent === "string") {
           // String content becomes a user message
-          const cedeMessage = userMessage<AppMessage>(cedeContent, cedeInfo!.instanceId);
+          const cedeMessage = userMessage<AppMessage>(cedeContent, { instanceId: cedeInfo!.instanceId });
           currentHistory = [...baseHistory, cedeMessage];
         } else {
           // Message[] content is appended directly
@@ -452,7 +463,7 @@ export async function* runMachine<AppMessage = unknown>(
         if (content !== undefined) {
           if (typeof content === "string") {
             // String content becomes a user message
-            const cedeMessage = userMessage<AppMessage>(content, instanceId);
+            const cedeMessage = userMessage<AppMessage>(content, { instanceId });
             currentHistory = [...currentHistory, cedeMessage];
           } else {
             // Message[] content is appended directly
@@ -475,7 +486,7 @@ export async function* runMachine<AppMessage = unknown>(
         // Yield the partial step (not final)
         yield {
           instance: currentInstance,
-          history: merged.history,
+          history: stepHistory,
           yieldReason: "max_tokens",
           done: false,
         };
@@ -490,7 +501,7 @@ export async function* runMachine<AppMessage = unknown>(
         // Recovery already attempted, treat as final
         yield {
           instance: currentInstance,
-          history: merged.history,
+          history: stepHistory,
           yieldReason: "max_tokens",
           done: true,
         };
@@ -502,7 +513,7 @@ export async function* runMachine<AppMessage = unknown>(
     const isFinal = merged.yieldReason === "end_turn";
     yield {
       instance: currentInstance,
-      history: merged.history,
+      history: stepHistory,
       yieldReason: merged.yieldReason,
       done: isFinal,
     };

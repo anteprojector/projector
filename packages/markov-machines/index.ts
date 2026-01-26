@@ -9,7 +9,7 @@ export { createTransition } from "./src/core/transition.js";
 export { cede, spawn, suspend } from "./src/helpers/cede-spawn.js";
 export type { TransitionConfig } from "./src/core/transition.js";
 export { runMachine, runMachineToCompletion, mergeLeafResults } from "./src/core/run.js";
-export type { RunMachineInput, LeafResult, MergedResult } from "./src/core/run.js";
+export type { LeafResult, MergedResult } from "./src/core/run.js";
 export { createPack } from "./src/core/pack.js";
 export { getAvailableCommands, runCommand, createCommand } from "./src/core/commands.js";
 export type { CommandConfig } from "./src/core/commands.js";
@@ -18,8 +18,10 @@ export type { CommandConfig } from "./src/core/commands.js";
 export {
   createDryClientNode,
   createDryClientInstance,
+  createDryClientPack,
   hydrateClientNode,
   hydrateClientInstance,
+  hydrateClientPack,
 } from "./src/core/client.js";
 
 // Executors
@@ -61,6 +63,7 @@ export type {
   // Machine
   Machine,
   MachineConfig,
+  OnMessageEnqueue,
   SerializedMachine,
   SerializedInstance,
   SerializedSuspendInfo,
@@ -92,6 +95,8 @@ export type {
   // Messages
   MachineMessage,
   MessageMetadata,
+  MessageSource,
+  SourceInstanceId,
   MachineItem,
   TextBlock,
   ToolUseBlock,
@@ -123,6 +128,8 @@ export type {
   ClientNode,
   DryClientInstance,
   ClientInstance,
+  DryClientPack,
+  ClientPack,
 } from "./src/types/index.js";
 
 // Type guards and helpers
@@ -169,6 +176,8 @@ export {
 export {
   userMessage,
   assistantMessage,
+  commandMessage,
+  systemMessage,
   toolResult,
   getMessageText,
 } from "./src/types/messages.js";
@@ -176,6 +185,11 @@ export {
 // System prompt helpers
 export type { SystemPromptOptions } from './src/runtime/system-prompt.js';
 export { buildSystemPrompt, buildDefaultSystemPrompt } from './src/runtime/system-prompt.js';
+
+// Tool pipeline (for custom executors like LiveKitExecutor)
+export { runToolPipeline } from './src/runtime/tool-pipeline.js';
+export type { ToolPipelineContext, ToolPipelineResult } from './src/runtime/tool-pipeline.js';
+export type { ToolCall } from './src/runtime/tool-call-processor.js';
 
 // State helpers
 export { shallowMerge } from "./src/types/state.js";

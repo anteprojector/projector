@@ -69,11 +69,30 @@ export function isOutputBlock<M>(
 }
 
 /**
+ * Source attribution for a message.
+ * - instanceId: ID of the instance that generated this message
+ * - external: true if message came from outside the machine (user transcript, LiveKit STT, etc.)
+ */
+export interface MessageSource {
+  /** ID of the instance that generated this message */
+  instanceId?: string;
+  /** True if message originated from outside the machine (e.g., user speech, external system) */
+  external?: boolean;
+}
+
+/**
+ * @deprecated Use MessageSource instead
+ */
+export type SourceInstanceId = string | "user";
+
+/**
  * Metadata attached to messages for attribution and tracking.
  */
 export interface MessageMetadata {
-  /** ID of the instance that generated this message */
-  sourceInstanceId?: string;
+  /** Source attribution for this message */
+  source?: MessageSource;
+  /** @deprecated Use source.instanceId instead */
+  sourceInstanceId?: SourceInstanceId;
 }
 
 /**
@@ -91,32 +110,32 @@ export interface MachineMessage<M = unknown> {
 /**
  * Create a user message.
  * @param items - Message items (string or machine items)
- * @param sourceInstanceId - Optional ID of the instance that generated this message
+ * @param source - Optional source attribution for this message
  */
 export function userMessage<M = unknown>(
   items: string | MachineItem<M>[],
-  sourceInstanceId?: string,
+  source?: MessageSource,
 ): MachineMessage<M> {
   return {
     role: "user",
     items,
-    ...(sourceInstanceId && { metadata: { sourceInstanceId } }),
+    ...(source && { metadata: { source } }),
   };
 }
 
 /**
  * Create an assistant message.
  * @param items - Message items (string or machine items)
- * @param sourceInstanceId - Optional ID of the instance that generated this message
+ * @param source - Optional source attribution for this message
  */
 export function assistantMessage<M = unknown>(
   items: string | MachineItem<M>[],
-  sourceInstanceId?: string,
+  source?: MessageSource,
 ): MachineMessage<M> {
   return {
     role: "assistant",
     items,
-    ...(sourceInstanceId && { metadata: { sourceInstanceId } }),
+    ...(source && { metadata: { source } }),
   };
 }
 
@@ -125,16 +144,16 @@ export function assistantMessage<M = unknown>(
  * System messages are filtered from history before sending to the model.
  * Used for internal control flow like Resume.
  * @param items - Message items (string or machine items)
- * @param sourceInstanceId - Optional ID of the instance that generated this message
+ * @param source - Optional source attribution for this message
  */
 export function systemMessage<M = unknown>(
   items: string | MachineItem<M>[],
-  sourceInstanceId?: string,
+  source?: MessageSource,
 ): MachineMessage<M> {
   return {
     role: "system",
     items,
-    ...(sourceInstanceId && { metadata: { sourceInstanceId } }),
+    ...(source && { metadata: { source } }),
   };
 }
 
@@ -144,16 +163,16 @@ export function systemMessage<M = unknown>(
  * They are drained from the queue first and their results are yielded before
  * normal execution continues.
  * @param items - Message items (typically a Command object)
- * @param sourceInstanceId - Optional ID of the instance that generated this message
+ * @param source - Optional source attribution for this message
  */
 export function commandMessage<M = unknown>(
   items: string | MachineItem<M>[],
-  sourceInstanceId?: string,
+  source?: MessageSource,
 ): MachineMessage<M> {
   return {
     role: "command",
     items,
-    ...(sourceInstanceId && { metadata: { sourceInstanceId } }),
+    ...(source && { metadata: { source } }),
   };
 }
 

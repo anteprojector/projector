@@ -12,7 +12,8 @@ export type YieldReason =
   | "max_tokens"
   | "cede"
   | "suspend"          // Instance just suspended
-  | "awaiting_resume"; // All leaves suspended, waiting for resume
+  | "awaiting_resume"  // All leaves suspended, waiting for resume
+  | "external";        // Inference delegated to external system (e.g., LiveKit)
 
 /**
  * Options for executor run.
@@ -68,7 +69,7 @@ export interface MachineStep<AppMessage = unknown> {
   /** History generated in this step */
   history: MachineMessage<AppMessage>[];
   /** Why this step yielded */
-  yieldReason: "end_turn" | "tool_use" | "cede" | "max_tokens" | "command" | "suspend" | "awaiting_resume";
+  yieldReason: "end_turn" | "tool_use" | "cede" | "max_tokens" | "command" | "suspend" | "awaiting_resume" | "external";
   /** True if this is the final step (has response or hit limit) */
   done: boolean;
   /** Cede content if yieldReason is "cede" - string or MachineMessage[] */
@@ -84,7 +85,7 @@ export interface MachineStep<AppMessage = unknown> {
  */
 export interface Executor<AppMessage = unknown> {
   /** Executor type identifier */
-  type: "standard";
+  type: string;
 
   /**
    * Run the executor for a node instance.

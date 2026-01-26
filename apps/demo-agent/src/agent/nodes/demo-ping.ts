@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { createNode, createTransition, cede, toolReply } from "markov-machines";
-import { themePack } from "../packs/theme";
+import { themePack } from "../packs/theme.js";
 
 export const demoPingStateValidator = z.object({});
 

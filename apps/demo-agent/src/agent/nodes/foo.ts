@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { createNode, createTransition, spawn, cede } from "markov-machines";
-import { demoMemoryNode } from "./demo-memory";
-import { demoPingNode } from "./demo-ping";
-import { demoFavoritesNode } from "./demo-favorites";
-import { themePack } from "../packs/theme";
+import { demoMemoryNode } from "./demo-memory.js";
+import { demoPingNode } from "./demo-ping.js";
+import { demoFavoritesNode } from "./demo-favorites.js";
+import { themePack } from "../packs/theme.js";
 
 export const fooStateValidator = z.object({
   name: z.string(),
@@ -30,7 +30,10 @@ Spawn the appropriate demo node when requested. When a child cedes back, you rec
     }),
     spawnPingDemo: createTransition<FooState>({
       description: "Spawn the Ping Demo node to showcase Commands",
-      execute: () => spawn(demoPingNode, {}),
+      execute: () => {
+        console.log('spawn ping demo execute')
+        return spawn(demoPingNode, {})
+      },
     }),
     spawnFavoritesDemo: createTransition<FooState>({
       description: "Spawn the Favorites Demo node to showcase Node State",

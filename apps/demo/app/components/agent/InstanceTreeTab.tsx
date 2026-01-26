@@ -5,12 +5,20 @@ import { activeTreeSubtabAtom, type TreeSubtab } from "@/src/atoms";
 import { TreeView } from "../shared/TreeView";
 import { ClientTreeView } from "../shared/ClientTreeView";
 
+interface DisplayPack {
+  name: string;
+  description: string;
+  state: unknown;
+  validator: Record<string, unknown>;
+  commands: Record<string, unknown>;
+}
+
 interface SerializedInstance {
   id: string;
   node: Record<string, unknown>;
   state: unknown;
   children?: SerializedInstance[];
-  packStates?: Record<string, unknown>;
+  packs?: DisplayPack[];
   executorConfig?: Record<string, unknown>;
   suspended?: {
     suspendId: string;
@@ -36,12 +44,12 @@ interface DisplayInstance {
     transitions: Record<string, string>;
     commands: Record<string, DisplayCommand>;
     initialState?: unknown;
-    packs?: string[];
+    packNames?: string[];
     worker?: boolean;
   };
   state: unknown;
   children?: DisplayInstance[];
-  packStates?: Record<string, unknown>;
+  packs?: DisplayPack[];
   executorConfig?: Record<string, unknown>;
   suspended?: {
     suspendId: string;

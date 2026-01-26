@@ -795,10 +795,11 @@ describe("cede continuation", () => {
     // Should have 2 steps: cede then parent response
     expect(steps.length).toBe(2);
 
-    // First step: cede with content
+    // First step: cede with content (includes user input + assistant output)
     expect(steps[0]?.yieldReason).toBe("cede");
     expect(steps[0]?.cedeContent).toBe("Findings: item1, item2");
     expect(steps[0]?.history).toEqual([
+      expect.objectContaining({ role: "user", items: "do work" }),
       expect.objectContaining({ role: "assistant", items: "Calling cede..." }),
     ]);
     expect(steps[0]?.done).toBe(false);

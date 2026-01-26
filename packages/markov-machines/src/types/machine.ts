@@ -5,6 +5,14 @@ import type { Ref, SerialNode } from "./refs.js";
 import type { StandardNodeConfig } from "../executor/types.js";
 
 /**
+ * Callback invoked when a message is enqueued.
+ * Called once per message, immediately when enqueue() is called.
+ */
+export type OnMessageEnqueue<AppMessage = unknown> = (
+  message: MachineMessage<AppMessage>
+) => void | Promise<void>;
+
+/**
  * Machine configuration for createMachine.
  * @typeParam AppMessage - The application message type for structured outputs (defaults to unknown).
  */
@@ -13,6 +21,8 @@ export interface MachineConfig<AppMessage = unknown> {
   instance: Instance;
   /** Conversation history */
   history?: MachineMessage<AppMessage>[];
+  /** Callback invoked for each message when enqueue() is called */
+  onMessageEnqueue?: OnMessageEnqueue<AppMessage>;
 }
 
 /**
@@ -31,6 +41,10 @@ export interface Machine<AppMessage = unknown> {
   queue: MachineMessage<AppMessage>[];
   /** Enqueue messages to be processed on next runMachine call */
   enqueue: (messages: MachineMessage<AppMessage>[]) => void;
+  /** Wait until queue has content. Resolves immediately if queue is non-empty. */
+  waitForQueue: () => Promise<void>;
+  /** Notify any waiters that queue has content (called automatically by enqueue) */
+  notifyQueue: () => void;
 }
 
 /**

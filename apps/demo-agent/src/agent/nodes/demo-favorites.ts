@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { createNode, createTransition, cede, type ToolDefinition } from "markov-machines";
-import { themePack } from "../packs/theme";
+import { themePack } from "../packs/theme.js";
 
 export const demoFavoritesStateValidator = z.object({
   airplane: z.string().optional(),

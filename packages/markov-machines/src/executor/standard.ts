@@ -17,10 +17,8 @@ import {
   assistantMessage,
 } from "../types/messages.js";
 import { generateToolDefinitions } from "../tools/tool-generator.js";
-import { executeTransition } from "../runtime/transition-executor.js";
 import { buildSystemPrompt } from "../runtime/system-prompt.js";
-import { processToolCalls } from "../runtime/tool-call-processor.js";
-import { handleTransitionResult } from "../runtime/transition-handler.js";
+import { runToolPipeline } from "../runtime/tool-pipeline.js";
 import { getOrInitPackState } from "../core/machine.js";
 import { ZOD_JSON_SCHEMA_TARGET_OPENAPI_3 } from "../helpers/json-schema.js";
 import type {
@@ -30,6 +28,58 @@ import type {
   RunOptions,
   RunResult,
 } from "./types.js";
+
+/**
+ * Filter out tool_use blocks that don't have corresponding tool_result blocks.
+ * This handles race conditions where tool_use is enqueued before tool_result.
+ */
+function filterUnpairedToolUse(messages: MessageParam[]): MessageParam[] {
+  // Collect all tool_result IDs
+  const toolResultIds = new Set<string>();
+  for (const msg of messages) {
+    if (msg.role === "user" && Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        if (typeof block === "object" && "type" in block && block.type === "tool_result") {
+          toolResultIds.add((block as { tool_use_id: string }).tool_use_id);
+        }
+      }
+    }
+  }
+
+  // Filter messages, removing unpaired tool_use blocks
+  return messages.map((msg) => {
+    if (msg.role !== "assistant" || !Array.isArray(msg.content)) {
+      return msg;
+    }
+
+    const filteredContent = msg.content.filter((block) => {
+      if (typeof block === "object" && "type" in block && block.type === "tool_use") {
+        const hasResult = toolResultIds.has((block as { id: string }).id);
+        if (!hasResult) {
+          console.warn(`[executor] Filtering unpaired tool_use: ${(block as { id: string }).id}`);
+        }
+        return hasResult;
+      }
+      return true;
+    });
+
+    // If all content was filtered, return empty text to avoid empty message
+    if (filteredContent.length === 0) {
+      return { role: msg.role, content: [{ type: "text" as const, text: "" }] };
+    }
+
+    return { ...msg, content: filteredContent };
+  }).filter((msg) => {
+    // Remove messages that are just empty text
+    if (Array.isArray(msg.content) && msg.content.length === 1) {
+      const block = msg.content[0];
+      if (typeof block === "object" && "type" in block && block.type === "text" && "text" in block && block.text === "") {
+        return false;
+      }
+    }
+    return true;
+  });
+}
 
 /**
  * Standard executor implementation using Anthropic SDK.
@@ -48,9 +98,29 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
       apiKey: config.apiKey,
       logLevel: config.debug ? "debug" : undefined,
     });
-    this.model = config.model ?? "claude-sonnet-4-20250514";
+
+
+    this.model = config.model ?? "claude-sonnet-4-5";
     this.maxTokens = config.maxTokens ?? 4096;
     this.debug = config.debug ?? false;
+
+  }
+
+  async test() {
+    try {
+      const msg = await this.client.messages.create({
+        model: this.model,
+        max_tokens: this.maxTokens,
+        messages: [{ role: "user", content: "ping" }],
+      });
+      console.log('$$$$ msg.content', msg.content);
+    } catch (err: any) {
+      console.error("Anthropic error name:", err?.name);
+      console.error("Anthropic error status:", err?.status);
+      console.error("Anthropic error message:", err?.message);
+      console.error("Anthropic error:", err);
+      throw err;
+    }
   }
 
   /**
@@ -96,9 +166,20 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
 
     // Add current user input (only if non-empty)
     if (input) {
-      newMessages.push(userMessage(input, instance.id));
+      newMessages.push(userMessage(input, { instanceId: instance.id }));
       conversationHistory.push({ role: "user", content: input });
     }
+
+    // Validate that we have at least one message
+    if (conversationHistory.length === 0) {
+      throw new Error(
+        "Cannot call API with empty messages. This typically happens when runMachine is called " +
+        "before any user messages have been enqueued and there is no prior conversation history."
+      );
+    }
+
+    // Filter out unpaired tool_use blocks (handles race conditions)
+    const validatedHistory = filterUnpairedToolUse(conversationHistory);
 
     // Generate tools for current node (includes ancestor tools)
     const tools = generateToolDefinitions(
@@ -169,18 +250,19 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
       max_tokens: effectiveMaxTokens,
       ...(effectiveTemperature !== undefined && { temperature: effectiveTemperature }),
       system: systemPrompt,
-      messages: conversationHistory,
+      messages: validatedHistory,
       tools: anthropicTools,
     };
 
+    console.log('$$ messages.create', validatedHistory[validatedHistory.length - 1])
     const response = outputFormat
       ? await this.client.beta.messages.create({
-          ...apiParams,
-          // Type cast needed as SDK types may not match API exactly for beta features
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          output_format: outputFormat as any,
-          betas: ["structured-outputs-2025-11-13"],
-        })
+        ...apiParams,
+        // Type cast needed as SDK types may not match API exactly for beta features
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        output_format: outputFormat as any,
+        betas: ["structured-outputs-2025-11-13"],
+      })
       : await this.client.messages.create(apiParams);
 
     // Debug: log the response
@@ -204,7 +286,7 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
       });
     }
 
-    const assistantMsg = assistantMessage(assistantContent, instance.id);
+    const assistantMsg = assistantMessage(assistantContent, { instanceId: instance.id });
     newMessages.push(assistantMsg);
 
     // Determine yield reason and process accordingly
@@ -222,76 +304,32 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
         )
         .map(({ id, name, input }) => ({ id, name, input }));
 
-      // Process tool calls (delegated)
-      const toolResult = await processToolCalls<AppMessage>(
+      // Run the tool pipeline (delegated to reusable runtime function)
+      const pipelineResult = await runToolPipeline<AppMessage>(
         {
           charter,
           instance,
           ancestors,
           packStates,
-          currentState,
-          currentNode,
           history: options?.history,
         },
         toolCalls,
       );
 
-      // Update state from tool processing
-      currentState = toolResult.currentState;
-      packStates = toolResult.packStates;
+      // Append pipeline messages to our messages
+      newMessages.push(...pipelineResult.history);
 
-      // Add tool results to messages (role: user)
-      if (toolResult.toolResults.length > 0) {
-        const toolResultMsg = userMessage<AppMessage>(toolResult.toolResults, instance.id);
-        newMessages.push(toolResultMsg);
-      }
+      // Use pipeline result for return values
+      yieldReason = pipelineResult.yieldReason;
+      cedeContent = pipelineResult.cedeContent;
+      packStates = pipelineResult.packStates;
 
-      // Add assistant messages from toolReply (role: assistant)
-      if (toolResult.assistantMessages.length > 0) {
-        const assistantMsg = assistantMessage<AppMessage>(toolResult.assistantMessages, instance.id);
-        newMessages.push(assistantMsg);
-      }
-
-      // Handle terminal tools - force end turn immediately
-      if (toolResult.terminal) {
-        yieldReason = 'end_turn';
-      } else if (toolResult.queuedTransition) {
-        const transition = currentNode.transitions[toolResult.queuedTransition.name];
-        if (!transition) {
-          throw new Error(`Unknown transition: ${toolResult.queuedTransition.name}`);
-        }
-
-        const result = await executeTransition(
-          charter,
-          transition,
-          currentState,
-          toolResult.queuedTransition.reason,
-          toolResult.queuedTransition.args,
-        );
-
-        // Handle transition result (delegated)
-        const outcome = handleTransitionResult(
-          result,
-          currentNode,
-          currentState,
-          currentChildren,
-        );
-
-        // Apply outcome
-        currentNode = outcome.node;
-        currentState = outcome.state;
-        currentChildren = outcome.children;
-        yieldReason = outcome.yieldReason;
-        // Cast needed: TransitionOutcome uses Message<unknown> but we return Message<AppMessage>
-        cedeContent = outcome.cedeContent as typeof cedeContent;
-        suspendInfo = outcome.suspendInfo;
-        if (outcome.executorConfig !== undefined) {
-          currentExecutorConfig = outcome.executorConfig;
-        }
-      } else {
-        // Tools were called but no transition - return tool_use
-        yieldReason = "tool_use";
-      }
+      // Extract updated values from pipeline result instance
+      currentNode = pipelineResult.instance.node;
+      currentState = pipelineResult.instance.state;
+      currentChildren = pipelineResult.instance.children;
+      currentExecutorConfig = pipelineResult.instance.executorConfig;
+      suspendInfo = pipelineResult.instance.suspended;
     }
     // else: end_turn - yieldReason already set to "end_turn"
 
@@ -381,10 +419,12 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
 
   /**
    * Convert our MachineMessage format to Anthropic MessageParam format.
+   * Only user and assistant messages should be passed here (system/command are filtered before).
    */
   private convertMessageToParam(msg: MachineMessage<AppMessage>): MessageParam {
+    const role = msg.role as "user" | "assistant";
     if (typeof msg.items === "string") {
-      return { role: msg.role, content: msg.items };
+      return { role, content: msg.items };
     }
 
     // Convert our MachineItem[] to Anthropic's format
@@ -419,7 +459,7 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
       return { type: "text" as const, text: "" };
     }).filter((b) => b.type !== "text" || b.text !== "");
 
-    return { role: msg.role, content };
+    return { role, content };
   }
 }
 

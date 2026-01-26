@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import { useAction, useQuery } from "convex/react";
+import { useAction, useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
@@ -13,13 +13,18 @@ import {
   isPreviewingAtom,
   activeAgentTabAtom,
   shiftHeldAtom,
+  isLiveModeAtom,
+  liveClientAtom,
   type AgentTab,
 } from "@/src/atoms";
 import { useSessionId } from "@/src/hooks";
 import { TerminalPane } from "./components/terminal/TerminalPane";
 import { AgentPane } from "./components/agent/AgentPane";
 import { ThemeProvider } from "./components/ThemeProvider";
-import { LiveVoiceClient } from "@/src/voice/LiveVoiceClient";
+import { LiveVoiceClient, type LiveVoiceClientHandle } from "@/src/voice/LiveVoiceClient";
+
+// Note: All messages are now sent via LiveKit RPC to the agent.
+// The agent handles both live (voice) and non-live (text) modes.
 
 export function HomeClient({
   initialSessionId,
@@ -34,12 +39,21 @@ export function HomeClient({
   const isPreviewing = useAtomValue(isPreviewingAtom);
   const setActiveTab = useSetAtom(activeAgentTabAtom);
   const setShiftHeld = useSetAtom(shiftHeldAtom);
+  const isLiveMode = useAtomValue(isLiveModeAtom);
+  const setLiveClient = useSetAtom(liveClientAtom);
 
   const terminalInputRef = useRef<HTMLTextAreaElement>(null);
   const agentPaneRef = useRef<HTMLDivElement>(null);
+  const liveClientRef = useRef<LiveVoiceClientHandle>(null);
 
-  const createSession = useAction(api.chat.createSession);
-  const sendMessage = useAction(api.chat.send);
+  // Expose liveClient to atom when ref is set (via callback ref pattern)
+  const handleLiveClientRef = useCallback((handle: LiveVoiceClientHandle | null) => {
+    (liveClientRef as React.MutableRefObject<LiveVoiceClientHandle | null>).current = handle;
+    setLiveClient(handle);
+  }, [setLiveClient]);
+
+  const createSession = useAction(api.sessionActions.createSession);
+  const addMessage = useMutation(api.messages.add);
 
   // Query the previewed step to get its turnId for filtering messages
   const previewedStep = useQuery(
@@ -78,12 +92,17 @@ export function HomeClient({
   // Global keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Skip if typing in an input/textarea (except for M which focuses the input)
-      const target = e.target as HTMLElement;
-      const isTyping = target.tagName === "INPUT" || target.tagName === "TEXTAREA";
+      // Skip if typing in an input/textarea/contenteditable
+      const target = e.target as HTMLElement | null;
+      const isTyping =
+        !!target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable);
 
       // M - focus left pane (terminal input)
       if (e.key.toLowerCase() === "m" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        if (isTyping) return;
         e.preventDefault();
         terminalInputRef.current?.focus();
         return;
@@ -147,7 +166,14 @@ export function HomeClient({
     setIsLoading(true);
 
     try {
-      await sendMessage({ sessionId, message });
+      if (!liveClientRef.current?.isConnected()) {
+        console.error("Not connected to agent - cannot send message");
+        return;
+      }
+
+      // Send via RPC to the agent (agent handles persistence)
+      const result = await liveClientRef.current.sendMessage(message);
+      console.log('message send result', result)
     } catch (error) {
       console.error("Failed to send message:", error);
     } finally {
@@ -160,8 +186,11 @@ export function HomeClient({
     setSessionId(null);
   }, [setSessionId]);
 
-  // Extract theme from session instance pack states
-  const theme = session?.instance?.packStates?.theme as
+  // Extract theme from session instance packs
+  const themePack = session?.instance?.packs?.find(
+    (p: { name: string }) => p.name === "theme"
+  );
+  const theme = themePack?.state as
     | { hue: number; saturation: number; animated: boolean; gradient: boolean }
     | undefined;
 
@@ -177,8 +206,8 @@ export function HomeClient({
 
   return (
     <ThemeProvider theme={theme}>
-      {/* Voice mode client - manages LiveKit connection */}
-      <LiveVoiceClient sessionId={sessionId} />
+      {/* Live mode client - manages LiveKit connection for voice and text */}
+      <LiveVoiceClient ref={handleLiveClientRef} sessionId={sessionId} />
 
       <div className="h-screen flex">
         {/* Left side - Terminal pane */}

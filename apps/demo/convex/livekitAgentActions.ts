@@ -17,7 +17,7 @@ export const getToken = action({
   args: { sessionId: v.id("sessions") },
   handler: async (ctx, { sessionId }): Promise<{ token: string; url: string; room: string }> => {
     // Verify session exists
-    const session = await ctx.runQuery(internal.voice.getSession, { sessionId });
+    const session = await ctx.runQuery(internal.livekitAgent.getSession, { sessionId });
     if (!session) {
       throw new Error("Invalid session");
     }
@@ -46,7 +46,7 @@ export const getToken = action({
     });
 
     // Track the voice room
-    await ctx.runMutation(internal.voice.upsertVoiceRoom, {
+    await ctx.runMutation(internal.livekitAgent.upsertVoiceRoom, {
       sessionId,
       roomName,
     });

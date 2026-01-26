@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { createNode, createTransition, transitionTo } from "markov-machines";
-import { fooNode } from "./foo";
+import { fooNode } from "./foo.js";
 
 export const nameGateStateValidator = z.object({});
 

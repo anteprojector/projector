@@ -58,6 +58,27 @@ export function deserializeMachine<AppMessage = unknown>(
   serialized: SerializedMachine<AppMessage>,
 ): Machine<AppMessage> {
   const queue: MachineMessage<AppMessage>[] = [];
+
+  // Queue notification system for waitForQueue
+  let queueResolvers: Array<() => void> = [];
+
+  const notifyQueue = () => {
+    const resolvers = queueResolvers;
+    queueResolvers = [];
+    for (const resolve of resolvers) {
+      resolve();
+    }
+  };
+
+  const waitForQueue = (): Promise<void> => {
+    if (queue.length > 0) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      queueResolvers.push(resolve);
+    });
+  };
+
   return {
     charter,
     instance: deserializeInstance(charter, serialized.instance),
@@ -65,6 +86,9 @@ export function deserializeMachine<AppMessage = unknown>(
     queue,
     enqueue: (messages: MachineMessage<AppMessage>[]) => {
       queue.push(...messages);
+      notifyQueue();
     },
+    waitForQueue,
+    notifyQueue,
   };
 }

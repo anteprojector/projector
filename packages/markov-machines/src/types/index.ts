@@ -79,6 +79,8 @@ export type { Charter, CharterConfig } from "./charter.js";
 export type {
   MachineMessage,
   MessageMetadata,
+  MessageSource,
+  SourceInstanceId,
   MachineItem,
   TextBlock,
   ToolUseBlock,
@@ -100,6 +102,7 @@ export {
 export type {
   Machine,
   MachineConfig,
+  OnMessageEnqueue,
   SerializedMachine,
   SerializedInstance,
   SerializedSuspendInfo,
@@ -143,4 +146,6 @@ export type {
   ClientNode,
   DryClientInstance,
   ClientInstance,
+  DryClientPack,
+  ClientPack,
 } from "./client.js";

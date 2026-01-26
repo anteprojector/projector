@@ -162,6 +162,14 @@ interface DisplayCommand {
   inputSchema: Record<string, unknown>;
 }
 
+interface DisplayPack {
+  name: string;
+  description: string;
+  state: unknown;
+  validator: Record<string, unknown>;
+  commands: Record<string, DisplayCommand>;
+}
+
 interface DisplayNode {
   name: string;
   instructions: string;
@@ -170,7 +178,7 @@ interface DisplayNode {
   transitions: Record<string, string>;
   commands: Record<string, DisplayCommand>;
   initialState?: unknown;
-  packs?: string[];
+  packNames?: string[];
   worker?: boolean;
 }
 
@@ -193,7 +201,7 @@ export interface ServerInstance {
   node: NodeType;
   state: unknown;
   children?: ServerInstance[];
-  packStates?: Record<string, unknown>;
+  packs?: DisplayPack[];
   executorConfig?: Record<string, unknown>;
   suspended?: SerializedSuspendInfo;
 }
@@ -286,10 +294,10 @@ function NodeSection({ node }: { node: NodeType }) {
           </Expander>
         )}
 
-        {node.packs && node.packs.length > 0 && (
-          <Expander label="packs" badge={node.packs.length} preview={node.packs}>
+        {node.packNames && node.packNames.length > 0 && (
+          <Expander label="packs" badge={node.packNames.length} preview={node.packNames}>
             <div className="text-terminal-green-dim space-y-0.5">
-              {node.packs.map((name) => (
+              {node.packNames.map((name) => (
                 <div key={name}>• {name}</div>
               ))}
             </div>
@@ -363,8 +371,7 @@ function NodeSection({ node }: { node: NodeType }) {
 }
 
 function ServerInstanceContent({ instance }: { instance: ServerInstance }) {
-  const hasPackStates =
-    instance.packStates && Object.keys(instance.packStates).length > 0;
+  const hasPacks = instance.packs && instance.packs.length > 0;
   const isSuspended = !!instance.suspended;
 
   return (
@@ -373,16 +380,34 @@ function ServerInstanceContent({ instance }: { instance: ServerInstance }) {
         <JsonBlock data={instance.state} />
       </Expander>
 
-      {hasPackStates && (
+      {hasPacks && (
         <Expander
-          label="packStates"
-          badge={Object.keys(instance.packStates!).length}
-          preview={instance.packStates}
+          label="packs"
+          badge={instance.packs!.length}
+          preview={instance.packs}
         >
           <div className="space-y-1">
-            {Object.entries(instance.packStates!).map(([name, state]) => (
-              <Expander key={name} label={name} preview={state}>
-                <JsonBlock data={state} />
+            {instance.packs!.map((pack) => (
+              <Expander key={pack.name} label={pack.name} preview={pack.state}>
+                <div className="space-y-1">
+                  <Expander label="state" preview={pack.state}>
+                    <JsonBlock data={pack.state} />
+                  </Expander>
+                  <Expander label="validator" preview={pack.validator}>
+                    <JsonBlock data={pack.validator} />
+                  </Expander>
+                  {Object.keys(pack.commands).length > 0 && (
+                    <Expander label="commands" badge={Object.keys(pack.commands).length} preview={pack.commands}>
+                      <div className="text-terminal-green-dim space-y-0.5">
+                        {Object.entries(pack.commands).map(([cmdName, cmd]) => (
+                          <div key={cmdName}>
+                            • {cmdName}: <span className="italic">{cmd.description}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </Expander>
+                  )}
+                </div>
               </Expander>
             ))}
           </div>

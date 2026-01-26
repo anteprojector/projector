@@ -528,14 +528,15 @@ describe("message attribution", () => {
     machine.enqueue([userMessage("test")]);
     const steps = await collectSteps(runMachine(machine));
 
-    // First step should contain history from both leaves
+    // First step should contain user input + history from both leaves
     const firstStep = steps[0]!;
-    expect(firstStep.history.length).toBe(2);
+    expect(firstStep.history.length).toBe(3); // 1 user input + 2 model outputs
 
-    // History should have sourceInstanceId metadata
-    for (const msg of firstStep.history) {
-      const metadata = (msg as { metadata?: { sourceInstanceId?: string } }).metadata;
-      expect(metadata?.sourceInstanceId).toBeDefined();
+    // Model output messages (not user input) should have source.instanceId metadata
+    const modelOutputs = firstStep.history.filter(msg => msg.role !== "user");
+    for (const msg of modelOutputs) {
+      const metadata = (msg as { metadata?: { source?: { instanceId?: string } } }).metadata;
+      expect(metadata?.source?.instanceId).toBeDefined();
     }
   });
 });

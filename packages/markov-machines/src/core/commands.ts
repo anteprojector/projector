@@ -105,7 +105,7 @@ export async function runCommand<AppMessage = unknown>(
       return {
         machine: { ...machine, instance: updatedRoot },
         result,
-        replyMessages,
+        replyMessages: replyMessages as string | MachineMessage<AppMessage>[] | undefined,
       };
     }
 
@@ -114,7 +114,7 @@ export async function runCommand<AppMessage = unknown>(
     return {
       machine: { ...machine, instance: updatedRoot },
       result,
-      replyMessages,
+      replyMessages: replyMessages as string | MachineMessage<AppMessage>[] | undefined,
     };
   }
 

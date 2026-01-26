@@ -43,3 +43,11 @@ export type VoiceConnectionStatus = "disconnected" | "connecting" | "connected";
 export const isLiveModeAtom = atom<boolean>(false);
 export const voiceConnectionStatusAtom = atom<VoiceConnectionStatus>("disconnected");
 export const voiceAgentConnectedAtom = atom<boolean>(false);
+
+// LiveKit client handle for RPC calls
+export interface LiveClientHandle {
+  sendMessage: (message: string) => Promise<{ response: string; instance: unknown } | null>;
+  executeCommand: (commandName: string, input: Record<string, unknown>) => Promise<{ success: boolean; value?: unknown; error?: string }>;
+  isConnected: () => boolean;
+}
+export const liveClientAtom = atom<LiveClientHandle | null>(null);
