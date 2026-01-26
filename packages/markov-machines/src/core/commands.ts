@@ -8,11 +8,13 @@ import type {
   CommandResult,
 } from "../types/commands.js";
 import type { PackCommandContext } from "../types/pack.js";
+import type { MachineMessage } from "../types/messages.js";
 import { getActiveInstance, findInstanceById } from "../types/instance.js";
 import { executeCommand as executeCommandOnInstance } from "../runtime/command-executor.js";
 import { isCedeResult } from "../types/transitions.js";
 import { isToolReply } from "../types/tools.js";
 import { shallowMerge } from "../types/state.js";
+import { userMessage } from "../types/messages.js";
 
 /**
  * Get available commands on the current active instance.
@@ -63,7 +65,7 @@ export async function runCommand<AppMessage = unknown>(
 ): Promise<{
   machine: Machine<AppMessage>;
   result: CommandExecutionResult;
-  replyMessages?: { userMessage: unknown; llmMessage: string };
+  replyMessages?: string | MachineMessage<AppMessage>[];
 }> {
   // Find the target instance
   let target: Instance;
@@ -121,7 +123,7 @@ export async function runCommand<AppMessage = unknown>(
   for (const pack of packs) {
     if (pack.commands?.[commandName]) {
       // Pass ROOT's packStates (pack states are only stored on root instance)
-      const packResult = await executePackCommand(
+      const packResult = await executePackCommand<AppMessage>(
         target,
         pack.name,
         commandName,
@@ -162,7 +164,7 @@ export async function runCommand<AppMessage = unknown>(
  * @param input - The command input
  * @param rootPackStates - Pack states from the ROOT instance (pack states are only stored on root)
  */
-async function executePackCommand(
+async function executePackCommand<AppMessage = unknown>(
   instance: Instance,
   packName: string,
   commandName: string,
@@ -170,7 +172,7 @@ async function executePackCommand(
   rootPackStates: Record<string, unknown>,
 ): Promise<CommandExecutionResult & {
   packStates?: Record<string, unknown>;
-  replyMessages?: { userMessage: unknown; llmMessage: string };
+  replyMessages?: string | MachineMessage<AppMessage>[];
 }> {
   // Find the pack on the node
   const pack = instance.node.packs?.find((p) => p.name === packName);
@@ -215,10 +217,9 @@ async function executePackCommand(
           ...rootPackStates,
           [packName]: packState,
         },
-        replyMessages: {
-          userMessage: cmdResult.userMessage,
-          llmMessage: cmdResult.llmMessage,
-        },
+        replyMessages: typeof cmdResult.userMessage === "string"
+          ? cmdResult.userMessage
+          : [userMessage([{ type: "output", data: cmdResult.userMessage as AppMessage }])],
       };
     }
 

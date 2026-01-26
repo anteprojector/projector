@@ -5,16 +5,10 @@ import type { Command, Resume } from "../types/commands.js";
 import type { MachineMessage } from "../types/messages.js";
 import type { YieldReason } from "../executor/types.js";
 import { getActiveLeaves, isWorkerInstance, getSuspendedInstances, findInstanceById, clearSuspension } from "../types/instance.js";
-import { userMessage, assistantMessage } from "../types/messages.js";
-import type { OutputBlock } from "../types/messages.js";
+import { userMessage } from "../types/messages.js";
 import { isCommand, isResume } from "../types/commands.js";
 import { runCommand } from "./commands.js";
 
-/**
- * Input type for runMachine.
- * Can be a Command object or a Resume object.
- */
-export type RunMachineInput = Command | Resume;
 
 /** Check if packStates has any entries */
 const hasPackStates = (ps?: Record<string, unknown>): boolean =>
@@ -230,101 +224,107 @@ export function mergeLeafResults<AppMessage>(
  * Yields MachineStep for each inference call or command execution.
  * Continues until there's a text response or max steps exceeded.
  *
- * Use machine.enqueue() to add messages before calling runMachine.
- *
- * When input is a Command:
- * - Execute command via runCommand()
- * - Yield step with yieldReason "command"
- * - Return immediately (caller handles any cascade)
+ * Use machine.enqueue() to add messages before calling runMachine:
+ * - Regular messages (user, assistant) are added to history and sent to the model
+ * - Command messages are processed with higher precedence
+ * - System messages (with Resume) are used for internal control flow
  *
  * @typeParam AppMessage - The application message type for structured outputs (defaults to unknown).
  */
 export async function* runMachine<AppMessage = unknown>(
   machine: Machine<AppMessage>,
-  input?: RunMachineInput,
   options?: RunOptions<AppMessage>,
 ): AsyncGenerator<MachineStep<AppMessage>> {
-  // Handle Resume input
-  if (input && isResume(input)) {
-    const targetInstance = findInstanceById(machine.instance, input.instanceId);
-    if (!targetInstance) {
-      throw new Error(`Instance not found: ${input.instanceId}`);
-    }
-    if (!targetInstance.suspended) {
-      throw new Error(`Instance ${input.instanceId} is not suspended`);
-    }
-    if (targetInstance.suspended.suspendId !== input.suspendId) {
-      throw new Error(
-        `Suspend ID mismatch: expected ${targetInstance.suspended.suspendId}, got ${input.suspendId}`
-      );
-    }
-
-    // Clear the suspended field
-    const updatedInstance = updateInstanceById(
-      machine.instance,
-      input.instanceId,
-      clearSuspension,
-    );
-
-    yield {
-      instance: updatedInstance,
-      history: [userMessage(`[Resumed instance ${input.instanceId}]`)],
-      yieldReason: "command",
-      done: false, // Not done - resumed instance should continue
-    };
-    return;
-  }
-
-  // Handle Command input
-  if (input && isCommand(input)) {
-    const { machine: updatedMachine, result, replyMessages } = await runCommand<AppMessage>(
-      machine,
-      input.name,
-      input.input,
-      input.instanceId,
-    );
-
-    // Determine instance ID for message attribution
-    const targetInstanceId = input.instanceId ?? updatedMachine.instance.id;
-
-    // If command returned a reply, create assistant message for user
-    if (replyMessages) {
-      // Create the user-facing assistant message
-      const userContent = typeof replyMessages.userMessage === "string"
-        ? replyMessages.userMessage
-        : [{ type: "output" as const, data: replyMessages.userMessage as AppMessage } as OutputBlock<AppMessage>];
-
-      yield {
-        instance: updatedMachine.instance,
-        history: [assistantMessage<AppMessage>(userContent, targetInstanceId)],
-        yieldReason: "command",
-        done: true,
-      };
-      return;
-    }
-
-    // Fallback: Create a message for history tracking
-    const commandMessage = result.success
-      ? `[Command: ${input.name} executed]`
-      : `[Command: ${input.name} failed - ${result.error}]`;
-
-    yield {
-      instance: updatedMachine.instance,
-      history: [userMessage(commandMessage, targetInstanceId)],
-      yieldReason: "command",
-      done: true,
-    };
-    return;
-  }
-
-  // Normal execution - drain queue into history
-  let currentInstance = machine.instance;
-
-  // Drain queue into initial history
+  // Drain queue
   const queuedMessages = machine.queue.splice(0, machine.queue.length);
 
-  // Base history from before this run, plus queued messages
-  const baseHistory: MachineMessage<AppMessage>[] = [...(machine.history ?? []), ...queuedMessages];
+  // FIRST: Process all command messages (higher precedence)
+  const commandMessages = queuedMessages.filter(msg => msg.role === "command");
+  const nonCommandMessages = queuedMessages.filter(msg => msg.role !== "command");
+
+  for (const msg of commandMessages) {
+    if (Array.isArray(msg.items)) {
+      const commandItem = msg.items.find(isCommand) as Command | undefined;
+      if (commandItem) {
+        // Process Command
+        const { machine: updatedMachine, result, replyMessages } = await runCommand<AppMessage>(
+          machine,
+          commandItem.name,
+          commandItem.input,
+          commandItem.instanceId,
+        );
+
+        const targetInstanceId = commandItem.instanceId ?? updatedMachine.instance.id;
+
+        // If command returned reply messages, enqueue them for next iteration
+        if (replyMessages) {
+          if (typeof replyMessages === "string") {
+            // String becomes a userMessage
+            machine.enqueue([userMessage<AppMessage>(replyMessages, targetInstanceId)]);
+          } else {
+            // Array of MachineMessages is enqueued directly
+            machine.enqueue(replyMessages);
+          }
+        }
+
+        const commandMsg = result.success
+          ? `[Command: ${commandItem.name} executed]`
+          : `[Command: ${commandItem.name} failed - ${result.error}]`;
+
+        // done: false only if there are still items in the queue
+        yield {
+          instance: updatedMachine.instance,
+          history: [userMessage(commandMsg, targetInstanceId)],
+          yieldReason: "end_turn",
+          done: machine.queue.length === 0,
+        };
+        return;
+      }
+    }
+  }
+
+  // SECOND: Check for Resume in system messages
+  for (const msg of nonCommandMessages) {
+    if (msg.role === "system" && Array.isArray(msg.items)) {
+      const resumeItem = msg.items.find(isResume) as Resume | undefined;
+      if (resumeItem) {
+        // Process Resume
+        const targetInstance = findInstanceById(machine.instance, resumeItem.instanceId);
+        if (!targetInstance) {
+          throw new Error(`Instance not found: ${resumeItem.instanceId}`);
+        }
+        if (!targetInstance.suspended) {
+          throw new Error(`Instance ${resumeItem.instanceId} is not suspended`);
+        }
+        if (targetInstance.suspended.suspendId !== resumeItem.suspendId) {
+          throw new Error(
+            `Suspend ID mismatch: expected ${targetInstance.suspended.suspendId}, got ${resumeItem.suspendId}`
+          );
+        }
+
+        // Clear the suspended field
+        const updatedInstance = updateInstanceById(
+          machine.instance,
+          resumeItem.instanceId,
+          clearSuspension,
+        );
+
+        yield {
+          instance: updatedInstance,
+          history: [userMessage(`[Resumed instance ${resumeItem.instanceId}]`)],
+          yieldReason: "command",
+          done: false,
+        };
+        return;
+      }
+    }
+  }
+
+  // Normal execution - continue with non-command messages
+  let currentInstance = machine.instance;
+
+  // Base history from before this run, plus queued messages (excluding command messages already processed)
+  const baseHistory: MachineMessage<AppMessage>[] = [...(machine.history ?? []), ...nonCommandMessages];
   let currentHistory: MachineMessage<AppMessage>[] = baseHistory;
 
   const maxSteps = options?.maxSteps ?? 50;
@@ -526,11 +526,10 @@ export async function* runMachine<AppMessage = unknown>(
  */
 export async function runMachineToCompletion<AppMessage = unknown>(
   machine: Machine<AppMessage>,
-  input?: RunMachineInput,
   options?: RunOptions<AppMessage>,
 ): Promise<MachineStep<AppMessage>> {
   let lastStep: MachineStep<AppMessage> | null = null;
-  for await (const step of runMachine(machine, input, options)) {
+  for await (const step of runMachine(machine, options)) {
     lastStep = step;
   }
   if (!lastStep) {

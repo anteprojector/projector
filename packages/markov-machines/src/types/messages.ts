@@ -82,7 +82,7 @@ export interface MessageMetadata {
  * @typeParam M - The application message type for OutputBlock (defaults to unknown).
  */
 export interface MachineMessage<M = unknown> {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system" | "command";
   items: string | MachineItem<M>[];
   /** Optional metadata for message attribution */
   metadata?: MessageMetadata;
@@ -115,6 +115,43 @@ export function assistantMessage<M = unknown>(
 ): MachineMessage<M> {
   return {
     role: "assistant",
+    items,
+    ...(sourceInstanceId && { metadata: { sourceInstanceId } }),
+  };
+}
+
+/**
+ * Create a system message.
+ * System messages are filtered from history before sending to the model.
+ * Used for internal control flow like Resume.
+ * @param items - Message items (string or machine items)
+ * @param sourceInstanceId - Optional ID of the instance that generated this message
+ */
+export function systemMessage<M = unknown>(
+  items: string | MachineItem<M>[],
+  sourceInstanceId?: string,
+): MachineMessage<M> {
+  return {
+    role: "system",
+    items,
+    ...(sourceInstanceId && { metadata: { sourceInstanceId } }),
+  };
+}
+
+/**
+ * Create a command message.
+ * Command messages are processed with higher precedence than regular messages.
+ * They are drained from the queue first and their results are yielded before
+ * normal execution continues.
+ * @param items - Message items (typically a Command object)
+ * @param sourceInstanceId - Optional ID of the instance that generated this message
+ */
+export function commandMessage<M = unknown>(
+  items: string | MachineItem<M>[],
+  sourceInstanceId?: string,
+): MachineMessage<M> {
+  return {
+    role: "command",
     items,
     ...(sourceInstanceId && { metadata: { sourceInstanceId } }),
   };

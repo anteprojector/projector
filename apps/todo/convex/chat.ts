@@ -83,7 +83,7 @@ export const send = action({
 
     // Iterate through each step and store it
     machine.enqueue([userMessage(message)]);
-    for await (const step of runMachine(machine, undefined, { maxSteps: 10 })) {
+    for await (const step of runMachine(machine, { maxSteps: 10 })) {
       stepNumber++;
       allMessages.push(...step.history);
 

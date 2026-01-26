@@ -741,7 +741,7 @@ describe("cede continuation", () => {
     // Step 2: level2 cedes → level1 active
     // Step 3: level1 cedes → ERROR (root can't cede)
     // So with maxSteps: 2, we should hit max before root tries to cede
-    await expect(runMachineToCompletion(machine, undefined, { maxSteps: 2 })).rejects.toThrow(
+    await expect(runMachineToCompletion(machine, { maxSteps: 2 })).rejects.toThrow(
       "Max steps (2) exceeded"
     );
   });

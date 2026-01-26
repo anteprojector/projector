@@ -88,6 +88,8 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
     // Add previous history if provided
     if (options?.history) {
       for (const msg of options.history) {
+        // Skip system and command messages - they are for internal control flow only
+        if (msg.role === "system" || msg.role === "command") continue;
         conversationHistory.push(this.convertMessageToParam(msg));
       }
     }

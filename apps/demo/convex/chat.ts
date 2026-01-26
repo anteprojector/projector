@@ -91,7 +91,7 @@ export const send = action({
     const allMessages: MachineMessage[] = [];
 
     machine.enqueue([userMessage(message)]);
-    for await (const step of runMachine(machine, undefined, { maxSteps: 10 })) {
+    for await (const step of runMachine(machine, { maxSteps: 10 })) {
       stepNumber++;
       allMessages.push(...step.history);
 
@@ -180,7 +180,7 @@ export const createSession = action({
 
     // Run with session started message to trigger initial greeting
     machine.enqueue([userMessage("[session started]")]);
-    for await (const step of runMachine(machine, undefined, { maxSteps: 10 })) {
+    for await (const step of runMachine(machine, { maxSteps: 10 })) {
       stepNumber++;
       allMessages.push(...step.history);
 

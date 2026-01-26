@@ -12,7 +12,7 @@ import type { Executor, RunResult, RunOptions, MachineStep, SuspendedInstanceInf
 import type { Charter } from "../types/charter.js";
 import type { Instance, SuspendInfo } from "../types/instance.js";
 import type { Resume, Command } from "../types/commands.js";
-import { userMessage } from "../types/messages.js";
+import { userMessage, systemMessage } from "../types/messages.js";
 
 /**
  * Helper to collect all steps from the async generator.
@@ -326,7 +326,8 @@ describe("Resume input", () => {
       suspendId: "suspend-789",
     };
 
-    const steps = await collectSteps(runMachine(machine, resume));
+    machine.enqueue([systemMessage([resume])]);
+    const steps = await collectSteps(runMachine(machine));
 
     expect(steps.length).toBe(1);
     expect(steps[0]?.instance.suspended).toBeUndefined();
@@ -370,8 +371,9 @@ describe("Resume input", () => {
       suspendId: "wrong-id",
     };
 
+    machine.enqueue([systemMessage([resume])]);
     await expect(
-      collectSteps(runMachine(machine, resume))
+      collectSteps(runMachine(machine))
     ).rejects.toThrow("Suspend ID mismatch");
   });
 
@@ -401,8 +403,9 @@ describe("Resume input", () => {
       suspendId: "any-id",
     };
 
+    machine.enqueue([systemMessage([resume])]);
     await expect(
-      collectSteps(runMachine(machine, resume))
+      collectSteps(runMachine(machine))
     ).rejects.toThrow("is not suspended");
   });
 });

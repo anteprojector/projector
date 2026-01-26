@@ -18,6 +18,7 @@ import { isToolReply } from "../types/tools.js";
 import { cede, spawn, suspend } from "../helpers/cede-spawn.js";
 import { shallowMerge } from "../types/state.js";
 import { createInstance, createSuspendInfo, clearSuspension } from "../types/instance.js";
+import { userMessage } from "../types/messages.js";
 
 /**
  * Execute a command on an instance.
@@ -34,7 +35,7 @@ export async function executeCommand(
   instance: Instance;
   transitionResult?: CommandResult;
   suspendInfo?: SuspendInfo;
-  replyMessages?: { userMessage: unknown; llmMessage: string };
+  replyMessages?: string | MachineMessage<unknown>[];
 }> {
   const command = instance.node.commands?.[commandName];
   if (!command) {
@@ -99,10 +100,9 @@ export async function executeCommand(
       return {
         result: { success: true },
         instance: updatedInstance,
-        replyMessages: {
-          userMessage: cmdResult.userMessage,
-          llmMessage: cmdResult.llmMessage,
-        },
+        replyMessages: typeof cmdResult.userMessage === "string"
+          ? cmdResult.userMessage
+          : [userMessage([{ type: "output", data: cmdResult.userMessage }])],
       };
     }
 

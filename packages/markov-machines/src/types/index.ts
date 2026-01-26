@@ -89,6 +89,8 @@ export type {
 export {
   userMessage,
   assistantMessage,
+  systemMessage,
+  commandMessage,
   toolResult,
   getMessageText,
   isOutputBlock,
