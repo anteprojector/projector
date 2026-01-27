@@ -31,6 +31,7 @@ import {
   assistantMessage,
   findInstanceById,
   createStandardExecutor,
+  createInstance,
   getActiveInstance,
   getInstancePath,
   getMessageText,
@@ -72,7 +73,7 @@ export class LiveKitExecutor implements Executor {
   private session: voice.AgentSession | null = null;
   private agent: voice.Agent | null = null;
   private connected = false;
-  
+
   /** Track whether we've bootstrapped history into LiveKit for this live session */
   private hasBootstrappedHistory = false;
   /** Track the last history length we bootstrapped from, to avoid re-bootstrapping unchanged history */
@@ -101,9 +102,9 @@ export class LiveKitExecutor implements Executor {
     if (this.machine) {
       const active = getActiveInstance(this.machine.instance);
       const currentToolNames = this.agent?._tools ? Object.keys(this.agent._tools) : [];
-      console.log(`[LiveKit setLive(${isLive})] Current active node: ${active.node.id}, tools: [${currentToolNames.join(", ")}]`);
+      console.log(`[LiveKit setLive(${isLive})] Current active node: ${active.node.id} (${active.node.name ?? "unnamed"}), tools: [${currentToolNames.join(", ")}]`);
     }
-    
+
     // Reset bootstrap tracking when transitioning out of live mode
     // This ensures we re-bootstrap history next time live mode is enabled
     if (wasLive && !isLive) {
@@ -111,7 +112,7 @@ export class LiveKitExecutor implements Executor {
       this.lastBootstrappedHistoryLength = 0;
       this.log("Reset history bootstrap tracking");
     }
-    
+
     // If turning on live mode, push config immediately to bootstrap history
     if (!wasLive && isLive && this.connected) {
       this.pushConfigToLiveKit();
@@ -201,7 +202,7 @@ export class LiveKitExecutor implements Executor {
       if (ev.isFinal) {
         this.log(`User transcript: "${ev.transcript}"`);
         // Mark as external (from LiveKit STT)
-        machine.enqueue([userMessage(ev.transcript, { external: true })]);
+        machine.enqueue([userMessage(ev.transcript, { source: { external: true } })]);
       }
     });
 
@@ -210,7 +211,7 @@ export class LiveKitExecutor implements Executor {
       const item = ev.item;
       const currentActiveNode = getActiveInstance(machine.instance);
       const currentToolNames = this.agent?._tools ? Object.keys(this.agent._tools) : [];
-      console.log(`[LiveKit Response] Current active node: ${currentActiveNode.node.id}, tools: [${currentToolNames.join(", ")}]`);
+      console.log(`[LiveKit Response] Current active node: ${currentActiveNode.node.id} (${currentActiveNode.node.name ?? "unnamed"}), tools: [${currentToolNames.join(", ")}]`);
       console.log(`[LiveKitExecutor] ConversationItemAdded: role=${item.role}, contentLength=${item.content?.length ?? 0}`);
       if (item.role === "assistant") {
         // Try textContent first (string parts), then fall back to audio transcript
@@ -228,7 +229,7 @@ export class LiveKitExecutor implements Executor {
         if (content) {
           console.log(`[LiveKitExecutor] Enqueuing assistant message: "${content.slice(0, 50)}..."`);
           // Mark as external (from LiveKit TTS)
-          machine.enqueue([assistantMessage(content, { external: true })]);
+          machine.enqueue([assistantMessage(content, { source: { external: true } })]);
         }
       }
     });
@@ -253,33 +254,34 @@ export class LiveKitExecutor implements Executor {
   ): string {
     const turns: string[] = [];
     let charCount = 0;
-    
+
     // Process history in reverse to get most recent turns first
     for (let i = history.length - 1; i >= 0 && turns.length < maxTurns; i--) {
       const msg = history[i];
       if (!msg || msg.role === "system" || msg.role === "command") continue;
-      
+
       const text = getMessageText(msg);
       if (!text) continue;
-      
+
       const role = msg.role === "assistant" ? "Assistant" : "User";
       const turn = `${role}: ${text}`;
-      
+
       if (charCount + turn.length > maxChars) break;
-      
+
       turns.unshift(turn); // Add to front since we're processing in reverse
       charCount += turn.length;
     }
-    
+
     if (turns.length === 0) return "";
-    
+
     return `## Conversation so far\n\n${turns.join("\n\n")}`;
   }
 
   /**
    * Push current node's instructions and tools to the LiveKit agent.
+   * Call this after instance mutations to ensure LiveKit has the correct config.
    */
-  private pushConfigToLiveKit(): void {
+  pushConfigToLiveKit(): void {
     if (!this.machine || !this.session || !this.agent) return;
 
     const charter = this.machine.charter;
@@ -301,15 +303,15 @@ export class LiveKitExecutor implements Executor {
       packStates,
       {},
     );
-    
+
     // Bootstrap history context when entering live mode
     // Only do this once per live session, or when history has grown significantly
     const currentHistoryLength = this.machine.history.length;
     const shouldBootstrap = this.config.isLive && (
-      !this.hasBootstrappedHistory || 
+      !this.hasBootstrappedHistory ||
       currentHistoryLength > this.lastBootstrappedHistoryLength + 5
     );
-    
+
     if (shouldBootstrap && currentHistoryLength > 0) {
       const historyContext = this.renderHistoryForBootstrap(this.machine.history);
       if (historyContext) {
@@ -335,7 +337,7 @@ export class LiveKitExecutor implements Executor {
     const lkTools = this.convertToolsToLiveKit(tools);
     const toolNames = lkTools.map((t) => t.name);
 
-    console.log(`[LiveKit Config Push] Active node: ${activeInstance.node.id}, tools: [${toolNames.join(", ")}], timestamp: ${Date.now()}`);
+    console.log(`[LiveKit Config Push] Active node: ${activeInstance.node.id} (${activeInstance.node.name ?? "unnamed"}), tools: [${toolNames.join(", ")}], timestamp: ${Date.now()}`);
 
     this.log(`Updating LiveKit agent config: ${lkTools.length} tools`);
 
@@ -459,93 +461,16 @@ export class LiveKitExecutor implements Executor {
       // Extract tool result content from the pipeline queue
       const toolResultContent = this.extractToolResultContent(pipelineQueue);
 
-      // Apply instance messages to update machine.instance
-      const instanceMessages = pipelineQueue.filter(isInstanceMessage) as InstanceMessage[];
-      const conversationMessages = pipelineQueue.filter(m => !isInstanceMessage(m));
-      
-      // Apply instance mutations (simplified - reuse logic from run.ts)
-      for (const msg of instanceMessages) {
-        const payload = msg.items;
-        switch (payload.kind) {
-          case "state": {
-            machine.instance = this.updateInstanceById(
-              machine.instance,
-              payload.instanceId,
-              (inst) => ({ ...inst, state: { ...(inst.state as Record<string, unknown>), ...payload.patch } })
-            );
-            break;
-          }
-          case "packState": {
-            const existingPackStates = machine.instance.packStates ?? {};
-            machine.instance = {
-              ...machine.instance,
-              packStates: {
-                ...existingPackStates,
-                [payload.packName]: { ...(existingPackStates[payload.packName] as Record<string, unknown> ?? {}), ...payload.patch },
-              },
-            };
-            break;
-          }
-          case "cede": {
-            console.log(`[LiveKit Cede] Removing child instance ${payload.instanceId}`);
-            const updatedRoot = this.removeInstanceById(machine.instance, payload.instanceId);
-            if (updatedRoot) {
-              machine.instance = updatedRoot;
-            }
-            // Cede content is already enqueued by the pipeline as a conversation message
-            break;
-          }
-          case "transition": {
-            machine.instance = this.updateInstanceById(
-              machine.instance,
-              payload.instanceId,
-              (inst) => ({
-                ...inst,
-                node: payload.node,
-                state: payload.state,
-                executorConfig: payload.executorConfig,
-                children: undefined,
-              })
-            );
-            break;
-          }
-          case "spawn": {
-            const { createInstance } = await import("markov-machines");
-            machine.instance = this.updateInstanceById(
-              machine.instance,
-              payload.parentInstanceId,
-              (inst) => ({
-                ...inst,
-                children: [
-                  ...(inst.children ?? []),
-                  ...payload.children.map(c => createInstance(c.node, c.state, undefined, undefined, c.executorConfig)),
-                ],
-              })
-            );
-            break;
-          }
-          case "suspend": {
-            machine.instance = this.updateInstanceById(
-              machine.instance,
-              payload.instanceId,
-              (inst) => ({ ...inst, suspended: payload.suspendInfo })
-            );
-            break;
-          }
-        }
+      // Enqueue ALL messages from the pipeline (including instance messages).
+      // runMachine will drain them, apply instance mutations, and yield a step
+      // that gets persisted to Convex. This keeps state in sync.
+      if (pipelineQueue.length > 0) {
+        machine.enqueue(pipelineQueue);
       }
 
-      // Enqueue conversation messages to machine (tool results, assistant messages, etc.)
-      if (conversationMessages.length > 0) {
-        machine.enqueue(conversationMessages);
-      }
-
-      // If active node changed (transition/spawn/cede occurred), update LiveKit config
-      const activeInstanceAfter = getActiveInstance(machine.instance);
-      if (activeInstanceAfter.node.id !== activeInstance.node.id) {
-        console.log(`[LiveKit Node Change] ${activeInstance.node.id} -> ${activeInstanceAfter.node.id}`);
-        this.pushConfigToLiveKit();
-      }
+      // Note: We don't apply instance mutations or update LiveKit config here.
+      // That happens when runMachine processes the queue and yields a step.
+      // The agent's main loop will then persist the updated instance to Convex.
 
       return toolResultContent;
     } catch (error) {
@@ -561,58 +486,6 @@ export class LiveKitExecutor implements Executor {
 
       return errorMsg;
     }
-  }
-
-  /**
-   * Update an instance in the tree by ID using an updater function.
-   */
-  private updateInstanceById(
-    root: Instance,
-    targetId: string,
-    updater: (inst: Instance) => Instance,
-  ): Instance {
-    if (root.id === targetId) {
-      return updater(root);
-    }
-
-    const children = root.children;
-    if (!children || children.length === 0) {
-      return root;
-    }
-
-    return {
-      ...root,
-      children: children.map((child) =>
-        this.updateInstanceById(child, targetId, updater),
-      ),
-    };
-  }
-
-  /**
-   * Remove an instance from the tree by ID.
-   * Returns undefined if the root itself would be removed.
-   */
-  private removeInstanceById(
-    root: Instance,
-    targetId: string,
-  ): Instance | undefined {
-    if (root.id === targetId) {
-      return undefined;
-    }
-
-    const children = root.children;
-    if (!children || children.length === 0) {
-      return root;
-    }
-
-    const filtered = children
-      .map((child) => this.removeInstanceById(child, targetId))
-      .filter((c): c is Instance => c !== undefined);
-
-    return {
-      ...root,
-      children: filtered.length === 0 ? undefined : filtered,
-    };
   }
 
   /**

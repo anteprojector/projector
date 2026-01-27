@@ -174,6 +174,12 @@ export interface MessageMetadata {
   source?: MessageSource;
   /** @deprecated Use source.instanceId instead */
   sourceInstanceId?: SourceInstanceId;
+  /**
+   * If true, this message is added to history for context but does not trigger
+   * leaf execution (LLM inference). Use for logging/context messages that
+   * should be visible to the LLM on the next real user message.
+   */
+  silent?: boolean;
 }
 
 /**
@@ -213,32 +219,32 @@ export type MachineMessage<M = unknown> = ConversationMessage<M> | InstanceMessa
 /**
  * Create a user message.
  * @param items - Message items (string or machine items)
- * @param source - Optional source attribution for this message
+ * @param metadata - Optional metadata (source attribution, silent flag, etc.)
  */
 export function userMessage<M = unknown>(
   items: string | MachineItem<M>[],
-  source?: MessageSource,
+  metadata?: MessageMetadata,
 ): MachineMessage<M> {
   return {
     role: "user",
     items,
-    ...(source && { metadata: { source } }),
+    ...(metadata && { metadata }),
   };
 }
 
 /**
  * Create an assistant message.
  * @param items - Message items (string or machine items)
- * @param source - Optional source attribution for this message
+ * @param metadata - Optional metadata (source attribution, silent flag, etc.)
  */
 export function assistantMessage<M = unknown>(
   items: string | MachineItem<M>[],
-  source?: MessageSource,
+  metadata?: MessageMetadata,
 ): MachineMessage<M> {
   return {
     role: "assistant",
     items,
-    ...(source && { metadata: { source } }),
+    ...(metadata && { metadata }),
   };
 }
 

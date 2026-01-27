@@ -8,6 +8,7 @@ export const demoMemoryStateValidator = z.object({});
 export type DemoMemoryState = z.infer<typeof demoMemoryStateValidator>;
 
 export const demoMemoryNode = createNode({
+  name: "favorites",
   instructions: `You are demonstrating the Memory Pack feature of markov-machines.
 
 The Memory Pack provides persistent key-value storage that lives in the machine's state.

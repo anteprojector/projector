@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createNode, createTransition, cede, commandResult, userMessage } from "markov-machines";
+import { createNode, createTransition, cede, commandResult, userMessage, assistantMessage } from "markov-machines";
 import { themePack } from "../packs/theme.js";
 
 export const demoPingStateValidator = z.object({});
@@ -7,6 +7,7 @@ export const demoPingStateValidator = z.object({});
 export type DemoPingState = z.infer<typeof demoPingStateValidator>;
 
 export const demoPingNode = createNode({
+  name: "ping",
   instructions: `You are demonstrating the Commands feature of markov-machines.
 
 Commands are special operations that bypass the LLM entirely and execute instantly.
@@ -30,9 +31,9 @@ When done demonstrating, use returnToFoo to go back.`,
   commands: {
     ping: {
       name: "ping",
-      description: "Returns pong instantly (bypasses LLM)",
+      description: "",
       inputSchema: z.object({}),
-      execute: () => commandResult("pong", [userMessage("[User ran ping command]")]),
+      execute: () => commandResult("pong", [userMessage("[User ran ping command]", { silent: true }), assistantMessage("pong")]),
     },
   },
   transitions: {

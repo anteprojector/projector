@@ -9,7 +9,7 @@ import type {
 } from "../types/commands.js";
 import type { PackCommandContext } from "../types/pack.js";
 import type { MachineMessage } from "../types/messages.js";
-import { userMessage } from "../types/messages.js";
+import { userMessage, instanceMessage, commandMessage } from "../types/messages.js";
 import { getActiveInstance, findInstanceById } from "../types/instance.js";
 import { executeCommand as executeCommandOnInstance } from "../runtime/command-executor.js";
 import { isCedeResult } from "../types/transitions.js";
@@ -67,6 +67,10 @@ export async function runCommand<AppMessage = unknown>(
   result: CommandExecutionResult;
   messages?: MachineMessage<AppMessage>[];
 }> {
+  // Enqueue the command message for history tracking
+  const command = { type: "command" as const, name: commandName, input, instanceId };
+  machine.enqueue([commandMessage([command])]);
+
   // Find the target instance
   let target: Instance;
   if (instanceId) {
@@ -87,7 +91,14 @@ export async function runCommand<AppMessage = unknown>(
   if (nodeCommand) {
     // Execute as node command
     const { result, instance: updatedInstance, transitionResult, messages: rawMessages } =
-      await executeCommandOnInstance(target, commandName, input, target.id, machine.history);
+      await executeCommandOnInstance(
+        target,
+        commandName,
+        input,
+        target.id,
+        machine.history as MachineMessage<unknown>[],
+        machine.enqueue as (msgs: MachineMessage<unknown>[]) => void,
+      );
 
     if (!result.success) {
       return { machine, result };
@@ -98,7 +109,7 @@ export async function runCommand<AppMessage = unknown>(
     let messages: MachineMessage<AppMessage>[] | undefined;
     if (rawMessages) {
       if (typeof rawMessages === "string") {
-        messages = [userMessage<AppMessage>(rawMessages, { instanceId: targetInstanceId })];
+        messages = [userMessage<AppMessage>(rawMessages, { source: { instanceId: targetInstanceId } })];
       } else {
         messages = rawMessages as MachineMessage<AppMessage>[];
       }
@@ -141,6 +152,7 @@ export async function runCommand<AppMessage = unknown>(
         commandName,
         input,
         machine.instance.packStates ?? {},
+        machine.enqueue,
       );
 
       if (!packResult.success) {
@@ -148,7 +160,6 @@ export async function runCommand<AppMessage = unknown>(
       }
 
       // Enqueue messages if any
-      const targetInstanceId = instanceId ?? machine.instance.id;
       let messages: MachineMessage<AppMessage>[] | undefined;
       if (packResult.messages) {
         // Pack commands always return MachineMessage[] (never string)
@@ -156,14 +167,10 @@ export async function runCommand<AppMessage = unknown>(
         machine.enqueue(messages);
       }
 
-      // Update ROOT's packStates (not target's - pack states are only on root)
-      const updatedRoot: Instance = {
-        ...machine.instance,
-        packStates: packResult.packStates,
-      };
-
+      // State updates are now handled via instanceMessage queue
+      // They will be applied when the queue is drained in runMachine
       return {
-        machine: { ...machine, instance: updatedRoot },
+        machine,
         result: packResult,
         messages,
       };
@@ -184,6 +191,7 @@ export async function runCommand<AppMessage = unknown>(
  * @param commandName - The command name
  * @param input - The command input
  * @param rootPackStates - Pack states from the ROOT instance (pack states are only stored on root)
+ * @param enqueue - Function to enqueue messages (for state updates via instanceMessage)
  */
 async function executePackCommand<AppMessage = unknown>(
   instance: Instance,
@@ -191,8 +199,8 @@ async function executePackCommand<AppMessage = unknown>(
   commandName: string,
   input: unknown,
   rootPackStates: Record<string, unknown>,
+  enqueue: (msgs: MachineMessage<AppMessage>[]) => void,
 ): Promise<CommandExecutionResult & {
-  packStates?: Record<string, unknown>;
   messages?: MachineMessage<AppMessage>[];
 }> {
   // Find the pack on the node
@@ -224,6 +232,10 @@ async function executePackCommand<AppMessage = unknown>(
         packState as Record<string, unknown>,
         patch as Record<string, unknown>,
       );
+      // Enqueue state update message
+      enqueue([instanceMessage<AppMessage>(
+        { kind: "packState", packName, patch: patch as Record<string, unknown> },
+      )]);
     },
   };
 
@@ -235,10 +247,6 @@ async function executePackCommand<AppMessage = unknown>(
       return {
         success: true,
         value: cmdResult.payload,
-        packStates: {
-          ...rootPackStates,
-          [packName]: packState,
-        },
         messages: cmdResult.messages as MachineMessage<AppMessage>[] | undefined,
       };
     }
@@ -246,10 +254,6 @@ async function executePackCommand<AppMessage = unknown>(
     // Handle void/undefined result (silent update)
     return {
       success: true,
-      packStates: {
-        ...rootPackStates,
-        [packName]: packState,
-      },
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

@@ -17,7 +17,7 @@ import {
 import { cede, spawn, suspend } from "../helpers/cede-spawn.js";
 import { shallowMerge } from "../types/state.js";
 import { createInstance, createSuspendInfo, clearSuspension } from "../types/instance.js";
-import { userMessage } from "../types/messages.js";
+import { userMessage, instanceMessage } from "../types/messages.js";
 
 /**
  * Execute a command on an instance.
@@ -29,6 +29,7 @@ export async function executeCommand(
   input: unknown,
   instanceId: string,
   history: MachineMessage<unknown>[],
+  enqueue: (msgs: MachineMessage<unknown>[]) => void,
 ): Promise<{
   result: CommandExecutionResult;
   instance: Instance;
@@ -60,6 +61,10 @@ export async function executeCommand(
       currentState as Record<string, unknown>,
       patch as Record<string, unknown>,
     );
+    // Enqueue state update message
+    enqueue([instanceMessage(
+      { kind: "state", instanceId, patch: patch as Record<string, unknown> },
+    )]);
   };
 
   // Create getInstanceMessages function that filters by source.instanceId

@@ -28,6 +28,7 @@ const updateFavorite: ToolDefinition<
 };
 
 export const demoFavoritesNode = createNode({
+  name: "favorites",
   instructions: `You are demonstrating Node State in markov-machines.
 
 Each node can have its own typed state that's validated by Zod.

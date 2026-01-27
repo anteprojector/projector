@@ -12,6 +12,7 @@ export const fooStateValidator = z.object({
 export type FooState = z.infer<typeof fooStateValidator>;
 
 export const fooNode = createNode({
+  name: "foo",
   instructions: `You guide the markov-machines demo. Your name is in your state - greet the user with it when you first become active.
 
 Three demos available:

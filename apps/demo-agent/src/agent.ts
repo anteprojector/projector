@@ -26,8 +26,8 @@ import {
   deserializeInstance,
   serializeInstance,
   runMachine,
+  runCommand,
   userMessage,
-  commandMessage,
   getMessageText,
   getActiveInstance,
   type Machine,
@@ -77,6 +77,9 @@ function getStepResponse(step: MachineStep<unknown>): string {
 
 function describeMessages(messages: MachineMessage[]): string {
   return messages.map(msg => {
+    if (msg.role === "instance") {
+      return `${msg.role}:payload`;
+    }
     if (typeof msg.items === "string") {
       return `${msg.role}:text`;
     }
@@ -471,7 +474,7 @@ export default defineAgent({
 
           // Enqueue the user message for the main loop to process
           // external: true marks this as a user-originated message (from RPC)
-          const message = userMessage(payload, { external: true });
+          const message = userMessage(payload, { source: { external: true } });
           machine.enqueue([message]);
 
           console.log("[DemoAgent] RPC message enqueued");
@@ -507,16 +510,26 @@ export default defineAgent({
             input: Record<string, unknown>;
           };
 
-          // Enqueue command message - main loop will process and generate steps
-          const command = { type: "command" as const, name: commandName, input };
-          machine.enqueue([commandMessage([command])]);
+          // Execute command directly (runCommand enqueues the command message for history)
+          const { machine: updatedMachine, result } = await runCommand(
+            machine,
+            commandName,
+            input,
+          );
 
-          console.log(`[DemoAgent] Command ${commandName} enqueued for processing`);
-          return JSON.stringify({ accepted: true, command: commandName });
+          // Update machine state
+          machine.instance = updatedMachine.instance;
+
+          console.log(`[DemoAgent] Command ${commandName} executed: ${result.success ? "success" : result.error}`);
+          return JSON.stringify({
+            success: result.success,
+            value: result.value,
+            error: result.error,
+          });
         } catch (error) {
           console.error("[DemoAgent] RPC executeCommand error:", error);
           return JSON.stringify({
-            accepted: false,
+            success: false,
             error: error instanceof Error ? error.message : "Unknown error",
           });
         }
@@ -568,6 +581,10 @@ export default defineAgent({
 
           allMessages.push(...step.history);
           lastStep = step;
+
+          // Sync LiveKit config after each step in case instance changed
+          // (e.g., transitions that didn't trigger executor.run())
+          liveKitExecutor.pushConfigToLiveKit();
         }
 
         if (lastStep) {

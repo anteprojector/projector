@@ -114,13 +114,13 @@ export async function runToolPipeline<AppMessage = unknown>(
 
   // Enqueue tool results (role: user)
   if (toolResult.toolResults.length > 0) {
-    const toolResultMsg = userMessage<AppMessage>(toolResult.toolResults, source);
+    const toolResultMsg = userMessage<AppMessage>(toolResult.toolResults, source ? { source } : undefined);
     enqueue([toolResultMsg]);
   }
 
   // Enqueue assistant messages from toolReply (role: assistant)
   if (toolResult.assistantMessages.length > 0) {
-    const assistantMsg = assistantMessage<AppMessage>(toolResult.assistantMessages, source);
+    const assistantMsg = assistantMessage<AppMessage>(toolResult.assistantMessages, source ? { source } : undefined);
     enqueue([assistantMsg]);
   }
 

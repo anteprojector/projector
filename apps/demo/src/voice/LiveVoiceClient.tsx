@@ -15,7 +15,7 @@ interface LiveVoiceClientProps {
 
 export interface LiveVoiceClientHandle {
   sendMessage: (message: string) => Promise<{ response: string; instance: unknown } | null>;
-  executeCommand: (commandName: string, input: Record<string, unknown>) => Promise<{ accepted: boolean; command?: string; error?: string }>;
+  executeCommand: (commandName: string, input: Record<string, unknown>) => Promise<{ success: boolean; value?: unknown; error?: string }>;
   isConnected: () => boolean;
 }
 
@@ -283,11 +283,11 @@ export const LiveVoiceClient = forwardRef<LiveVoiceClientHandle, LiveVoiceClient
 
     // Execute a command on the agent via RPC
     const executeCommand = useCallback(
-      async (commandName: string, input: Record<string, unknown>): Promise<{ accepted: boolean; command?: string; error?: string }> => {
+      async (commandName: string, input: Record<string, unknown>): Promise<{ success: boolean; value?: unknown; error?: string }> => {
         const room = roomRef.current;
         if (!room || room.state !== ConnectionState.Connected) {
           console.error("Cannot execute command: room not connected");
-          return { accepted: false, error: "Not connected to agent" };
+          return { success: false, error: "Not connected to agent" };
         }
 
         // Find the agent participant
@@ -297,7 +297,7 @@ export const LiveVoiceClient = forwardRef<LiveVoiceClientHandle, LiveVoiceClient
 
         if (!agentParticipant) {
           console.error("Cannot execute command: no agent in room");
-          return { accepted: false, error: "No agent in room" };
+          return { success: false, error: "No agent in room" };
         }
 
         try {
@@ -308,10 +308,10 @@ export const LiveVoiceClient = forwardRef<LiveVoiceClientHandle, LiveVoiceClient
             responseTimeout: 30000, // 30s timeout for command execution
           });
 
-          return JSON.parse(response) as { accepted: boolean; command?: string; error?: string };
+          return JSON.parse(response) as { success: boolean; value?: unknown; error?: string };
         } catch (error) {
           console.error("RPC executeCommand failed:", error);
-          return { accepted: false, error: error instanceof Error ? error.message : "Unknown error" };
+          return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
         }
       },
       []

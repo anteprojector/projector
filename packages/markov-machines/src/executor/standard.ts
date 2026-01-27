@@ -182,7 +182,7 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
 
     // Add current user input (only if non-empty)
     if (input) {
-      enqueue([userMessage(input, source)]);
+      enqueue([userMessage(input, { source })]);
       conversationHistory.push({ role: "user", content: input });
     }
 
@@ -303,7 +303,7 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
     }
 
     // Enqueue assistant message
-    const assistantMsg = assistantMessage(assistantContent, source);
+    const assistantMsg = assistantMessage(assistantContent, { source });
     enqueue([assistantMsg]);
 
     // Determine yield reason and process accordingly

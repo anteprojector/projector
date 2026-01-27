@@ -77,8 +77,8 @@ function CommandCard({
 
       const res = await liveClient.executeCommand(command.name, parsedInput);
 
-      if (res.accepted) {
-        setResult(JSON.stringify({ accepted: true, command: res.command }, null, 2));
+      if (res.success) {
+        setResult(JSON.stringify({ success: true, value: res.value }, null, 2));
       } else {
         setError(res.error || "Command failed");
       }

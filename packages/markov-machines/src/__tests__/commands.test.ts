@@ -5,7 +5,9 @@ import { createNode } from "../core/node.js";
 import { createInstance } from "../types/instance.js";
 import { createMachine } from "../core/machine.js";
 import { getAvailableCommands, runCommand } from "../core/commands.js";
+import { runMachineToCompletion } from "../core/run.js";
 import { commandResult } from "../types/commands.js";
+import { userMessage, assistantMessage } from "../types/messages.js";
 import type { Executor, RunResult, RunOptions } from "../executor/types.js";
 import type { Charter } from "../types/charter.js";
 import type { Instance } from "../types/instance.js";
@@ -470,5 +472,134 @@ describe("createNode command validation", () => {
         },
       });
     }).toThrow("Node command name mismatch");
+  });
+});
+
+describe("silent messages", () => {
+  it("should skip leaf execution when only silent user messages are enqueued", async () => {
+    let executorCalled = false;
+
+    const mockExecutor: Executor = {
+      type: "standard",
+      run: async () => {
+        executorCalled = true;
+        return { yieldReason: "end_turn" };
+      },
+    };
+
+    const node = createNode<TodoState>({
+      instructions: "Test node",
+      validator: todoStateValidator,
+      initialState: { todos: [] },
+    });
+
+    const charter = createCharter({
+      name: "test",
+      executor: mockExecutor,
+      nodes: { node },
+    });
+
+    const machine = createMachine(charter, {
+      instance: createInstance(node, { todos: [] }),
+    });
+
+    // Enqueue a silent user message
+    machine.enqueue([userMessage("[User ran ping command]", { silent: true })]);
+
+    const step = await runMachineToCompletion(machine);
+
+    // Executor should NOT have been called
+    expect(executorCalled).toBe(false);
+
+    // Step should still be yielded with the message
+    expect(step.done).toBe(true);
+    expect(step.yieldReason).toBe("end_turn");
+    expect(step.history).toHaveLength(1);
+    expect(step.history[0]?.role).toBe("user");
+
+    // Message should be in machine.history for context
+    expect(machine.history).toHaveLength(1);
+    expect(machine.history[0]?.role).toBe("user");
+  });
+
+  it("should run leaf execution when non-silent user message is enqueued", async () => {
+    let executorCalled = false;
+
+    const mockExecutor: Executor = {
+      type: "standard",
+      run: async (_charter, _instance, _ancestors, _input, options) => {
+        executorCalled = true;
+        // Enqueue an assistant response
+        options?.enqueue?.([assistantMessage("Hello!")]);
+        return { yieldReason: "end_turn" };
+      },
+    };
+
+    const node = createNode<TodoState>({
+      instructions: "Test node",
+      validator: todoStateValidator,
+      initialState: { todos: [] },
+    });
+
+    const charter = createCharter({
+      name: "test",
+      executor: mockExecutor,
+      nodes: { node },
+    });
+
+    const machine = createMachine(charter, {
+      instance: createInstance(node, { todos: [] }),
+    });
+
+    // Enqueue a normal user message (not silent)
+    machine.enqueue([userMessage("Hello")]);
+
+    await runMachineToCompletion(machine);
+
+    // Executor SHOULD have been called
+    expect(executorCalled).toBe(true);
+  });
+
+  it("should run leaf execution when mix of silent and non-silent user messages", async () => {
+    let executorCalled = false;
+
+    const mockExecutor: Executor = {
+      type: "standard",
+      run: async (_charter, _instance, _ancestors, _input, options) => {
+        executorCalled = true;
+        options?.enqueue?.([assistantMessage("Hello!")]);
+        return { yieldReason: "end_turn" };
+      },
+    };
+
+    const node = createNode<TodoState>({
+      instructions: "Test node",
+      validator: todoStateValidator,
+      initialState: { todos: [] },
+    });
+
+    const charter = createCharter({
+      name: "test",
+      executor: mockExecutor,
+      nodes: { node },
+    });
+
+    const machine = createMachine(charter, {
+      instance: createInstance(node, { todos: [] }),
+    });
+
+    // Enqueue both silent and non-silent
+    machine.enqueue([
+      userMessage("[Context message]", { silent: true }),
+      userMessage("Real user input"),
+    ]);
+
+    await runMachineToCompletion(machine);
+
+    // Executor SHOULD have been called because there's a non-silent message
+    expect(executorCalled).toBe(true);
+
+    // Both messages should be in history
+    expect(machine.history.filter(m => m.role === "user")).toHaveLength(2);
   });
 });

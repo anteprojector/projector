@@ -1,7 +1,7 @@
 import type { Machine } from "../types/machine.js";
 import type { RunOptions, MachineStep, RunResult, SuspendedInstanceInfo } from "../executor/types.js";
 import type { Instance, ActiveLeafInfo } from "../types/instance.js";
-import type { Command, Resume } from "../types/commands.js";
+import type { Resume } from "../types/commands.js";
 import type {
   MachineMessage,
   MessageSource,
@@ -12,8 +12,7 @@ import type {
 import type { YieldReason } from "../executor/types.js";
 import { getActiveLeaves, isWorkerInstance, getSuspendedInstances, findInstanceById, clearSuspension, createInstance } from "../types/instance.js";
 import { userMessage, isInstanceMessage } from "../types/messages.js";
-import { isCommand, isResume } from "../types/commands.js";
-import { runCommand } from "./commands.js";
+import { isResume } from "../types/commands.js";
 
 
 /** Check if packStates has any entries */
@@ -203,11 +202,9 @@ function removeInstanceById(root: Instance, targetId: string): Instance {
  * Result of draining the queue.
  */
 export interface DrainResult<AppMessage = unknown> {
-  /** Command messages (processed first) */
-  commandMessages: MachineMessage<AppMessage>[];
   /** Instance mutation messages (applied to machine.instance) */
   instanceMessages: InstanceMessage<AppMessage>[];
-  /** Conversation messages (user, assistant, system) for history */
+  /** Conversation messages (user, assistant, system, command) for history */
   conversationMessages: ConversationMessage<AppMessage>[];
 }
 
@@ -220,22 +217,19 @@ export function drainQueue<AppMessage = unknown>(
 ): DrainResult<AppMessage> {
   const messages = machine.queue.splice(0, machine.queue.length);
 
-  const commandMessages: MachineMessage<AppMessage>[] = [];
   const instanceMessages: InstanceMessage<AppMessage>[] = [];
   const conversationMessages: ConversationMessage<AppMessage>[] = [];
 
   for (const msg of messages) {
-    if (msg.role === "command") {
-      commandMessages.push(msg);
-    } else if (isInstanceMessage(msg)) {
+    if (isInstanceMessage(msg)) {
       instanceMessages.push(msg);
     } else {
-      // user, assistant, system
+      // user, assistant, system, command - all go to conversation history
       conversationMessages.push(msg as ConversationMessage<AppMessage>);
     }
   }
 
-  return { commandMessages, instanceMessages, conversationMessages };
+  return { instanceMessages, conversationMessages };
 }
 
 /**
@@ -470,43 +464,7 @@ export async function* runMachine<AppMessage = unknown>(
   // Initial drain of queue
   const initialDrain = drainQueue(machine);
 
-  // FIRST: Process all command messages (higher precedence)
-  for (const msg of initialDrain.commandMessages) {
-    if (Array.isArray(msg.items)) {
-      const commandItem = msg.items.find(isCommand) as Command | undefined;
-      if (commandItem) {
-        // Process Command (runCommand handles message enqueueing)
-        const { machine: updatedMachine, result } = await runCommand<AppMessage>(
-          machine,
-          commandItem.name,
-          commandItem.input,
-          commandItem.instanceId,
-        );
-
-        const targetInstanceId = commandItem.instanceId ?? updatedMachine.instance.id;
-
-        const commandMsg = result.success
-          ? `[Command: ${commandItem.name} executed]`
-          : `[Command: ${commandItem.name} failed - ${result.error}]`;
-
-        const stepHistory: MachineMessage<AppMessage>[] = [userMessage(commandMsg, { instanceId: targetInstanceId })];
-        
-        // Append step history to machine.history
-        machine.history = [...machine.history, ...stepHistory];
-
-        // done: false only if there are still items in the queue
-        yield {
-          instance: updatedMachine.instance,
-          history: stepHistory,
-          yieldReason: "end_turn",
-          done: machine.queue.length === 0,
-        };
-        return;
-      }
-    }
-  }
-
-  // SECOND: Check for Resume in system messages
+  // Check for Resume in system messages
   for (const msg of initialDrain.conversationMessages) {
     if (msg.role === "system" && Array.isArray(msg.items)) {
       const resumeItem = msg.items.find(isResume) as Resume | undefined;
@@ -552,6 +510,23 @@ export async function* runMachine<AppMessage = unknown>(
   // Apply any initial instance messages
   applyInstanceMessages(machine, initialDrain.instanceMessages, 0);
 
+  // Check if we should skip leaf execution (only silent user messages)
+  const hasNonSilentUserMessage = initialDrain.conversationMessages.some(
+    msg => msg.role === "user" && msg.metadata?.silent !== true
+  );
+
+  if (!hasNonSilentUserMessage) {
+    // All processing done (history updated, instance messages applied)
+    // Yield step without running leaves
+    yield {
+      instance: machine.instance,
+      history: [...initialDrain.conversationMessages, ...initialDrain.instanceMessages],
+      yieldReason: "end_turn",
+      done: true,
+    };
+    return;
+  }
+
   const maxSteps = options?.maxSteps ?? 50;
   let steps = 0;
   let tokenRecoveryAttempted = false;
@@ -587,6 +562,7 @@ export async function* runMachine<AppMessage = unknown>(
     // Validate: max 1 non-worker leaf
     const nonWorkerLeaves = activeLeaves.filter(l => !l.isWorker);
     if (nonWorkerLeaves.length > 1) {
+      console.log(nonWorkerLeaves)
       throw new Error(
         `Invalid state: ${nonWorkerLeaves.length} non-worker active leaves. ` +
         `At most one instance can receive user input per step.`
@@ -642,7 +618,7 @@ export async function* runMachine<AppMessage = unknown>(
 
     // Drain the queue to collect step history and apply instance changes
     const stepDrain = drainQueue(machine);
-    
+
     // Apply instance messages and collect cede info
     const { hasCede, cedeContents } = applyInstanceMessages(machine, stepDrain.instanceMessages, steps);
 
@@ -683,7 +659,7 @@ export async function* runMachine<AppMessage = unknown>(
       // Add cede content as user message for parent context
       if (cedeContent !== undefined) {
         if (typeof cedeContent === "string") {
-          const cedeMessage = userMessage<AppMessage>(cedeContent, { instanceId: cedeInfo!.instanceId });
+          const cedeMessage = userMessage<AppMessage>(cedeContent, { source: { instanceId: cedeInfo!.instanceId } });
           machine.history = [...machine.history, cedeMessage];
         } else {
           machine.history = [...machine.history, ...cedeContent];
@@ -738,7 +714,9 @@ export async function* runMachine<AppMessage = unknown>(
     }
 
     // Determine if step is final based on primary yield reason
-    const isFinal = primaryYieldReason === "end_turn";
+    // "end_turn" = LLM finished responding
+    // "external" = inference delegated to external system (e.g., LiveKit voice)
+    const isFinal = primaryYieldReason === "end_turn" || primaryYieldReason === "external";
 
     yield {
       instance: machine.instance,
