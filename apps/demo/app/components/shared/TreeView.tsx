@@ -157,7 +157,7 @@ type NodeType = DisplayNode | SerialNode | Ref;
 export type ServerInstance = Omit<SerializedInstance, "node" | "children"> & {
   node: NodeType;
   children?: ServerInstance[];
-  packs?: DisplayPack[];
+  packStates?: Record<string, unknown>;
 };
 
 function isDisplayNode(node: NodeType): node is DisplayNode {
@@ -315,7 +315,10 @@ function NodeSection({ node }: { node: NodeType }) {
 }
 
 function ServerInstanceContent({ instance }: { instance: ServerInstance }) {
-  const hasPacks = instance.packs && instance.packs.length > 0;
+  // Get packs from node if it's a DisplayNode
+  const nodePacks = isDisplayNode(instance.node) ? (instance.node.packs || []) : [];
+  const packStates = instance.packStates || {};
+  const hasPacks = nodePacks.length > 0;
   const isSuspended = !!instance.suspended;
 
   return (
@@ -327,33 +330,36 @@ function ServerInstanceContent({ instance }: { instance: ServerInstance }) {
       {hasPacks && (
         <Expander
           label="packs"
-          badge={instance.packs!.length}
-          preview={instance.packs}
+          badge={nodePacks.length}
+          preview={nodePacks}
         >
           <div className="space-y-1">
-            {instance.packs!.map((pack) => (
-              <Expander key={pack.name} label={pack.name} preview={pack.state}>
-                <div className="space-y-1">
-                  <Expander label="state" preview={pack.state}>
-                    <JsonBlock data={pack.state} />
-                  </Expander>
-                  <Expander label="validator" preview={pack.validator}>
-                    <JsonBlock data={pack.validator} />
-                  </Expander>
-                  {Object.keys(pack.commands).length > 0 && (
-                    <Expander label="commands" badge={Object.keys(pack.commands).length} preview={pack.commands}>
-                      <div className="text-terminal-green-dim space-y-0.5">
-                        {Object.entries(pack.commands).map(([cmdName, cmd]) => (
-                          <div key={cmdName}>
-                            • {cmdName}: <span className="italic">{cmd.description}</span>
-                          </div>
-                        ))}
-                      </div>
+            {nodePacks.map((pack) => {
+              const packState = packStates[pack.name];
+              return (
+                <Expander key={pack.name} label={pack.name} preview={packState}>
+                  <div className="space-y-1">
+                    <Expander label="state" preview={packState}>
+                      <JsonBlock data={packState} />
                     </Expander>
-                  )}
-                </div>
-              </Expander>
-            ))}
+                    <Expander label="validator" preview={pack.validator}>
+                      <JsonBlock data={pack.validator} />
+                    </Expander>
+                    {Object.keys(pack.commands).length > 0 && (
+                      <Expander label="commands" badge={Object.keys(pack.commands).length} preview={pack.commands}>
+                        <div className="text-terminal-green-dim space-y-0.5">
+                          {Object.entries(pack.commands).map(([cmdName, cmd]) => (
+                            <div key={cmdName}>
+                              • {cmdName}: <span className="italic">{cmd.description}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </Expander>
+                    )}
+                  </div>
+                </Expander>
+              );
+            })}
           </div>
         </Expander>
       )}

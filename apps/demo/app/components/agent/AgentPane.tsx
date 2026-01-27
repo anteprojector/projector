@@ -99,7 +99,7 @@ export const AgentPane = forwardRef<HTMLDivElement, AgentPaneProps>(
           {activeTab === "tree" && (
             <InstanceTreeTab instance={instance ?? null} displayInstance={displayInstance ?? null} />
           )}
-          {activeTab === "state" && <StateTab instance={instance ?? null} />}
+          {activeTab === "state" && <StateTab instance={displayInstance ?? null} />}
           {activeTab === "history" && <HistoryTab sessionId={sessionId} />}
           {activeTab === "commands" && (
             <CommandsTab commands={commands} />

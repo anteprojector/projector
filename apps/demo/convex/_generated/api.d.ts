@@ -15,6 +15,7 @@ import type * as machineSteps from "../machineSteps.js";
 import type * as machineTurns from "../machineTurns.js";
 import type * as messages from "../messages.js";
 import type * as sessionActions from "../sessionActions.js";
+import type * as sessionEphemera from "../sessionEphemera.js";
 import type * as sessions from "../sessions.js";
 
 import type {
@@ -31,6 +32,7 @@ declare const fullApi: ApiFromModules<{
   machineTurns: typeof machineTurns;
   messages: typeof messages;
   sessionActions: typeof sessionActions;
+  sessionEphemera: typeof sessionEphemera;
   sessions: typeof sessions;
 }>;
 

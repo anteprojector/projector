@@ -47,6 +47,13 @@ export default defineSchema({
     .index("by_session", ["sessionId"])
     .index("by_idempotency_key", ["idempotencyKey"]),
 
+  // Ephemeral session state (processing indicators, etc.)
+  sessionEphemera: defineTable({
+    sessionId: v.id("sessions"),
+    isProcessing: v.boolean(),
+    processingStartedAt: v.optional(v.number()),
+  }).index("by_session", ["sessionId"]),
+
   // Voice room state for tracking active voice sessions
   voiceRooms: defineTable({
     sessionId: v.id("sessions"),

@@ -18,6 +18,7 @@ export interface DisplayNode {
   commands: Record<string, DisplayCommand>;
   initialState?: unknown;
   packNames?: string[];
+  packs?: DisplayPack[];
   worker?: boolean;
 }
 
@@ -26,7 +27,7 @@ export interface DisplayInstance {
   node: DisplayNode;
   state: unknown;
   children?: DisplayInstance[];
-  packs?: DisplayPack[];
+  packStates?: Record<string, unknown>;
   executorConfig?: StandardNodeConfig;
   suspended?: SerializedSuspendInfo;
 }

@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@livekit/components-react": "^2.9.19",
+    "cli-spinners": "^3.4.0",
     "convex": "^1.31.2",
     "jotai": "^2.16.1",
     "js-cookie": "^3.0.5",
@@ -26,6 +27,7 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/cli-spinners": "^2.0.0",
     "@types/js-cookie": "^3.0.6",
     "@types/node": "^20",
     "@types/react": "^19",

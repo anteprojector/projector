@@ -108,8 +108,13 @@ function serializeNodeForDisplay(node: Instance["node"], charter?: Charter): Dis
     transitions[transitionName] = getTransitionTarget(transition, charter);
   }
 
-  // Get pack names
-  const packNames = node.packs?.map((p) => p.name);
+  // Get pack names and serialize packs
+  const nodePacks = node.packs ?? [];
+  const packNames = nodePacks.map((p) => p.name);
+  let packs: DisplayPack[] | undefined;
+  if (nodePacks.length > 0) {
+    packs = nodePacks.map((pack) => serializePackForDisplay(pack));
+  }
 
   // Serialize commands (name, description, inputSchema)
   const commands: Record<string, DisplayCommand> = {};
@@ -140,12 +145,13 @@ function serializeNodeForDisplay(node: Instance["node"], charter?: Charter): Dis
     transitions,
     commands,
     ...(node.initialState !== undefined ? { initialState: sanitizeForConvex(node.initialState) } : {}),
-    ...(packNames && packNames.length > 0 ? { packNames } : {}),
+    ...(packNames.length > 0 ? { packNames } : {}),
+    ...(packs ? { packs } : {}),
     ...(node.worker ? { worker: true } : {}),
   };
 }
 
-function serializePackForDisplay(pack: Pack, state: unknown): DisplayPack {
+function serializePackForDisplay(pack: Pack): DisplayPack {
   // Convert validator to JSON schema
   let validator: Record<string, unknown> = {};
   try {
@@ -181,7 +187,6 @@ function serializePackForDisplay(pack: Pack, state: unknown): DisplayPack {
   return {
     name: pack.name,
     description: pack.description,
-    state,
     validator,
     commands,
   };
@@ -198,23 +203,12 @@ export function serializeInstanceForDisplay(
     children = instance.children.map((c) => serializeInstanceForDisplay(c, charter));
   }
 
-  // Build packs array with full info
-  let packs: DisplayPack[] | undefined;
-  const nodePacks = instance.node.packs ?? [];
-  const packStates = instance.packStates ?? {};
-  if (nodePacks.length > 0) {
-    packs = nodePacks.map((pack) => {
-      const state = packStates[pack.name] ?? pack.initialState ?? {};
-      return serializePackForDisplay(pack, state);
-    });
-  }
-
   const result = {
     id: instance.id,
     node,
     state: instance.state,
     ...(children ? { children } : {}),
-    ...(packs ? { packs } : {}),
+    ...(instance.packStates ? { packStates: instance.packStates } : {}),
     ...(instance.executorConfig ? { executorConfig: { ...instance.executorConfig } } : {}),
     ...(instance.suspended
       ? {

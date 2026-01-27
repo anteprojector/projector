@@ -45,7 +45,6 @@ const demoCharterLiveKit = {
   ...demoCharterStandard,
   executor: getLiveKitExecutor(),
 };
-import { ConvexTranscriptSink } from "./transcript-sink.js";
 import { serializeInstanceForDisplay } from "./serializeForDisplay.js";
 
 const ENABLE_REALTIME = process.env.ENABLE_REALTIME_MODEL === "true";
@@ -196,6 +195,24 @@ export default defineAgent({
       throw err;
     }
 
+    // Subscribe to session changes (for time travel support)
+    // When user time travels, update both the turn ID and machine state
+    convex.onUpdate(api.sessions.get, { id: sessionId }, (session) => {
+      if (session?.turnId && session.turnId !== currentTurnId) {
+        console.log(`[DemoAgent] Time travel detected: ${currentTurnId} -> ${session.turnId}`);
+        currentTurnId = session.turnId;
+        // Also update machine state to match the traveled-to turn
+        if (session.instance) {
+          try {
+            instance = deserializeInstance(demoCharterLiveKit, session.instance as any);
+            console.log(`[DemoAgent] Instance updated: node=${instance.node?.id}`);
+          } catch (err) {
+            console.error("[DemoAgent] Failed to deserialize time-traveled instance:", err);
+          }
+        }
+      }
+    });
+
     // Callback for persisting messages when enqueued
     // Save external messages (user input from LiveKit STT, etc.)
     // Save assistant messages with displayable content
@@ -299,35 +316,18 @@ export default defineAgent({
     liveKitExecutor.setLive(false);
     console.log("[DemoAgent] Executor set to text mode (isLive=false)");
 
-    // Set up transcript sink
-    let transcriptSink: ConvexTranscriptSink | null = null;
-    try {
-      transcriptSink = new ConvexTranscriptSink(roomName);
-      console.log("[DemoAgent] Transcript sink created");
-    } catch (error) {
-      console.error("[DemoAgent] Failed to create transcript sink:", error);
-    }
-
     // Voice session event handlers
-    voiceSession.on(voice.AgentSessionEventTypes.UserInputTranscribed, async (ev) => {
-      console.log(`[DemoAgent] User: "${ev.transcript}" (final: ${ev.isFinal})`);
-      if (ev.isFinal && transcriptSink) {
-        await transcriptSink.appendTranscript("user", ev.transcript);
-      }
-    });
-
-    voiceSession.on(voice.AgentSessionEventTypes.ConversationItemAdded, async (ev) => {
-      const item = ev.item as { role?: string; content?: unknown };
-      if (item.role === "assistant" && typeof item.content === "string") {
-        console.log(`[DemoAgent] Assistant: "${item.content.slice(0, 80)}..."`);
-        if (transcriptSink) {
-          await transcriptSink.appendTranscript("assistant", item.content);
-        }
-      }
-    });
-
     voiceSession.on(voice.AgentSessionEventTypes.AgentStateChanged, (ev) => {
       console.log(`[DemoAgent] State: ${ev.oldState} -> ${ev.newState}`);
+    });
+
+    // Create a turn when user starts speaking in live mode
+    voiceSession.on(voice.AgentSessionEventTypes.UserStateChanged, async (ev) => {
+      if (ev.newState === "speaking" && liveKitExecutor.isLive) {
+        const activeInstance = getActiveInstance(machine.instance);
+        await createTurn(activeInstance.id, "[voice input]");
+        console.log("[DemoAgent] Created turn for voice input");
+      }
     });
 
     voiceSession.on(voice.AgentSessionEventTypes.Error, (ev) => {
@@ -503,6 +503,12 @@ export default defineAgent({
         await machine.waitForQueue();
         if (isShuttingDown) break;
 
+        // Set processing = true
+        await convex.mutation(api.sessionEphemera.setProcessing, {
+          sessionId,
+          isProcessing: true,
+        });
+
         let lastStep: MachineStep | null = null;
         const allMessages: MachineMessage[] = [];
         let stepNumber = 0;
@@ -513,9 +519,7 @@ export default defineAgent({
           const msgCount = step.history.length;
           const msgDesc = describeMessages(step.history);
           console.log(`[DemoAgent] Step ${stepNumber}: yieldReason=${step.yieldReason}, done=${step.done}, messages=${msgCount}`);
-          if (msgCount > 0) {
-            console.log(`[DemoAgent]   Messages: ${msgDesc}`);
-          }
+          if (msgCount > 0) console.log(`[DemoAgent] Messages: ${msgDesc}`);
 
           const activeInstance = getActiveInstance(step.instance);
           const responseText = getStepResponse(step);
@@ -542,7 +546,7 @@ export default defineAgent({
 
           // Sync LiveKit config after each step in case instance changed
           // (e.g., transitions that didn't trigger executor.run())
-          liveKitExecutor.pushConfigToLiveKit();
+          await liveKitExecutor.pushConfigToLiveKit();
         }
 
         if (lastStep) {
@@ -550,6 +554,12 @@ export default defineAgent({
           console.log("[DemoAgent] Turn complete", truncateForLog(responseText));
           await updateTurn(lastStep, allMessages);
         }
+
+        // Set processing = false
+        await convex.mutation(api.sessionEphemera.setProcessing, {
+          sessionId,
+          isProcessing: false,
+        });
       }
     };
 
