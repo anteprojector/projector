@@ -42,6 +42,58 @@ export const upsertVoiceRoom = internalMutation({
   },
 });
 
+// Best-effort lock to ensure we attempt at most one agent dispatch per room at a time.
+// This prevents duplicate LiveKit "dispatches" caused by multiple concurrent getToken() calls
+// (e.g. React strict mode / reloads / multiple tabs).
+export const claimAgentDispatchLock = internalMutation({
+  args: {
+    sessionId: v.id("sessions"),
+    lockTtlMs: v.optional(v.number()),
+  },
+  handler: async (ctx, { sessionId, lockTtlMs }) => {
+    const voiceRoom = await ctx.db
+      .query("voiceRooms")
+      .withIndex("by_session", (q) => q.eq("sessionId", sessionId))
+      .first();
+
+    if (!voiceRoom) return null;
+
+    const now = Date.now();
+    const expiresAt = voiceRoom.agentDispatchLockExpiresAt ?? 0;
+    if (expiresAt > now) return null;
+
+    const ttl = lockTtlMs ?? 20_000;
+    await ctx.db.patch(voiceRoom._id, {
+      agentDispatchLockExpiresAt: now + ttl,
+    });
+
+    return {
+      voiceRoomId: voiceRoom._id,
+      roomName: voiceRoom.roomName,
+      agentDispatchId: voiceRoom.agentDispatchId ?? null,
+      agentDispatchCreatedAt: voiceRoom.agentDispatchCreatedAt ?? null,
+    };
+  },
+});
+
+export const releaseAgentDispatchLock = internalMutation({
+  args: { voiceRoomId: v.id("voiceRooms") },
+  handler: async (ctx, { voiceRoomId }) => {
+    await ctx.db.patch(voiceRoomId, { agentDispatchLockExpiresAt: 0 });
+  },
+});
+
+export const recordAgentDispatch = internalMutation({
+  args: {
+    voiceRoomId: v.id("voiceRooms"),
+    agentDispatchId: v.string(),
+    agentDispatchCreatedAt: v.number(),
+  },
+  handler: async (ctx, { voiceRoomId, agentDispatchId, agentDispatchCreatedAt }) => {
+    await ctx.db.patch(voiceRoomId, { agentDispatchId, agentDispatchCreatedAt });
+  },
+});
+
 // Append transcript with idempotency - used by voice agent via HTTP
 export const appendTranscript = internalMutation({
   args: {

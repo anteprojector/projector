@@ -7,48 +7,12 @@ import {
   KeyValue,
   truncate,
 } from "./TreeView";
+import type { Ref, SerialNode } from "markov-machines/client";
+import type { DisplayNode, DisplayPack } from "@/src/types/display";
 
 // ============================================================================
 // Client TreeView Types & Implementation
 // ============================================================================
-
-interface DisplayCommand {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-}
-
-interface DisplayPack {
-  name: string;
-  description: string;
-  state: unknown;
-  validator: Record<string, unknown>;
-  commands: Record<string, DisplayCommand>;
-}
-
-interface DisplayNode {
-  name: string;
-  instructions: string;
-  validator: Record<string, unknown>;
-  tools: string[];
-  transitions: Record<string, string>;
-  commands: Record<string, DisplayCommand>;
-  initialState?: unknown;
-  packNames?: string[];
-  worker?: boolean;
-}
-
-interface SerialNode {
-  instructions: string;
-  validator: Record<string, unknown>;
-  transitions: Record<string, unknown>;
-  tools?: Record<string, unknown>;
-  initialState?: unknown;
-}
-
-interface Ref {
-  ref: string;
-}
 
 export interface ClientInstance {
   id: string;

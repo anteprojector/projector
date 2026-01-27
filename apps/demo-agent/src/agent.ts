@@ -349,29 +349,11 @@ export default defineAgent({
 
     // Graceful shutdown handling
     let isShuttingDown = false;
-    let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
 
     const cleanup = async () => {
       if (isShuttingDown) return;
       isShuttingDown = true;
       console.log("[DemoAgent] Shutting down...");
-
-      // Stop heartbeat
-      if (heartbeatInterval) {
-        clearInterval(heartbeatInterval);
-        heartbeatInterval = null;
-      }
-
-      // Mark agent as offline (best-effort)
-      try {
-        await convex.action(api.agentWatchdog.markOffline, {
-          roomName,
-          jobId: ctx.job.id,
-        });
-        console.log("[DemoAgent] Marked offline in watchdog");
-      } catch (e) {
-        console.error("[DemoAgent] Error marking offline:", e);
-      }
 
       // Remove voice session event listeners
       try {
@@ -390,30 +372,6 @@ export default defineAgent({
       console.log("[DemoAgent] Cleanup complete");
       process.exit(0);
     };
-
-    // Start heartbeat to report liveness to watchdog
-    const HEARTBEAT_INTERVAL_MS = 10_000; // 10 seconds
-    const agentIdentity = ctx.room.localParticipant?.identity ?? `agent-${ctx.job.id}`;
-
-    const sendHeartbeat = async () => {
-      if (isShuttingDown) return;
-      try {
-        await convex.action(api.agentWatchdog.heartbeat, {
-          roomName,
-          jobId: ctx.job.id,
-          agentIdentity,
-        });
-      } catch (e) {
-        console.error("[DemoAgent] Heartbeat failed:", e);
-      }
-    };
-
-    // Send initial heartbeat immediately
-    sendHeartbeat();
-
-    // Then send every 10 seconds
-    heartbeatInterval = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
-    console.log("[DemoAgent] Heartbeat started");
 
     // Register signal handlers for graceful shutdown
     process.on("SIGTERM", cleanup);
@@ -607,7 +565,7 @@ export default defineAgent({
   },
 });
 
-// Use explicit agent name to disable auto-dispatch (requires explicit dispatch from watchdog)
+// Use explicit agent name to require explicit dispatch from getToken
 cli.runApp(
   new WorkerOptions({
     agent: fileURLToPath(import.meta.url),

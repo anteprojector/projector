@@ -1,6 +1,7 @@
 import { atom } from "jotai";
 import { atomWithStorage } from "jotai/utils";
 import type { Id } from "@/convex/_generated/dataModel";
+import type { CommandExecutionResult } from "markov-machines/client";
 
 // Chat input state
 export const inputAtom = atom<string>("");
@@ -47,7 +48,10 @@ export const voiceAgentConnectedAtom = atom<boolean>(false);
 // LiveKit client handle for RPC calls
 export interface LiveClientHandle {
   sendMessage: (message: string) => Promise<{ response: string; instance: unknown } | null>;
-  executeCommand: (commandName: string, input: Record<string, unknown>) => Promise<{ success: boolean; value?: unknown; error?: string }>;
+  executeCommand: (
+    commandName: string,
+    input: Record<string, unknown>
+  ) => Promise<CommandExecutionResult>;
   isConnected: () => boolean;
 }
 export const liveClientAtom = atom<LiveClientHandle | null>(null);

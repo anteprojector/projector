@@ -515,6 +515,8 @@ export async function* runMachine<AppMessage = unknown>(
     msg => msg.role === "user" && msg.metadata?.silent !== true
   );
 
+  console.log('has non silent message', hasNonSilentUserMessage)
+
   if (!hasNonSilentUserMessage) {
     // All processing done (history updated, instance messages applied)
     // Yield step without running leaves
@@ -562,7 +564,9 @@ export async function* runMachine<AppMessage = unknown>(
     // Validate: max 1 non-worker leaf
     const nonWorkerLeaves = activeLeaves.filter(l => !l.isWorker);
     if (nonWorkerLeaves.length > 1) {
-      console.log(nonWorkerLeaves)
+      console.log('too many primary leaves:', nonWorkerLeaves)
+      console.log('too many primary leaves - instance:', machine.instance)
+
       throw new Error(
         `Invalid state: ${nonWorkerLeaves.length} non-worker active leaves. ` +
         `At most one instance can receive user input per step.`

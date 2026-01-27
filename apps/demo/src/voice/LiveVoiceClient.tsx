@@ -5,8 +5,8 @@ import { useAtom, useSetAtom } from "jotai";
 import { useAction } from "convex/react";
 import { Room, RoomEvent, Track, ConnectionState, ParticipantKind } from "livekit-client";
 import { api } from "@/convex/_generated/api";
-import { useMutation } from "convex/react";
 import type { Id } from "@/convex/_generated/dataModel";
+import type { CommandExecutionResult } from "markov-machines/client";
 import { isLiveModeAtom, voiceConnectionStatusAtom, voiceAgentConnectedAtom } from "@/src/atoms";
 
 interface LiveVoiceClientProps {
@@ -15,7 +15,10 @@ interface LiveVoiceClientProps {
 
 export interface LiveVoiceClientHandle {
   sendMessage: (message: string) => Promise<{ response: string; instance: unknown } | null>;
-  executeCommand: (commandName: string, input: Record<string, unknown>) => Promise<{ success: boolean; value?: unknown; error?: string }>;
+  executeCommand: (
+    commandName: string,
+    input: Record<string, unknown>
+  ) => Promise<CommandExecutionResult>;
   isConnected: () => boolean;
 }
 
@@ -25,7 +28,7 @@ export interface LiveVoiceClientHandle {
  * Always connects to the LiveKit room (for RPC text messages).
  * When live mode is enabled, also enables microphone for voice input.
  *
- * 1. Fetches a LiveKit token from Convex on mount
+ * 1. Fetches a LiveKit token from Convex on mount (this also dispatches the agent)
  * 2. Connects to the LiveKit room
  * 3. In live mode: Publishes user microphone, subscribes to agent audio
  * 4. Exposes sendMessage() for text messages via RPC
@@ -34,32 +37,21 @@ export interface LiveVoiceClientHandle {
  */
 export const LiveVoiceClient = forwardRef<LiveVoiceClientHandle, LiveVoiceClientProps>(
   function LiveVoiceClient({ sessionId }, ref) {
-    const [isLiveMode, setIsLiveMode] = useAtom(isLiveModeAtom);
+    const [isLiveMode] = useAtom(isLiveModeAtom);
     const setConnectionStatus = useSetAtom(voiceConnectionStatusAtom);
     const setAgentConnected = useSetAtom(voiceAgentConnectedAtom);
     const getToken = useAction(api.livekitAgentActions.getToken);
-    const forceDispatch = useAction(api.agentWatchdog.forceDispatch);
+
+    // Store action function in ref to avoid unstable dependencies
+    const getTokenRef = useRef(getToken);
+    getTokenRef.current = getToken;
 
     const roomRef = useRef<Room | null>(null);
     const audioElementRef = useRef<HTMLAudioElement | null>(null);
-    const hasConnectedRef = useRef(false);
-    const agentCheckTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-    // Check if any agent is in the room
-    const checkForAgent = useCallback((room: Room): boolean => {
-      const hasAgent = Array.from(room.remoteParticipants.values()).some(
-        (p) => p.kind === ParticipantKind.AGENT
-      );
-      setAgentConnected(hasAgent);
-      return hasAgent;
-    }, [setAgentConnected]);
+    const isConnectingRef = useRef(false);
 
     // Cleanup function
     const cleanup = useCallback(async () => {
-      if (agentCheckTimeoutRef.current) {
-        clearTimeout(agentCheckTimeoutRef.current);
-        agentCheckTimeoutRef.current = null;
-      }
       if (roomRef.current) {
         await roomRef.current.disconnect();
         roomRef.current = null;
@@ -69,21 +61,22 @@ export const LiveVoiceClient = forwardRef<LiveVoiceClientHandle, LiveVoiceClient
       }
       setConnectionStatus("disconnected");
       setAgentConnected(false);
-      hasConnectedRef.current = false;
+      isConnectingRef.current = false;
     }, [setConnectionStatus, setAgentConnected]);
 
     // Connect to LiveKit room
     const connect = useCallback(async () => {
-      if (roomRef.current || hasConnectedRef.current) {
-        return; // Already connected or connecting
+      // Guard: prevent multiple concurrent connection attempts
+      if (roomRef.current || isConnectingRef.current) {
+        return;
       }
-      hasConnectedRef.current = true;
+      isConnectingRef.current = true;
 
       setConnectionStatus("connecting");
 
       try {
-        // Get token from Convex
-        const { token, url, room: roomName } = await getToken({ sessionId });
+        // Get token from Convex (this also dispatches an agent)
+        const { token, url } = await getTokenRef.current({ sessionId });
 
         // Create and connect room
         const room = new Room({
@@ -138,28 +131,13 @@ export const LiveVoiceClient = forwardRef<LiveVoiceClientHandle, LiveVoiceClient
         // Handle participant disconnections
         room.on(RoomEvent.ParticipantDisconnected, (participant) => {
           if (participant.kind === ParticipantKind.AGENT) {
-            const stillHasAgent = checkForAgent(room); // Check if any other agents remain
-            
-            // If agent disconnected and no other agent, schedule a retry dispatch
-            if (!stillHasAgent) {
-              console.log("[LiveVoiceClient] Agent disconnected, scheduling retry dispatch");
-              agentCheckTimeoutRef.current = setTimeout(async () => {
-                // Check again before dispatching
-                if (roomRef.current) {
-                  const hasAgentNow = Array.from(roomRef.current.remoteParticipants.values()).some(
-                    (p) => p.kind === ParticipantKind.AGENT
-                  );
-                  if (!hasAgentNow) {
-                    console.log("[LiveVoiceClient] Still no agent, triggering force dispatch");
-                    try {
-                      await forceDispatch({ roomName });
-                    } catch (e) {
-                      console.error("[LiveVoiceClient] Force dispatch failed:", e);
-                    }
-                  }
-                }
-              }, 5000); // Wait 5s before force dispatch
-            }
+            // Check if any other agents remain
+            const stillHasAgent = roomRef.current
+              ? Array.from(roomRef.current.remoteParticipants.values()).some(
+                  (p) => p.kind === ParticipantKind.AGENT
+                )
+              : false;
+            setAgentConnected(stillHasAgent);
           }
         });
 
@@ -167,35 +145,18 @@ export const LiveVoiceClient = forwardRef<LiveVoiceClientHandle, LiveVoiceClient
         await room.connect(url, token);
 
         // Check for existing agent in the room
-        const hasAgent = checkForAgent(room);
-        
-        // If no agent after initial connection, schedule a check to trigger dispatch
-        if (!hasAgent) {
-          console.log("[LiveVoiceClient] No agent on connect, scheduling check");
-          agentCheckTimeoutRef.current = setTimeout(async () => {
-            if (roomRef.current) {
-              const hasAgentNow = Array.from(roomRef.current.remoteParticipants.values()).some(
-                (p) => p.kind === ParticipantKind.AGENT
-              );
-              if (!hasAgentNow) {
-                console.log("[LiveVoiceClient] Still no agent after 10s, triggering force dispatch");
-                try {
-                  await forceDispatch({ roomName });
-                } catch (e) {
-                  console.error("[LiveVoiceClient] Force dispatch failed:", e);
-                }
-              }
-            }
-          }, 10000); // Wait 10s for agent to connect normally
-        }
+        const hasAgent = Array.from(room.remoteParticipants.values()).some(
+          (p) => p.kind === ParticipantKind.AGENT
+        );
+        setAgentConnected(hasAgent);
 
         setConnectionStatus("connected");
       } catch (error) {
         console.error("Failed to connect to voice room:", error);
         setConnectionStatus("disconnected");
-        hasConnectedRef.current = false;
+        isConnectingRef.current = false;
       }
-    }, [sessionId, getToken, setConnectionStatus, setAgentConnected, checkForAgent, forceDispatch]);
+    }, [sessionId, setConnectionStatus, setAgentConnected]);
 
     // Always connect when component mounts with a valid session
     useEffect(() => {
@@ -283,7 +244,7 @@ export const LiveVoiceClient = forwardRef<LiveVoiceClientHandle, LiveVoiceClient
 
     // Execute a command on the agent via RPC
     const executeCommand = useCallback(
-      async (commandName: string, input: Record<string, unknown>): Promise<{ success: boolean; value?: unknown; error?: string }> => {
+      async (commandName: string, input: Record<string, unknown>): Promise<CommandExecutionResult> => {
         const room = roomRef.current;
         if (!room || room.state !== ConnectionState.Connected) {
           console.error("Cannot execute command: room not connected");
@@ -308,7 +269,7 @@ export const LiveVoiceClient = forwardRef<LiveVoiceClientHandle, LiveVoiceClient
             responseTimeout: 30000, // 30s timeout for command execution
           });
 
-          return JSON.parse(response) as { success: boolean; value?: unknown; error?: string };
+          return JSON.parse(response) as CommandExecutionResult;
         } catch (error) {
           console.error("RPC executeCommand failed:", error);
           return { success: false, error: error instanceof Error ? error.message : "Unknown error" };

@@ -1,6 +1,9 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
+import type { Ref, SerialNode, SerializedInstance } from "markov-machines/client";
+import { isRef, isSerialTransition } from "markov-machines/client";
+import type { DisplayNode, DisplayPack } from "@/src/types/display";
 
 // ============================================================================
 // Shared Tree Components (exported for reuse)
@@ -149,72 +152,13 @@ export function TreeNode<T extends { id: string; children?: T[] }>({
 // Server TreeView Types & Implementation
 // ============================================================================
 
-interface SerializedSuspendInfo {
-  suspendId: string;
-  reason: string;
-  suspendedAt: string;
-  metadata?: Record<string, unknown>;
-}
-
-interface DisplayCommand {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-}
-
-interface DisplayPack {
-  name: string;
-  description: string;
-  state: unknown;
-  validator: Record<string, unknown>;
-  commands: Record<string, DisplayCommand>;
-}
-
-interface DisplayNode {
-  name: string;
-  instructions: string;
-  validator: Record<string, unknown>;
-  tools: string[];
-  transitions: Record<string, string>;
-  commands: Record<string, DisplayCommand>;
-  initialState?: unknown;
-  packNames?: string[];
-  worker?: boolean;
-}
-
-interface SerialNode {
-  instructions: string;
-  validator: Record<string, unknown>;
-  transitions: Record<string, unknown>;
-  tools?: Record<string, unknown>;
-  initialState?: unknown;
-}
-
-interface Ref {
-  ref: string;
-}
-
 type NodeType = DisplayNode | SerialNode | Ref;
 
-export interface ServerInstance {
-  id: string;
+export type ServerInstance = Omit<SerializedInstance, "node" | "children"> & {
   node: NodeType;
-  state: unknown;
   children?: ServerInstance[];
   packs?: DisplayPack[];
-  executorConfig?: Record<string, unknown>;
-  suspended?: SerializedSuspendInfo;
-}
-
-function isRef(value: unknown): value is Ref {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "ref" in value &&
-    typeof (value as Ref).ref === "string" &&
-    Object.keys(value).length === 1
-  );
-}
+};
 
 function isDisplayNode(node: NodeType): node is DisplayNode {
   return (
@@ -348,8 +292,8 @@ function NodeSection({ node }: { node: NodeType }) {
               const t = serialNode.transitions[name];
               const target = isRef(t)
                 ? t.ref
-                : typeof t === "object" && t && "node" in t && isRef((t as { node: unknown }).node)
-                  ? (((t as { node: Ref }).node) as Ref).ref
+                : isSerialTransition(t) && isRef(t.node)
+                  ? t.node.ref
                   : "inline";
               return (
                 <div key={name}>

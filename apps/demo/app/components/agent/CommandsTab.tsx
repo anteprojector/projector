@@ -3,12 +3,16 @@
 import { useState } from "react";
 import { useAtomValue } from "jotai";
 import { liveClientAtom } from "@/src/atoms";
+import type { CommandMeta, JSONSchema } from "markov-machines/client";
 
-interface SerializedCommandInfo {
-  name: string;
-  description: string;
-  inputSchema: { type: string; properties?: Record<string, unknown> };
-}
+type CommandSchema = JSONSchema & {
+  type?: string;
+  properties?: Record<string, unknown>;
+};
+
+type SerializedCommandInfo = Omit<CommandMeta, "inputSchema"> & {
+  inputSchema: CommandSchema;
+};
 
 interface CommandsTabProps {
   commands: SerializedCommandInfo[];

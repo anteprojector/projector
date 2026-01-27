@@ -5,6 +5,12 @@ import { useAtom, useSetAtom } from "jotai";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id, Doc } from "@/convex/_generated/dataModel";
+import type {
+  ConversationMessage,
+  TextBlock,
+  ToolResultBlock,
+  ToolUseBlock,
+} from "markov-machines/client";
 import {
   activeHistorySubtabAtom,
   selectedStepIdAtom,
@@ -250,30 +256,18 @@ function TurnsView({ sessionId }: { sessionId: Id<"sessions"> }) {
 }
 
 // Content block types from Anthropic API
-interface TextBlock {
-  type: "text";
-  text: string;
-}
+type DemoToolResultBlock = ToolResultBlock & { content: string | unknown[] };
 
-interface ToolUseBlock {
-  type: "tool_use";
-  id: string;
-  name: string;
-  input: Record<string, unknown>;
-}
+type ContentBlock =
+  | TextBlock
+  | ToolUseBlock
+  | DemoToolResultBlock
+  | { type: string; [key: string]: unknown };
 
-interface ToolResultBlock {
-  type: "tool_result";
-  tool_use_id: string;
-  content: string | unknown[];
-}
-
-type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock | { type: string;[key: string]: unknown };
-
-interface APIMessage {
+type APIMessage = Omit<ConversationMessage, "role" | "items"> & {
   role: "user" | "assistant";
   items: string | ContentBlock[];
-}
+};
 
 function ContentBlockView({ block }: { block: ContentBlock }) {
   if (block.type === "text") {
@@ -300,7 +294,7 @@ function ContentBlockView({ block }: { block: ContentBlock }) {
   }
 
   if (block.type === "tool_result") {
-    const toolResult = block as ToolResultBlock;
+    const toolResult = block as DemoToolResultBlock;
     const content = typeof toolResult.content === "string"
       ? toolResult.content
       : JSON.stringify(toolResult.content, null, 2);

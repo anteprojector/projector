@@ -1,6 +1,11 @@
 import { z } from "zod";
-import type { Instance } from "markov-machines";
-import type { Charter } from "markov-machines";
+import type { Charter, Instance, Pack } from "markov-machines";
+import type {
+  DisplayCommand,
+  DisplayInstance,
+  DisplayNode,
+  DisplayPack,
+} from "./types/display";
 
 /**
  * Custom serialization for display purposes.
@@ -8,47 +13,6 @@ import type { Charter } from "markov-machines";
  * (showing instructions, validator, etc.) instead of converting to refs.
  * Tools and transitions are shown as refs/names only.
  */
-
-interface DisplayCommand {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-}
-
-interface DisplayPack {
-  name: string;
-  description: string;
-  state: unknown;
-  validator: Record<string, unknown>;
-  commands: Record<string, DisplayCommand>;
-}
-
-interface DisplayNode {
-  name: string; // Node name from charter, or "[inline]"
-  instructions: string;
-  validator: Record<string, unknown>;
-  tools: string[]; // Just tool names
-  transitions: Record<string, string>; // name -> target ref or "inline"
-  commands: Record<string, DisplayCommand>; // Command metadata
-  initialState?: unknown;
-  packNames?: string[]; // Pack names (for reference)
-  worker?: boolean;
-}
-
-interface DisplayInstance {
-  id: string;
-  node: DisplayNode;
-  state: unknown;
-  children?: DisplayInstance[];
-  packs?: DisplayPack[]; // Full pack info with state, validator, and commands
-  executorConfig?: Record<string, unknown>;
-  suspended?: {
-    suspendId: string;
-    reason: string;
-    suspendedAt: string;
-    metadata?: Record<string, unknown>;
-  };
-}
 
 /**
  * Sanitize an object for Convex storage by replacing $ prefixed keys.
@@ -181,10 +145,7 @@ function serializeNodeForDisplay(node: Instance["node"], charter?: Charter): Dis
   };
 }
 
-function serializePackForDisplay(
-  pack: { name: string; description: string; validator: z.ZodType<unknown>; commands?: Record<string, { name: string; description: string; inputSchema: z.ZodType<unknown> }> },
-  state: unknown
-): DisplayPack {
+function serializePackForDisplay(pack: Pack, state: unknown): DisplayPack {
   // Convert validator to JSON schema
   let validator: Record<string, unknown> = {};
   try {
@@ -244,7 +205,7 @@ export function serializeInstanceForDisplay(
   if (nodePacks.length > 0) {
     packs = nodePacks.map((pack) => {
       const state = packStates[pack.name] ?? pack.initialState ?? {};
-      return serializePackForDisplay(pack as any, state);
+      return serializePackForDisplay(pack, state);
     });
   }
 

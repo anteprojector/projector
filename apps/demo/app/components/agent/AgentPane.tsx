@@ -10,66 +10,21 @@ import { StateTab } from "./StateTab";
 import { HistoryTab } from "./HistoryTab";
 import { CommandsTab } from "./CommandsTab";
 import { DevTab } from "./DevTab";
+import type {
+  CommandMeta,
+  JSONSchema,
+  SerializedInstance,
+} from "markov-machines/client";
+import type { DisplayInstance } from "@/src/types/display";
 
-interface SerializedInstance {
-  id: string;
-  node: Record<string, unknown>;
-  state: unknown;
-  children?: SerializedInstance[];
-  packStates?: Record<string, unknown>;
-  executorConfig?: Record<string, unknown>;
-  suspended?: {
-    suspendId: string;
-    reason: string;
-    suspendedAt: string;
-    metadata?: Record<string, unknown>;
-  };
-}
+type CommandSchema = JSONSchema & {
+  type?: string;
+  properties?: Record<string, unknown>;
+};
 
-interface SerializedCommandInfo {
-  name: string;
-  description: string;
-  inputSchema: { type: string; properties?: Record<string, unknown> };
-}
-
-interface DisplayCommand {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-}
-
-interface DisplayPack {
-  name: string;
-  description: string;
-  state: unknown;
-  validator: Record<string, unknown>;
-  commands: Record<string, DisplayCommand>;
-}
-
-interface DisplayInstance {
-  id: string;
-  node: {
-    name: string;
-    instructions: string;
-    validator: Record<string, unknown>;
-    tools: string[];
-    transitions: Record<string, string>;
-    commands: Record<string, DisplayCommand>;
-    initialState?: unknown;
-    packNames?: string[];
-    worker?: boolean;
-  };
-  state: unknown;
-  children?: DisplayInstance[];
-  packs?: DisplayPack[];
-  executorConfig?: Record<string, unknown>;
-  suspended?: {
-    suspendId: string;
-    reason: string;
-    suspendedAt: string;
-    metadata?: Record<string, unknown>;
-  };
-}
+type SerializedCommandInfo = Omit<CommandMeta, "inputSchema"> & {
+  inputSchema: CommandSchema;
+};
 
 interface AgentPaneProps {
   sessionId: Id<"sessions">;
@@ -97,7 +52,7 @@ function getCommandsFromInstance(instance: DisplayInstance | undefined): Seriali
   const nodeCommands = Object.values(active.node.commands).map(cmd => ({
     name: cmd.name,
     description: cmd.description,
-    inputSchema: cmd.inputSchema as { type: string; properties?: Record<string, unknown> },
+    inputSchema: cmd.inputSchema as CommandSchema,
   }));
 
   // Get pack commands from root instance (packs are stored on root)
@@ -108,7 +63,7 @@ function getCommandsFromInstance(instance: DisplayInstance | undefined): Seriali
         packCommands.push({
           name: cmd.name,
           description: cmd.description,
-          inputSchema: cmd.inputSchema as { type: string; properties?: Record<string, unknown> },
+          inputSchema: cmd.inputSchema as CommandSchema,
         });
       }
     }

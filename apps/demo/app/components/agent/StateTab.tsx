@@ -3,28 +3,16 @@
 import { useAtomValue } from "jotai";
 import { isPreviewingAtom, stepPreviewInstanceAtom } from "@/src/atoms";
 import { JsonViewer } from "../shared/JsonViewer";
+import type { SerializedInstance } from "markov-machines/client";
+import type { DisplayPack } from "@/src/types/display";
 
-interface DisplayPack {
-  name: string;
-  description: string;
-  state: unknown;
-  validator: Record<string, unknown>;
-  commands: Record<string, unknown>;
-}
-
-interface SerializedInstance {
-  id: string;
-  node: Record<string, unknown>;
-  state: unknown;
-  children?: SerializedInstance[];
-  packs?: DisplayPack[];
-}
+type SerializedInstanceWithPacks = SerializedInstance & { packs?: DisplayPack[] };
 
 interface StateTabProps {
-  instance: SerializedInstance | null;
+  instance: SerializedInstanceWithPacks | null;
 }
 
-function getActiveLeafState(instance: SerializedInstance): unknown {
+function getActiveLeafState(instance: SerializedInstanceWithPacks): unknown {
   if (!instance.children || instance.children.length === 0) {
     return instance.state;
   }
@@ -32,7 +20,7 @@ function getActiveLeafState(instance: SerializedInstance): unknown {
   return lastChild ? getActiveLeafState(lastChild) : instance.state;
 }
 
-function getActiveLeafNodeName(instance: SerializedInstance): string {
+function getActiveLeafNodeName(instance: SerializedInstanceWithPacks): string {
   if (!instance.children || instance.children.length === 0) {
     // Check if node is a ref (has 'ref' property) or inline
     const node = instance.node;
@@ -47,7 +35,7 @@ function getActiveLeafNodeName(instance: SerializedInstance): string {
 
 export function StateTab({ instance }: StateTabProps) {
   const isPreviewing = useAtomValue(isPreviewingAtom);
-  const previewInstance = useAtomValue(stepPreviewInstanceAtom) as SerializedInstance | null;
+  const previewInstance = useAtomValue(stepPreviewInstanceAtom) as SerializedInstanceWithPacks | null;
 
   const displayInstance = isPreviewing && previewInstance ? previewInstance : instance;
 

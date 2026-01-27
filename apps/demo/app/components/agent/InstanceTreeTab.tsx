@@ -4,60 +4,8 @@ import { useAtom } from "jotai";
 import { activeTreeSubtabAtom, type TreeSubtab } from "@/src/atoms";
 import { TreeView } from "../shared/TreeView";
 import { ClientTreeView } from "../shared/ClientTreeView";
-
-interface DisplayPack {
-  name: string;
-  description: string;
-  state: unknown;
-  validator: Record<string, unknown>;
-  commands: Record<string, unknown>;
-}
-
-interface SerializedInstance {
-  id: string;
-  node: Record<string, unknown>;
-  state: unknown;
-  children?: SerializedInstance[];
-  packs?: DisplayPack[];
-  executorConfig?: Record<string, unknown>;
-  suspended?: {
-    suspendId: string;
-    reason: string;
-    suspendedAt: string;
-    metadata?: Record<string, unknown>;
-  };
-}
-
-interface DisplayCommand {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-}
-
-interface DisplayInstance {
-  id: string;
-  node: {
-    name: string;
-    instructions: string;
-    validator: Record<string, unknown>;
-    tools: string[];
-    transitions: Record<string, string>;
-    commands: Record<string, DisplayCommand>;
-    initialState?: unknown;
-    packNames?: string[];
-    worker?: boolean;
-  };
-  state: unknown;
-  children?: DisplayInstance[];
-  packs?: DisplayPack[];
-  executorConfig?: Record<string, unknown>;
-  suspended?: {
-    suspendId: string;
-    reason: string;
-    suspendedAt: string;
-    metadata?: Record<string, unknown>;
-  };
-}
+import type { SerializedInstance } from "markov-machines/client";
+import type { DisplayInstance } from "@/src/types/display";
 
 interface InstanceTreeTabProps {
   instance: SerializedInstance | null;
