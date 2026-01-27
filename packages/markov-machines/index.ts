@@ -8,8 +8,8 @@ export { createMachine } from "./src/core/machine.js";
 export { createTransition } from "./src/core/transition.js";
 export { cede, spawn, suspend } from "./src/helpers/cede-spawn.js";
 export type { TransitionConfig } from "./src/core/transition.js";
-export { runMachine, runMachineToCompletion, mergeLeafResults } from "./src/core/run.js";
-export type { LeafResult, MergedResult } from "./src/core/run.js";
+export { runMachine, runMachineToCompletion, mergeLeafResults, drainQueue, applyInstanceMessages } from "./src/core/run.js";
+export type { LeafResult, LegacyLeafResult, MergedResult, DrainResult } from "./src/core/run.js";
 export { createPack } from "./src/core/pack.js";
 export { getAvailableCommands, runCommand, createCommand } from "./src/core/commands.js";
 export type { CommandConfig } from "./src/core/commands.js";
@@ -35,6 +35,7 @@ export type {
   MachineStep,
   YieldReason,
   SuspendedInstanceInfo,
+  EnqueueFn,
 } from "./src/executor/types.js";
 
 // Tools
@@ -94,6 +95,8 @@ export type {
   ToolReply,
   // Messages
   MachineMessage,
+  ConversationMessage,
+  InstanceMessage,
   MessageMetadata,
   MessageSource,
   SourceInstanceId,
@@ -103,6 +106,14 @@ export type {
   ToolResultBlock,
   ThinkingBlock,
   OutputBlock,
+  // Instance payloads
+  InstancePayload,
+  StateUpdatePayload,
+  PackStateUpdatePayload,
+  TransitionPayload,
+  SpawnPayload,
+  CedePayload,
+  SuspendPayload,
   // Pack
   Pack,
   PackConfig,
@@ -114,7 +125,7 @@ export type {
   CommandDefinition,
   AnyCommandDefinition,
   CommandResult,
-  ValueResult,
+  CommandValueResult,
   ResumeResult,
   CommandInfo,
   CommandExecutionResult,
@@ -164,8 +175,8 @@ export {
   isAnthropicBuiltinTool,
   isToolReply,
   toolReply,
-  isValueResult,
-  commandValue,
+  isCommandValueResult,
+  commandResult,
   commandResume,
   isCommand,
   isResume,
@@ -178,8 +189,12 @@ export {
   assistantMessage,
   commandMessage,
   systemMessage,
+  instanceMessage,
   toolResult,
   getMessageText,
+  isConversationMessage,
+  isInstanceMessage,
+  isModelMessage,
 } from "./src/types/messages.js";
 
 // System prompt helpers

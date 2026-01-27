@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createNode, createTransition, cede, toolReply } from "markov-machines";
+import { createNode, createTransition, cede, commandResult, userMessage } from "markov-machines";
 import { themePack } from "../packs/theme.js";
 
 export const demoPingStateValidator = z.object({});
@@ -32,7 +32,7 @@ When done demonstrating, use returnToFoo to go back.`,
       name: "ping",
       description: "Returns pong instantly (bypasses LLM)",
       inputSchema: z.object({}),
-      execute: () => toolReply("pong", "[User ran ping command]"),
+      execute: () => commandResult("pong", [userMessage("[User ran ping command]")]),
     },
   },
   transitions: {

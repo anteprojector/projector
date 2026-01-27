@@ -11,10 +11,14 @@ import type {
   MachineMessage,
   MachineItem,
   OutputBlock,
+  ConversationMessage,
+  MessageSource,
 } from "../types/messages.js";
 import {
   userMessage,
   assistantMessage,
+  instanceMessage,
+  isModelMessage,
 } from "../types/messages.js";
 import { generateToolDefinitions } from "../tools/tool-generator.js";
 import { buildSystemPrompt } from "../runtime/system-prompt.js";
@@ -113,7 +117,7 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
         max_tokens: this.maxTokens,
         messages: [{ role: "user", content: "ping" }],
       });
-      console.log('$$$$ msg.content', msg.content);
+
     } catch (err: any) {
       console.error("Anthropic error name:", err?.name);
       console.error("Anthropic error status:", err?.status);
@@ -125,7 +129,8 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
 
   /**
    * Execute a single API call for the given instance.
-   * Processes tool calls and returns the result.
+   * Enqueues all messages (assistant, user, instance) to the machine queue.
+   * Returns only the yield reason.
    */
   async run(
     charter: Charter<AppMessage>,
@@ -134,16 +139,25 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
     input: string,
     options?: RunOptions<AppMessage>,
   ): Promise<RunResult<AppMessage>> {
-    let currentState = instance.state;
-    let currentNode: Node<any, unknown> = instance.node;
-    let currentChildren = instance.children;
-    let currentExecutorConfig = instance.executorConfig;
-    const newMessages: MachineMessage<AppMessage>[] = [];
-    const isWorker = instance.node.worker === true;
+    const enqueue = options?.enqueue;
+    if (!enqueue) {
+      throw new Error("StandardExecutor.run requires options.enqueue to be provided");
+    }
+
+    const currentNode: Node<any, unknown> = instance.node;
+    const currentState = instance.state;
+    const isWorker = options?.isWorker ?? instance.node.worker === true;
+    const instanceId = options?.instanceId ?? instance.id;
+
+    // Build source attribution for all messages from this leaf
+    const source: MessageSource = {
+      instanceId,
+      isPrimary: !isWorker,
+    };
 
     // Get pack states from root instance (first ancestor or current instance)
     const rootInstance = ancestors[0] ?? instance;
-    let packStates: Record<string, unknown> = { ...(rootInstance.packStates ?? {}) };
+    const packStates: Record<string, unknown> = { ...(rootInstance.packStates ?? {}) };
 
     // Lazy init packs from current node (for node-level packs not in charter)
     if (!currentNode.worker && currentNode.packs) {
@@ -158,15 +172,17 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
     // Add previous history if provided
     if (options?.history) {
       for (const msg of options.history) {
-        // Skip system and command messages - they are for internal control flow only
-        if (msg.role === "system" || msg.role === "command") continue;
-        conversationHistory.push(this.convertMessageToParam(msg));
+        // Only user and assistant messages go to the model
+        // Skip system, command, and instance messages
+        if (!isModelMessage(msg)) continue;
+        const param = this.convertMessageToParam(msg);
+        if (param) conversationHistory.push(param);
       }
     }
 
     // Add current user input (only if non-empty)
     if (input) {
-      newMessages.push(userMessage(input, { instanceId: instance.id }));
+      enqueue([userMessage(input, source)]);
       conversationHistory.push({ role: "user", content: input });
     }
 
@@ -254,7 +270,7 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
       tools: anthropicTools,
     };
 
-    console.log('$$ messages.create', validatedHistory[validatedHistory.length - 1])
+
     const response = outputFormat
       ? await this.client.beta.messages.create({
         ...apiParams,
@@ -286,13 +302,12 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
       });
     }
 
-    const assistantMsg = assistantMessage(assistantContent, { instanceId: instance.id });
-    newMessages.push(assistantMsg);
+    // Enqueue assistant message
+    const assistantMsg = assistantMessage(assistantContent, source);
+    enqueue([assistantMsg]);
 
     // Determine yield reason and process accordingly
     let yieldReason: "end_turn" | "tool_use" | "max_tokens" | "cede" | "suspend" = "end_turn";
-    let cedeContent: string | MachineMessage<AppMessage>[] | undefined = undefined;
-    let suspendInfo: import("../types/instance.js").SuspendInfo | undefined = undefined;
 
     if (response.stop_reason === "max_tokens") {
       yieldReason = "max_tokens";
@@ -304,7 +319,7 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
         )
         .map(({ id, name, input }) => ({ id, name, input }));
 
-      // Run the tool pipeline (delegated to reusable runtime function)
+      // Run the tool pipeline - it will enqueue all messages
       const pipelineResult = await runToolPipeline<AppMessage>(
         {
           charter,
@@ -312,74 +327,17 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
           ancestors,
           packStates,
           history: options?.history,
+          enqueue,
+          source,
         },
         toolCalls,
       );
 
-      // Append pipeline messages to our messages
-      newMessages.push(...pipelineResult.history);
-
-      // Use pipeline result for return values
       yieldReason = pipelineResult.yieldReason;
-      cedeContent = pipelineResult.cedeContent;
-      packStates = pipelineResult.packStates;
-
-      // Extract updated values from pipeline result instance
-      currentNode = pipelineResult.instance.node;
-      currentState = pipelineResult.instance.state;
-      currentChildren = pipelineResult.instance.children;
-      currentExecutorConfig = pipelineResult.instance.executorConfig;
-      suspendInfo = pipelineResult.instance.suspended;
     }
     // else: end_turn - yieldReason already set to "end_turn"
 
-    // Build updated instance
-    const updatedInstance = this.buildUpdatedInstance(
-      instance,
-      currentNode,
-      currentState,
-      currentChildren,
-      ancestors,
-      packStates,
-      currentExecutorConfig,
-      suspendInfo,
-    );
-
-    return {
-      instance: updatedInstance,
-      history: newMessages,
-      yieldReason,
-      cedeContent,
-      // Worker instances don't update pack states
-      packStates: !isWorker && Object.keys(packStates).length > 0 ? packStates : undefined,
-    };
-  }
-
-  /**
-   * Build updated instance, propagating ancestor state changes.
-   */
-  private buildUpdatedInstance(
-    originalInstance: Instance,
-    currentNode: Node<any, unknown>,
-    currentState: unknown,
-    currentChildren: Instance[] | undefined,
-    ancestors: Instance[],
-    packStates: Record<string, unknown>,
-    executorConfig?: StandardNodeConfig,
-    suspendInfo?: import("../types/instance.js").SuspendInfo,
-  ): Instance {
-    // Build the updated leaf instance
-    // Include packStates only if this is the root instance (no ancestors)
-    const isRoot = ancestors.length === 0;
-    return {
-      id: originalInstance.id,
-      node: currentNode,
-      state: currentState,
-      children: currentChildren,
-      ...(isRoot && Object.keys(packStates).length > 0 ? { packStates } : {}),
-      executorConfig,
-      ...(suspendInfo ? { suspended: suspendInfo } : {}),
-    };
+    return { yieldReason };
   }
 
   /**
@@ -418,17 +376,17 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
   }
 
   /**
-   * Convert our MachineMessage format to Anthropic MessageParam format.
-   * Only user and assistant messages should be passed here (system/command are filtered before).
+   * Convert our ConversationMessage format to Anthropic MessageParam format.
+   * Only user and assistant messages should be passed here (filtered by isModelMessage).
    */
-  private convertMessageToParam(msg: MachineMessage<AppMessage>): MessageParam {
+  private convertMessageToParam(msg: ConversationMessage<AppMessage>): MessageParam | null {
     const role = msg.role as "user" | "assistant";
     if (typeof msg.items === "string") {
       return { role, content: msg.items };
     }
 
     // Convert our MachineItem[] to Anthropic's format
-    const content = msg.items.map((block) => {
+    const content = msg.items.map((block: MachineItem<AppMessage>) => {
       if (block.type === "text") {
         return { type: "text" as const, text: block.text };
       }
@@ -457,7 +415,13 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
       }
       // Thinking blocks - skip or convert
       return { type: "text" as const, text: "" };
-    }).filter((b) => b.type !== "text" || b.text !== "");
+    }).filter((b: { type: string; text?: string }) => b.type !== "text" || b.text !== "");
+
+    // If all blocks were filtered out (e.g., message was only thinking blocks),
+    // return null so the caller can skip this message
+    if (content.length === 0) {
+      return null;
+    }
 
     return { role, content };
   }

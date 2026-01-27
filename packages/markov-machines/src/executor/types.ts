@@ -16,6 +16,11 @@ export type YieldReason =
   | "external";        // Inference delegated to external system (e.g., LiveKit)
 
 /**
+ * Function to enqueue messages to the machine queue.
+ */
+export type EnqueueFn<AppMessage = unknown> = (messages: MachineMessage<AppMessage>[]) => void;
+
+/**
  * Options for executor run.
  * @typeParam AppMessage - The application message type for structured outputs (defaults to unknown).
  */
@@ -29,23 +34,32 @@ export interface RunOptions<AppMessage = unknown> {
   currentStep?: number;
   /** Enable debug logging */
   debug?: boolean;
+  /** 
+   * Function to enqueue messages directly to machine queue.
+   * When provided, executor will enqueue messages instead of returning them.
+   */
+  enqueue?: EnqueueFn<AppMessage>;
+  /**
+   * Instance ID of the leaf being executed.
+   * Used for source attribution on enqueued messages.
+   */
+  instanceId?: string;
+  /**
+   * Whether this is a worker (non-primary) instance.
+   * Used for source.isPrimary attribution.
+   */
+  isWorker?: boolean;
 }
 
 /**
  * Result returned from executor run (single API call).
+ * When enqueue is provided in options, messages are enqueued directly
+ * and this result only contains the yield reason.
  * @typeParam AppMessage - The application message type for structured outputs (defaults to unknown).
  */
 export interface RunResult<AppMessage = unknown> {
-  /** Updated instance tree */
-  instance: Instance;
-  /** New history from this turn */
-  history: MachineMessage<AppMessage>[];
   /** Why the run yielded */
   yieldReason: YieldReason;
-  /** Content from cede - string or MachineMessage[] (only set when yieldReason is "cede") */
-  cedeContent?: string | MachineMessage<AppMessage>[];
-  /** Updated pack states (to be applied to root instance) */
-  packStates?: Record<string, unknown>;
 }
 
 /**

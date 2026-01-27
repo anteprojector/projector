@@ -22,6 +22,7 @@ import {
   type Machine,
   type MachineMessage,
   type ToolCall,
+  type InstanceMessage,
   StandardExecutor,
   buildSystemPrompt,
   generateToolDefinitions,
@@ -33,6 +34,7 @@ import {
   getActiveInstance,
   getInstancePath,
   getMessageText,
+  isInstanceMessage,
 } from "markov-machines";
 
 import type { LiveKitExecutorConfig, ConnectConfig, LiveKitToolDefinition } from "./types.js";
@@ -181,11 +183,7 @@ export class LiveKitExecutor implements Executor {
       // Live mode: skip inference
       this.log(`Primary node run (live mode) - pushing config to LiveKit`);
       // Return "external" to signal waiting for LiveKit events
-      return {
-        instance,
-        history: [],
-        yieldReason: "external",
-      };
+      return { yieldReason: "external" };
     }
   }
 
@@ -285,11 +283,14 @@ export class LiveKitExecutor implements Executor {
     if (!this.machine || !this.session || !this.agent) return;
 
     const charter = this.machine.charter;
+    const rootInstance = this.machine.instance;
     // Get the active instance (leaf of the instance tree)
-    const activeInstance = getActiveInstance(this.machine.instance);
+    const activeInstance = getActiveInstance(rootInstance);
     // Get the path from root to active, excluding the active instance itself
-    const instancePath = getInstancePath(this.machine.instance);
+    const instancePath = getInstancePath(rootInstance);
     const ancestors = instancePath.slice(0, -1); // All except the last (active) instance
+    // Pack states are stored on the root instance
+    const packStates = rootInstance.packStates ?? {};
 
     // Build system prompt
     let instructions = buildSystemPrompt(
@@ -297,7 +298,7 @@ export class LiveKitExecutor implements Executor {
       activeInstance.node,
       activeInstance.state,
       ancestors,
-      activeInstance.packStates ?? {},
+      packStates,
       {},
     );
     
@@ -401,7 +402,6 @@ export class LiveKitExecutor implements Executor {
    * Tool calls run in parallel (no mutex). Failures are enqueued as error messages.
    */
   async handleToolCall(call: ToolCall): Promise<string> {
-    console.log('%% handle tool call')
 
     if (!this.machine) {
       return "Error: Machine not connected";
@@ -433,7 +433,11 @@ export class LiveKitExecutor implements Executor {
       const ancestors = instancePath.slice(0, -1);
       const packStates = rootInstance.packStates ?? {};
 
-      // Run the tool pipeline
+      // Temporary queue to collect messages from the pipeline
+      const pipelineQueue: MachineMessage[] = [];
+      const pipelineEnqueue = (msgs: MachineMessage[]) => pipelineQueue.push(...msgs);
+
+      // Run the tool pipeline - it enqueues all messages
       const result = await runToolPipeline(
         {
           charter,
@@ -441,6 +445,8 @@ export class LiveKitExecutor implements Executor {
           ancestors,
           packStates,
           history: machine.history,
+          enqueue: pipelineEnqueue,
+          source: { instanceId: activeInstance.id },
         },
         [call],
       );
@@ -450,72 +456,91 @@ export class LiveKitExecutor implements Executor {
         throw new Error(`Instance ${instanceId} was replaced during tool execution`);
       }
 
-      // Extract tool result content from the pipeline result
-      const toolResultContent = this.extractToolResultContent(result.history);
+      // Extract tool result content from the pipeline queue
+      const toolResultContent = this.extractToolResultContent(pipelineQueue);
 
-      // Handle cede: remove the child instance and enqueue cede content for parent
-      if (result.yieldReason === "cede") {
-        console.log(`[LiveKit Cede] Removing child instance ${activeInstance.id}`);
-        
-        // Remove the ceding instance from the tree
-        const updatedRoot = this.removeInstanceById(rootInstance, activeInstance.id);
-        if (!updatedRoot) {
-          throw new Error("Cannot cede from root instance");
-        }
-        
-        // Apply pack state updates to root
-        if (result.packStates && Object.keys(result.packStates).length > 0) {
-          machine.instance = {
-            ...updatedRoot,
-            packStates: { ...updatedRoot.packStates, ...result.packStates },
-          };
-        } else {
-          machine.instance = updatedRoot;
-        }
-
-        // Enqueue tool_result first
-        machine.enqueue([
-          userMessage([
-            { type: "tool_result", tool_use_id: call.id, content: toolResultContent },
-          ]),
-        ]);
-
-        // Then enqueue cede content as a message for the parent to process
-        if (result.cedeContent) {
-          if (typeof result.cedeContent === "string") {
-            machine.enqueue([userMessage(result.cedeContent)]);
-          } else {
-            machine.enqueue(result.cedeContent as MachineMessage[]);
+      // Apply instance messages to update machine.instance
+      const instanceMessages = pipelineQueue.filter(isInstanceMessage) as InstanceMessage[];
+      const conversationMessages = pipelineQueue.filter(m => !isInstanceMessage(m));
+      
+      // Apply instance mutations (simplified - reuse logic from run.ts)
+      for (const msg of instanceMessages) {
+        const payload = msg.items;
+        switch (payload.kind) {
+          case "state": {
+            machine.instance = this.updateInstanceById(
+              machine.instance,
+              payload.instanceId,
+              (inst) => ({ ...inst, state: { ...(inst.state as Record<string, unknown>), ...payload.patch } })
+            );
+            break;
+          }
+          case "packState": {
+            const existingPackStates = machine.instance.packStates ?? {};
+            machine.instance = {
+              ...machine.instance,
+              packStates: {
+                ...existingPackStates,
+                [payload.packName]: { ...(existingPackStates[payload.packName] as Record<string, unknown> ?? {}), ...payload.patch },
+              },
+            };
+            break;
+          }
+          case "cede": {
+            console.log(`[LiveKit Cede] Removing child instance ${payload.instanceId}`);
+            const updatedRoot = this.removeInstanceById(machine.instance, payload.instanceId);
+            if (updatedRoot) {
+              machine.instance = updatedRoot;
+            }
+            // Cede content is already enqueued by the pipeline as a conversation message
+            break;
+          }
+          case "transition": {
+            machine.instance = this.updateInstanceById(
+              machine.instance,
+              payload.instanceId,
+              (inst) => ({
+                ...inst,
+                node: payload.node,
+                state: payload.state,
+                executorConfig: payload.executorConfig,
+                children: undefined,
+              })
+            );
+            break;
+          }
+          case "spawn": {
+            const { createInstance } = await import("markov-machines");
+            machine.instance = this.updateInstanceById(
+              machine.instance,
+              payload.parentInstanceId,
+              (inst) => ({
+                ...inst,
+                children: [
+                  ...(inst.children ?? []),
+                  ...payload.children.map(c => createInstance(c.node, c.state, undefined, undefined, c.executorConfig)),
+                ],
+              })
+            );
+            break;
+          }
+          case "suspend": {
+            machine.instance = this.updateInstanceById(
+              machine.instance,
+              payload.instanceId,
+              (inst) => ({ ...inst, suspended: payload.suspendInfo })
+            );
+            break;
           }
         }
-
-        // Update LiveKit config for the new active node (parent)
-        this.pushConfigToLiveKit();
-        
-        return toolResultContent;
       }
 
-      // Non-cede case: replace the active instance in the tree with the updated one
-      const updatedRoot = this.replaceInstanceById(rootInstance, activeInstance.id, result.instance);
-      
-      // Apply pack state updates to root
-      if (result.packStates && Object.keys(result.packStates).length > 0) {
-        machine.instance = {
-          ...updatedRoot,
-          packStates: { ...updatedRoot.packStates, ...result.packStates },
-        };
-      } else {
-        machine.instance = updatedRoot;
+      // Enqueue conversation messages to machine (tool results, assistant messages, etc.)
+      if (conversationMessages.length > 0) {
+        machine.enqueue(conversationMessages);
       }
 
-      // Enqueue tool_result message
-      machine.enqueue([
-        userMessage([
-          { type: "tool_result", tool_use_id: call.id, content: toolResultContent },
-        ]),
-      ]);
-
-      // If active node changed (transition/spawn occurred), update LiveKit config
+      // If active node changed (transition/spawn/cede occurred), update LiveKit config
       const activeInstanceAfter = getActiveInstance(machine.instance);
       if (activeInstanceAfter.node.id !== activeInstance.node.id) {
         console.log(`[LiveKit Node Change] ${activeInstance.node.id} -> ${activeInstanceAfter.node.id}`);
@@ -539,15 +564,15 @@ export class LiveKitExecutor implements Executor {
   }
 
   /**
-   * Replace an instance in the tree by ID.
+   * Update an instance in the tree by ID using an updater function.
    */
-  private replaceInstanceById(
+  private updateInstanceById(
     root: Instance,
     targetId: string,
-    replacement: Instance,
+    updater: (inst: Instance) => Instance,
   ): Instance {
     if (root.id === targetId) {
-      return replacement;
+      return updater(root);
     }
 
     const children = root.children;
@@ -558,7 +583,7 @@ export class LiveKitExecutor implements Executor {
     return {
       ...root,
       children: children.map((child) =>
-        this.replaceInstanceById(child, targetId, replacement),
+        this.updateInstanceById(child, targetId, updater),
       ),
     };
   }
@@ -591,12 +616,12 @@ export class LiveKitExecutor implements Executor {
   }
 
   /**
-   * Extract tool result content from pipeline history.
+   * Extract tool result content from pipeline messages.
    */
-  private extractToolResultContent(history: Array<{ items: unknown }>): string {
-    // Look for tool_result blocks in the history
-    for (const msg of history) {
-      if (Array.isArray(msg.items)) {
+  private extractToolResultContent(messages: MachineMessage[]): string {
+    // Look for tool_result blocks in user messages
+    for (const msg of messages) {
+      if ("role" in msg && msg.role === "user" && Array.isArray(msg.items)) {
         for (const item of msg.items) {
           if (
             typeof item === "object" &&

@@ -5,7 +5,7 @@ import { createNode } from "../core/node.js";
 import { createInstance } from "../types/instance.js";
 import { createMachine } from "../core/machine.js";
 import { getAvailableCommands, runCommand } from "../core/commands.js";
-import { commandValue } from "../types/commands.js";
+import { commandResult } from "../types/commands.js";
 import type { Executor, RunResult, RunOptions } from "../executor/types.js";
 import type { Charter } from "../types/charter.js";
 import type { Instance } from "../types/instance.js";
@@ -19,14 +19,12 @@ function createMockExecutor(): Executor {
     type: "standard",
     run: async (
       _charter: Charter,
-      instance: Instance,
+      _instance: Instance,
       _ancestors: Instance[],
       _input: string,
       _options?: RunOptions,
     ): Promise<RunResult> => {
       return {
-        instance,
-        history: [],
         yieldReason: "end_turn",
       };
     },
@@ -79,7 +77,7 @@ describe("getAvailableCommands", () => {
           inputSchema: z.object({}),
           execute: (_, ctx) => {
             ctx.updateState({ todos: [] });
-            return commandValue(null);
+            return commandResult(null);
           },
         },
         addTodo: {
@@ -89,7 +87,7 @@ describe("getAvailableCommands", () => {
           execute: (input, ctx) => {
             const newTodo = { id: "1", text: input.text, completed: false };
             ctx.updateState({ todos: [...ctx.state.todos, newTodo] });
-            return commandValue(newTodo);
+            return commandResult(newTodo);
           },
         },
       },
@@ -148,7 +146,7 @@ describe("runCommand", () => {
           execute: (input, ctx) => {
             const newTodo = { id: "1", text: input.text, completed: false };
             ctx.updateState({ todos: [...ctx.state.todos, newTodo] });
-            return commandValue(newTodo);
+            return commandResult(newTodo);
           },
         },
       },
@@ -183,7 +181,7 @@ describe("runCommand", () => {
           execute: (input, ctx) => {
             const newTodo = { id: "1", text: input.text, completed: false };
             ctx.updateState({ todos: [...ctx.state.todos, newTodo] });
-            return commandValue(newTodo);
+            return commandResult(newTodo);
           },
         },
       },
@@ -220,7 +218,7 @@ describe("runCommand", () => {
           inputSchema: z.object({}),
           execute: (_, ctx) => {
             ctx.updateState({ todos: [] });
-            return commandValue({ cleared: ctx.state.todos.length });
+            return commandResult({ cleared: ctx.state.todos.length });
           },
         },
       },
@@ -263,7 +261,7 @@ describe("runCommand", () => {
             await new Promise((resolve) => setTimeout(resolve, 10));
             const newTodo = { id: "async-1", text: input.text, completed: false };
             ctx.updateState({ todos: [...ctx.state.todos, newTodo] });
-            return commandValue(newTodo);
+            return commandResult(newTodo);
           },
         },
       },
@@ -467,7 +465,7 @@ describe("createNode command validation", () => {
             name: "correctName",
             description: "Mismatched names",
             inputSchema: z.object({}),
-            execute: () => commandValue(null),
+            execute: () => commandResult(null),
           },
         },
       });

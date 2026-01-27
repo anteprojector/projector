@@ -11,7 +11,7 @@
 import {
   type JobContext,
   type JobProcess,
-  ServerOptions,
+  WorkerOptions,
   cli,
   defineAgent,
   voice,
@@ -193,11 +193,16 @@ export default defineAgent({
       throw err;
     }
 
-    // Callback for persisting external messages when enqueued
+    // Callback for persisting messages when enqueued
+    // Save external messages (user input from LiveKit STT, etc.)
+    // Save assistant messages with displayable content
+    // Skip everything else (command-generated userMessages, etc.)
     const onMessageEnqueue: OnMessageEnqueue = async (message) => {
-      // Only persist external messages (from LiveKit STT/TTS, user input, etc.)
-      if (!message.metadata?.source?.external) {
-        return;
+      const isExternal = message.metadata?.source?.external;
+      const isAssistant = message.role === "assistant";
+
+      if (!isExternal && !isAssistant) {
+        return; // Skip non-external user messages (e.g., command-generated)
       }
 
       // Extract displayable content from the message
@@ -205,21 +210,23 @@ export default defineAgent({
         ? message.items
         : getMessageText(message);
 
-      if (content) {
-        const role = message.role === "assistant" ? "assistant" : "user";
-        console.log(
-          `[DemoAgent] Persisting external ${role} message: "${truncateForLog(content)}"`
-        );
-        try {
-          await convex.mutation(api.messages.add, {
-            sessionId,
-            role,
-            content,
-            turnId: currentTurnId,
-          });
-        } catch (error) {
-          console.error(`[DemoAgent] Failed to persist ${role} message:`, error);
-        }
+      if (!content) {
+        return; // No displayable content
+      }
+
+      const role = message.role === "assistant" ? "assistant" : "user";
+      console.log(
+        `[DemoAgent] Persisting ${role} message: "${truncateForLog(content)}"`
+      );
+      try {
+        await convex.mutation(api.messages.add, {
+          sessionId,
+          role,
+          content,
+          turnId: currentTurnId,
+        });
+      } catch (error) {
+        console.error(`[DemoAgent] Failed to persist ${role} message:`, error);
       }
     };
 
@@ -339,11 +346,29 @@ export default defineAgent({
 
     // Graceful shutdown handling
     let isShuttingDown = false;
+    let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
 
     const cleanup = async () => {
       if (isShuttingDown) return;
       isShuttingDown = true;
       console.log("[DemoAgent] Shutting down...");
+
+      // Stop heartbeat
+      if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+        heartbeatInterval = null;
+      }
+
+      // Mark agent as offline (best-effort)
+      try {
+        await convex.action(api.agentWatchdog.markOffline, {
+          roomName,
+          jobId: ctx.job.id,
+        });
+        console.log("[DemoAgent] Marked offline in watchdog");
+      } catch (e) {
+        console.error("[DemoAgent] Error marking offline:", e);
+      }
 
       // Remove voice session event listeners
       try {
@@ -362,6 +387,30 @@ export default defineAgent({
       console.log("[DemoAgent] Cleanup complete");
       process.exit(0);
     };
+
+    // Start heartbeat to report liveness to watchdog
+    const HEARTBEAT_INTERVAL_MS = 10_000; // 10 seconds
+    const agentIdentity = ctx.room.localParticipant?.identity ?? `agent-${ctx.job.id}`;
+
+    const sendHeartbeat = async () => {
+      if (isShuttingDown) return;
+      try {
+        await convex.action(api.agentWatchdog.heartbeat, {
+          roomName,
+          jobId: ctx.job.id,
+          agentIdentity,
+        });
+      } catch (e) {
+        console.error("[DemoAgent] Heartbeat failed:", e);
+      }
+    };
+
+    // Send initial heartbeat immediately
+    sendHeartbeat();
+
+    // Then send every 10 seconds
+    heartbeatInterval = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+    console.log("[DemoAgent] Heartbeat started");
 
     // Register signal handlers for graceful shutdown
     process.on("SIGTERM", cleanup);
@@ -513,28 +562,6 @@ export default defineAgent({
               displayInstance: serializeInstanceForDisplay(step.instance, demoCharterLiveKit),
               activeNodeInstructions: activeInstance.node.instructions ?? "",
             });
-
-            // Persist messages from step.history to messages table
-            // Skip external source messages (already persisted via onMessageEnqueue)
-            for (const msg of step.history) {
-              if (msg.metadata?.source?.external) {
-                continue;
-              }
-
-              const content = typeof msg.items === "string"
-                ? msg.items
-                : getMessageText(msg);
-
-              if (content) {
-                const role = msg.role === "assistant" ? "assistant" : "user";
-                await convex.mutation(api.messages.add, {
-                  sessionId,
-                  role,
-                  content,
-                  turnId: currentTurnId,
-                });
-              }
-            }
           } catch (err) {
             console.error(`[DemoAgent] Failed to persist step ${stepNumber}:`, err);
           }
@@ -563,4 +590,10 @@ export default defineAgent({
   },
 });
 
-cli.runApp(new ServerOptions({ agent: fileURLToPath(import.meta.url) }));
+// Use explicit agent name to disable auto-dispatch (requires explicit dispatch from watchdog)
+cli.runApp(
+  new WorkerOptions({
+    agent: fileURLToPath(import.meta.url),
+    agentName: "demo-agent",
+  })
+);

@@ -8,6 +8,9 @@
  * @module
  */
 
+import type * as agentWatchdog from "../agentWatchdog.js";
+import type * as agentWatchdogMutations from "../agentWatchdogMutations.js";
+import type * as crons from "../crons.js";
 import type * as http from "../http.js";
 import type * as livekitAgent from "../livekitAgent.js";
 import type * as livekitAgentActions from "../livekitAgentActions.js";
@@ -24,6 +27,9 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  agentWatchdog: typeof agentWatchdog;
+  agentWatchdogMutations: typeof agentWatchdogMutations;
+  crons: typeof crons;
   http: typeof http;
   livekitAgent: typeof livekitAgent;
   livekitAgentActions: typeof livekitAgentActions;

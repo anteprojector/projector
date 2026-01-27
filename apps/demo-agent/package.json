@@ -5,7 +5,7 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "dev": "./scripts/kill-zombies.sh && bun run --watch src/agent.ts dev",
+    "dev": "./scripts/kill-zombies.sh && bun run src/agent.ts dev",
     "start": "node dist/agent.js start",
     "build": "tsc",
     "download-files": "tsx src/agent.ts download-files",

@@ -1,4 +1,7 @@
 import type { Command, Resume } from "./commands.js";
+import type { Node } from "./node.js";
+import type { SuspendInfo } from "./instance.js";
+import type { StandardNodeConfig } from "../executor/types.js";
 
 /**
  * Text content block (simplified for storage).
@@ -46,6 +49,81 @@ export interface OutputBlock<M = unknown> {
   data: M;
 }
 
+// ============================================================================
+// Instance Payloads - All instance mutations are modeled as messages
+// ============================================================================
+
+/**
+ * State update payload - shallow merges patch into instance state.
+ */
+export interface StateUpdatePayload {
+  kind: "state";
+  instanceId: string;
+  patch: Record<string, unknown>;
+}
+
+/**
+ * Pack state update payload - shallow merges patch into pack state.
+ */
+export interface PackStateUpdatePayload {
+  kind: "packState";
+  packName: string;
+  patch: Record<string, unknown>;
+}
+
+/**
+ * Transition payload - replaces node/state, clears children.
+ */
+export interface TransitionPayload {
+  kind: "transition";
+  instanceId: string;
+  node: Node<unknown, unknown>;
+  state?: unknown;
+  executorConfig?: StandardNodeConfig;
+}
+
+/**
+ * Spawn payload - adds children to parent instance.
+ */
+export interface SpawnPayload {
+  kind: "spawn";
+  parentInstanceId: string;
+  children: Array<{
+    node: Node<unknown, unknown>;
+    state?: unknown;
+    executorConfig?: StandardNodeConfig;
+  }>;
+}
+
+/**
+ * Cede payload - removes instance from tree, optionally with content for parent.
+ */
+export interface CedePayload<M = unknown> {
+  kind: "cede";
+  instanceId: string;
+  content?: string | MachineMessage<M>[];
+}
+
+/**
+ * Suspend payload - marks instance as suspended.
+ */
+export interface SuspendPayload {
+  kind: "suspend";
+  instanceId: string;
+  suspendInfo: SuspendInfo;
+}
+
+/**
+ * Union of all instance mutation payloads.
+ */
+export type InstancePayload<M = unknown> =
+  | StateUpdatePayload
+  | PackStateUpdatePayload
+  | TransitionPayload
+  | SpawnPayload
+  | CedePayload<M>
+  | SuspendPayload;
+
 /**
  * Union of all machine item types.
  * @typeParam M - The application message type for OutputBlock (defaults to unknown).
@@ -71,11 +149,14 @@ export function isOutputBlock<M>(
 /**
  * Source attribution for a message.
  * - instanceId: ID of the instance that generated this message
+ * - isPrimary: true if from the primary (non-worker) leaf instance
  * - external: true if message came from outside the machine (user transcript, LiveKit STT, etc.)
  */
 export interface MessageSource {
   /** ID of the instance that generated this message */
   instanceId?: string;
+  /** True if this message is from the primary (non-worker) leaf instance */
+  isPrimary?: boolean;
   /** True if message originated from outside the machine (e.g., user speech, external system) */
   external?: boolean;
 }
@@ -96,16 +177,38 @@ export interface MessageMetadata {
 }
 
 /**
- * Message in the conversation history.
- * Matches Anthropic SDK format with optional metadata.
- * @typeParam M - The application message type for OutputBlock (defaults to unknown).
+ * Base message with common fields.
  */
-export interface MachineMessage<M = unknown> {
-  role: "user" | "assistant" | "system" | "command";
-  items: string | MachineItem<M>[];
+interface BaseMessage {
   /** Optional metadata for message attribution */
   metadata?: MessageMetadata;
 }
+
+/**
+ * Conversation message (user, assistant, system, command).
+ * @typeParam M - The application message type for OutputBlock (defaults to unknown).
+ */
+export interface ConversationMessage<M = unknown> extends BaseMessage {
+  role: "user" | "assistant" | "system" | "command";
+  items: string | MachineItem<M>[];
+}
+
+/**
+ * Instance mutation message.
+ * Contains a payload describing a state update, transition, spawn, cede, or suspend.
+ * @typeParam M - The application message type (defaults to unknown).
+ */
+export interface InstanceMessage<M = unknown> extends BaseMessage {
+  role: "instance";
+  items: InstancePayload<M>;
+}
+
+/**
+ * Message in the conversation history.
+ * Can be a conversation message or an instance mutation message.
+ * @typeParam M - The application message type for OutputBlock (defaults to unknown).
+ */
+export type MachineMessage<M = unknown> = ConversationMessage<M> | InstanceMessage<M>;
 
 /**
  * Create a user message.
@@ -177,6 +280,23 @@ export function commandMessage<M = unknown>(
 }
 
 /**
+ * Create an instance message.
+ * Instance messages describe mutations to the machine's instance tree.
+ * @param payload - The instance mutation payload
+ * @param source - Optional source attribution for this message
+ */
+export function instanceMessage<M = unknown>(
+  payload: InstancePayload<M>,
+  source?: MessageSource,
+): InstanceMessage<M> {
+  return {
+    role: "instance",
+    items: payload,
+    ...(source && { metadata: { source } }),
+  };
+}
+
+/**
  * Create a tool result block.
  */
 export function toolResult(
@@ -192,10 +312,46 @@ export function toolResult(
   };
 }
 
+// ============================================================================
+// Type Guards
+// ============================================================================
+
+/**
+ * Check if a message is a conversation message (user, assistant, system, command).
+ */
+export function isConversationMessage<M = unknown>(
+  message: MachineMessage<M>,
+): message is ConversationMessage<M> {
+  return message.role !== "instance";
+}
+
+/**
+ * Check if a message is an instance mutation message.
+ */
+export function isInstanceMessage<M = unknown>(
+  message: MachineMessage<M>,
+): message is InstanceMessage<M> {
+  return message.role === "instance";
+}
+
+/**
+ * Check if a message should be sent to the model (user or assistant only).
+ */
+export function isModelMessage<M = unknown>(
+  message: MachineMessage<M>,
+): message is ConversationMessage<M> {
+  return message.role === "user" || message.role === "assistant";
+}
+
 /**
  * Extract text from a message's items.
+ * Returns empty string for instance messages.
  */
 export function getMessageText<M = unknown>(message: MachineMessage<M>): string {
+  // Instance messages have no text content
+  if (message.role === "instance") {
+    return "";
+  }
   if (typeof message.items === "string") {
     return message.items;
   }

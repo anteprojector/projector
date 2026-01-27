@@ -3,7 +3,9 @@
 import { v } from "convex/values";
 import { action } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { AccessToken } from "livekit-server-sdk";
+import { AccessToken, AgentDispatchClient } from "livekit-server-sdk";
+
+const AGENT_NAME = "demo-agent";
 
 /**
  * Voice Mode Actions (Node.js Runtime)
@@ -50,6 +52,30 @@ export const getToken = action({
       sessionId,
       roomName,
     });
+
+    // Update user connected timestamp for watchdog
+    await ctx.runMutation(internal.agentWatchdogMutations.updateUserConnected, {
+      roomName,
+      timestamp: Date.now(),
+    });
+
+    // Dispatch agent to the room (idempotent - agent will only join if not already present)
+    try {
+      const httpUrl = url.replace("wss://", "https://").replace("ws://", "http://");
+      const agentDispatch = new AgentDispatchClient(httpUrl, apiKey, apiSecret);
+      
+      await agentDispatch.createDispatch(roomName, AGENT_NAME, {
+        metadata: JSON.stringify({
+          reason: "user_token_request",
+          sessionId,
+          dispatchedAt: Date.now(),
+        }),
+      });
+      console.log(`[getToken] Dispatched agent to room ${roomName}`);
+    } catch (error) {
+      // Log but don't fail - watchdog will dispatch if needed
+      console.error(`[getToken] Failed to dispatch agent:`, error);
+    }
 
     return {
       token: await at.toJwt(),

@@ -52,6 +52,16 @@ export default defineSchema({
     sessionId: v.id("sessions"),
     roomName: v.string(),
     createdAt: v.number(),
+    // Agent presence tracking for watchdog
+    lastHeartbeatAt: v.optional(v.number()),
+    lastAgentIdentity: v.optional(v.string()),
+    lastAgentJobId: v.optional(v.string()),
+    // Dispatch lease to prevent duplicate dispatches
+    dispatchLeaseToken: v.optional(v.string()),
+    dispatchLeaseExpiresAt: v.optional(v.number()),
+    lastDispatchAt: v.optional(v.number()),
+    // User activity tracking
+    lastUserConnectedAt: v.optional(v.number()),
   })
     .index("by_session", ["sessionId"])
     .index("by_room", ["roomName"]),

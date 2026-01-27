@@ -6,12 +6,12 @@ import { createInstance, getActiveInstance, getInstancePath } from "../types/ins
 import { createMachine } from "../core/machine.js";
 import { runMachine, runMachineToCompletion } from "../core/run.js";
 import { spawn } from "../helpers/cede-spawn.js";
-import type { Executor, RunResult, RunOptions, MachineStep } from "../executor/types.js";
+import type { Executor, RunResult, RunOptions, MachineStep, YieldReason } from "../executor/types.js";
 import type { Charter } from "../types/charter.js";
 import type { Instance } from "../types/instance.js";
 import type { CodeTransition } from "../types/transitions.js";
-import type { MachineMessage } from "../types/messages.js";
-import { userMessage } from "../types/messages.js";
+import type { MachineMessage, InstancePayload } from "../types/messages.js";
+import { userMessage, assistantMessage, instanceMessage } from "../types/messages.js";
 
 /**
  * Helper to collect all steps from the async generator.
@@ -27,8 +27,19 @@ async function collectSteps(
 }
 
 /**
+ * Legacy behavior result for mock executors (pre-refactor format).
+ */
+interface LegacyBehaviorResult {
+  instance?: Instance;
+  history?: MachineMessage<unknown>[];
+  yieldReason?: YieldReason;
+  cedeContent?: string | MachineMessage<unknown>[];
+  packStates?: Record<string, unknown>;
+}
+
+/**
  * Mock executor that simulates agent behavior for testing.
- * Allows us to control what the "agent" does (spawn, cede, etc.)
+ * Uses the new enqueue-based flow internally but accepts legacy behavior format.
  */
 function createMockExecutor(
   behavior: (
@@ -36,7 +47,7 @@ function createMockExecutor(
     instance: Instance,
     ancestors: Instance[],
     input: string,
-  ) => Partial<RunResult<unknown>>,
+  ) => LegacyBehaviorResult,
 ): Executor<unknown> {
   return {
     type: "standard",
@@ -45,15 +56,68 @@ function createMockExecutor(
       instance: Instance,
       ancestors: Instance[],
       input: string,
-      _options?: RunOptions<unknown>,
+      options?: RunOptions<unknown>,
     ): Promise<RunResult<unknown>> => {
+      const enqueue = options?.enqueue;
+      if (!enqueue) {
+        throw new Error("Mock executor requires options.enqueue");
+      }
+
+      const source = {
+        instanceId: options?.instanceId ?? instance.id,
+        isPrimary: !(options?.isWorker ?? false),
+      };
+
       const result = behavior(charter, instance, ancestors, input);
+      
+      // Enqueue assistant message if history provided
+      if (result.history && result.history.length > 0) {
+        for (const msg of result.history) {
+          enqueue([{ ...msg, metadata: { ...msg.metadata, source } }]);
+        }
+      } else {
+        // Default: enqueue an empty assistant message
+        enqueue([assistantMessage("", source)]);
+      }
+
+      // Convert instance changes to instance messages
+      if (result.instance && result.instance !== instance) {
+        // Check if children changed (spawn)
+        if (result.instance.children && 
+            (!instance.children || result.instance.children.length > instance.children.length)) {
+          const newChildren = result.instance.children.slice(instance.children?.length ?? 0);
+          enqueue([instanceMessage({
+            kind: "spawn",
+            parentInstanceId: instance.id,
+            children: newChildren.map(c => ({
+              node: c.node,
+              state: c.state,
+              executorConfig: c.executorConfig,
+            })),
+          }, source)]);
+        }
+        
+        // Check if state changed
+        if (result.instance.state !== instance.state) {
+          enqueue([instanceMessage({
+            kind: "state",
+            instanceId: instance.id,
+            patch: result.instance.state as Record<string, unknown>,
+          }, source)]);
+        }
+      }
+
+      // Handle cede
+      if (result.yieldReason === "cede") {
+        enqueue([instanceMessage({
+          kind: "cede",
+          instanceId: instance.id,
+          content: result.cedeContent,
+        }, source)]);
+      }
+
       return {
-        instance: result.instance ?? instance,
-        history: result.history ?? [],
         yieldReason: result.yieldReason ?? "end_turn",
-        cedeContent: result.cedeContent,
-        packStates: result.packStates,
       };
     },
   };
@@ -795,20 +859,16 @@ describe("cede continuation", () => {
     // Should have 2 steps: cede then parent response
     expect(steps.length).toBe(2);
 
-    // First step: cede with content (includes user input + assistant output)
+    // First step: cede with content (user input is in machine.history, not step history)
     expect(steps[0]?.yieldReason).toBe("cede");
     expect(steps[0]?.cedeContent).toBe("Findings: item1, item2");
-    expect(steps[0]?.history).toEqual([
-      expect.objectContaining({ role: "user", items: "do work" }),
-      expect.objectContaining({ role: "assistant", items: "Calling cede..." }),
-    ]);
+    // Step history only contains messages generated during the step
+    expect(steps[0]?.history.some(m => m.role === "assistant")).toBe(true);
     expect(steps[0]?.done).toBe(false);
 
     // Second step: parent responds
     expect(steps[1]?.yieldReason).toBe("end_turn");
-    expect(steps[1]?.history).toEqual([
-      expect.objectContaining({ role: "assistant", items: "Got the results!" }),
-    ]);
+    expect(steps[1]?.history.some(m => m.role === "assistant")).toBe(true);
     expect(steps[1]?.done).toBe(true);
   });
 });

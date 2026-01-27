@@ -8,7 +8,7 @@ import {
   hydrateClientNode,
   hydrateClientInstance,
 } from "../core/client.js";
-import { isCommand, commandValue } from "../types/commands.js";
+import { isCommand, commandResult } from "../types/commands.js";
 import { createPack } from "../core/pack.js";
 
 // Simple state schema for testing
@@ -50,7 +50,7 @@ describe("createDryClientNode", () => {
           inputSchema: z.object({}),
           execute: (_, ctx) => {
             ctx.updateState({ todos: [] });
-            return commandValue(null);
+            return commandResult(null);
           },
         },
         addTodo: {
@@ -60,7 +60,7 @@ describe("createDryClientNode", () => {
           execute: (input, ctx) => {
             const newTodo = { id: "1", text: input.text, completed: false };
             ctx.updateState({ todos: [...ctx.state.todos, newTodo] });
-            return commandValue(newTodo);
+            return commandResult(newTodo);
           },
         },
       },
@@ -147,7 +147,7 @@ describe("createDryClientInstance", () => {
     expect(dryInstance.packs).toBeDefined();
     expect(dryInstance.packs).toHaveLength(1);
 
-    const pack = dryInstance.packs![0];
+    const pack = dryInstance.packs![0]!;
     expect(pack.name).toBe("testPack");
     expect(pack.description).toBe("Test pack with commands");
     expect(pack.state).toEqual({ counter: 42 });
@@ -156,10 +156,10 @@ describe("createDryClientInstance", () => {
     // Pack commands
     expect(Object.keys(pack.commands)).toHaveLength(2);
     expect(pack.commands.incrementCounter).toBeDefined();
-    expect(pack.commands.incrementCounter?.name).toBe("incrementCounter");
-    expect(pack.commands.incrementCounter?.description).toBe("Increment the counter");
+    expect(pack.commands.incrementCounter!.name).toBe("incrementCounter");
+    expect(pack.commands.incrementCounter!.description).toBe("Increment the counter");
     expect(pack.commands.resetCounter).toBeDefined();
-    expect(pack.commands.resetCounter?.name).toBe("resetCounter");
+    expect(pack.commands.resetCounter!.name).toBe("resetCounter");
   });
 
   it("should use initialState when packStates not provided", () => {
@@ -181,7 +181,7 @@ describe("createDryClientInstance", () => {
     const dryInstance = createDryClientInstance(instance);
 
     expect(dryInstance.packs).toHaveLength(1);
-    expect(dryInstance.packs![0].state).toEqual({ counter: 100 });
+    expect(dryInstance.packs![0]!.state).toEqual({ counter: 100 });
   });
 });
 
@@ -199,7 +199,7 @@ describe("hydrateClientNode", () => {
           execute: (input, ctx) => {
             const newTodo = { id: "1", text: input.text, completed: false };
             ctx.updateState({ todos: [...ctx.state.todos, newTodo] });
-            return commandValue(newTodo);
+            return commandResult(newTodo);
           },
         },
       },
@@ -235,7 +235,7 @@ describe("hydrateClientInstance", () => {
           inputSchema: z.object({}),
           execute: (_, ctx) => {
             ctx.updateState({ todos: [] });
-            return commandValue(null);
+            return commandResult(null);
           },
         },
       },
@@ -299,14 +299,14 @@ describe("hydrateClientInstance", () => {
     expect(clientInstance.packs).toBeDefined();
     expect(clientInstance.packs).toHaveLength(1);
 
-    const pack = clientInstance.packs![0];
+    const pack = clientInstance.packs![0]!;
     expect(pack.name).toBe("testPack");
     expect(pack.state).toEqual({ counter: 42 });
     expect(pack.validator).toBeDefined();
 
     // Pack command should be callable
     expect(typeof pack.commands.incrementCounter).toBe("function");
-    const command = pack.commands.incrementCounter({ amount: 5 });
+    const command = pack.commands.incrementCounter!({ amount: 5 });
     expect(isCommand(command)).toBe(true);
     expect(command.name).toBe("incrementCounter");
     expect(command.input).toEqual({ amount: 5 });

@@ -15,6 +15,7 @@ import {
   shiftHeldAtom,
   isLiveModeAtom,
   liveClientAtom,
+  voiceAgentConnectedAtom,
   type AgentTab,
 } from "@/src/atoms";
 import { useSessionId } from "@/src/hooks";
@@ -41,6 +42,7 @@ export function HomeClient({
   const setShiftHeld = useSetAtom(shiftHeldAtom);
   const isLiveMode = useAtomValue(isLiveModeAtom);
   const setLiveClient = useSetAtom(liveClientAtom);
+  const voiceAgentConnected = useAtomValue(voiceAgentConnectedAtom);
 
   const terminalInputRef = useRef<HTMLTextAreaElement>(null);
   const agentPaneRef = useRef<HTMLDivElement>(null);
@@ -161,6 +163,12 @@ export function HomeClient({
   const handleSend = async () => {
     if (!sessionId || !input.trim() || isLoading) return;
 
+    // Check agent connection before clearing input
+    if (!voiceAgentConnected) {
+      alert("No agent is connected. Please try again later.");
+      return;
+    }
+
     const message = input.trim();
     setInput("");
     setIsLoading(true);
@@ -186,13 +194,37 @@ export function HomeClient({
     setSessionId(null);
   }, [setSessionId]);
 
-  // Extract theme from session instance packs
-  const themePack = session?.instance?.packs?.find(
-    (p: { name: string }) => p.name === "theme"
-  );
-  const theme = themePack?.state as
-    | { hue: number; saturation: number; animated: boolean; gradient: boolean }
-    | undefined;
+  // Extract theme from session instance packs (supports array or keyed map)
+  const theme = (() => {
+    type ThemeState = { hue: number; saturation: number; animated: boolean; gradient: boolean };
+    const getThemeFromInstance = (instance: unknown): ThemeState | undefined => {
+      if (!instance || typeof instance !== "object") return undefined;
+      const packs = (instance as { packs?: unknown }).packs;
+      if (!packs) return undefined;
+
+      if (Array.isArray(packs)) {
+        const themePack = packs.find((p) => (p as { name?: string })?.name === "theme");
+        return (themePack as { state?: ThemeState } | undefined)?.state;
+      }
+
+      if (typeof packs === "object") {
+        const themePack = (packs as Record<string, unknown>)["theme"];
+        if (!themePack || typeof themePack !== "object") return undefined;
+        return ("state" in themePack
+          ? (themePack as { state?: ThemeState }).state
+          : (themePack as ThemeState));
+      }
+
+      return undefined;
+    };
+
+    return (
+      getThemeFromInstance(session?.instance) ??
+      getThemeFromInstance(session?.displayInstance) ??
+      ((session as { instance?: { packStates?: Record<string, unknown> } })?.instance?.packStates
+        ?.theme as ThemeState | undefined)
+    );
+  })();
 
   if (!sessionId) {
     return (

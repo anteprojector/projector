@@ -41,10 +41,10 @@ export async function executeTool<S>(
       };
     }
 
-    // Create getInstanceMessages function that filters by sourceInstanceId
+    // Create getInstanceMessages function that filters by source.instanceId
     const getInstanceMessages = (): MachineMessage[] => {
       return history.filter(
-        (msg) => msg.metadata?.sourceInstanceId === instanceId
+        (msg) => msg.metadata?.source?.instanceId === instanceId
       );
     };
 

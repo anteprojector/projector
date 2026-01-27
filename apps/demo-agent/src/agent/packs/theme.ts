@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createPack } from "markov-machines";
+import { commandResult, createPack } from "markov-machines";
 
 export const themeStateValidator = z.object({
   hue: z.number().min(0).max(360).default(120), // 120 = green (current default)
@@ -201,7 +201,7 @@ function parseColorInput(input: string): ParsedTheme {
   }
   // Try RGB format: rgb(255, 0, 128) or 255,0,128
   else if (colorPart.match(/^rgb\s*\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)$/i) ||
-           colorPart.match(/^\d+\s*,\s*\d+\s*,\s*\d+$/)) {
+    colorPart.match(/^\d+\s*,\s*\d+\s*,\s*\d+$/)) {
     const nums = colorPart.match(/\d+/g);
     if (nums && nums.length >= 3) {
       const r = Math.min(255, parseInt(nums[0]!));
@@ -279,6 +279,7 @@ export const themePack = createPack({
       inputSchema: z.object({}),
       execute: (_input, ctx) => {
         const { animated, gradient } = ctx.state;
+        console.log('toggle theme', animated, gradient)
 
         if (!animated && !gradient) {
           // static → gradient
@@ -290,6 +291,7 @@ export const themePack = createPack({
           // flux → static
           ctx.updateState({ animated: false, gradient: false });
         }
+        return commandResult(ctx.state)
       },
     },
   },
