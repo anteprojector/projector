@@ -79,6 +79,12 @@ export class LiveKitExecutor implements Executor {
   /** Track the last history length we bootstrapped from, to avoid re-bootstrapping unchanged history */
   private lastBootstrappedHistoryLength = 0;
 
+  /** Track registered event handlers for cleanup on reconnect */
+  private eventHandlers: {
+    userInputTranscribed?: (ev: any) => void;
+    conversationItemAdded?: (ev: any) => void;
+  } = {};
+
   constructor(config: LiveKitExecutorConfig = {}) {
     this.config = config;
     this.workerExecutor = createStandardExecutor({
@@ -200,25 +206,47 @@ export class LiveKitExecutor implements Executor {
   }
 
   /**
+   * Clean up previously registered event handlers.
+   * Called before setting up new handlers to prevent accumulation.
+   */
+  private cleanupEventHandlers(): void {
+    if (!this.session) return;
+
+    if (this.eventHandlers.userInputTranscribed) {
+      this.session.off(voice.AgentSessionEventTypes.UserInputTranscribed, this.eventHandlers.userInputTranscribed);
+      this.log("Removed UserInputTranscribed handler");
+    }
+    if (this.eventHandlers.conversationItemAdded) {
+      this.session.off(voice.AgentSessionEventTypes.ConversationItemAdded, this.eventHandlers.conversationItemAdded);
+      this.log("Removed ConversationItemAdded handler");
+    }
+    this.eventHandlers = {};
+  }
+
+  /**
    * Set up LiveKit event handlers that enqueue messages to the machine.
    */
   private setupEventHandlers(): void {
     if (!this.session || !this.machine) return;
 
+    // Clean up any existing handlers first to prevent accumulation
+    this.cleanupEventHandlers();
+
     const session = this.session;
     const machine = this.machine;
 
-    // User speech transcription
-    session.on(voice.AgentSessionEventTypes.UserInputTranscribed, (ev) => {
+    // User speech transcription - store reference for later cleanup
+    this.eventHandlers.userInputTranscribed = (ev) => {
       if (ev.isFinal) {
         this.log(`User transcript: "${ev.transcript}"`);
         // Mark as external (from LiveKit STT)
         machine.enqueue([userMessage(ev.transcript, { source: { external: true } })]);
       }
-    });
+    };
+    session.on(voice.AgentSessionEventTypes.UserInputTranscribed, this.eventHandlers.userInputTranscribed);
 
-    // Assistant speech / conversation items
-    session.on(voice.AgentSessionEventTypes.ConversationItemAdded, (ev) => {
+    // Assistant speech / conversation items - store reference for later cleanup
+    this.eventHandlers.conversationItemAdded = (ev) => {
       const item = ev.item;
       const currentActiveNode = getActiveInstance(machine.instance);
       const currentToolNames = this.agent?._tools ? Object.keys(this.agent._tools) : [];
@@ -243,7 +271,8 @@ export class LiveKitExecutor implements Executor {
           machine.enqueue([assistantMessage(content, { source: { external: true } })]);
         }
       }
-    });
+    };
+    session.on(voice.AgentSessionEventTypes.ConversationItemAdded, this.eventHandlers.conversationItemAdded);
 
     // Tool calls - handled via function_call events
     // Note: LiveKit tools are registered separately; here we intercept calls
