@@ -11,6 +11,7 @@ export const create = mutation({
   handler: async (ctx, { instanceId, instance, displayInstance }) => {
     const sessionId = await ctx.db.insert("sessions", {
       currentTurnId: undefined,
+      branchRootTurnId: undefined,
     });
 
     const turnId = await ctx.db.insert("machineTurns", {
@@ -23,7 +24,10 @@ export const create = mutation({
       createdAt: Date.now(),
     });
 
-    await ctx.db.patch(sessionId, { currentTurnId: turnId });
+    await ctx.db.patch(sessionId, {
+      currentTurnId: turnId,
+      branchRootTurnId: turnId,  // Initial branch root is the first turn
+    });
 
     return sessionId;
   },
@@ -41,6 +45,7 @@ export const get = query({
     return {
       sessionId: id,
       turnId: session.currentTurnId,
+      branchRootTurnId: session.branchRootTurnId,  // For time travel detection
       instanceId: currentTurn.instanceId,
       instance: currentTurn.instance,
       displayInstance: currentTurn.displayInstance,
@@ -128,7 +133,10 @@ export const timeTravel = mutation({
       throw new Error("Target turn belongs to a different session");
     }
 
-    await ctx.db.patch(sessionId, { currentTurnId: targetTurnId });
+    await ctx.db.patch(sessionId, {
+      currentTurnId: targetTurnId,
+      branchRootTurnId: targetTurnId,  // User is starting a new branch from this turn
+    });
   },
 });
 

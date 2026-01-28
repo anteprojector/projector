@@ -166,6 +166,7 @@ export const getAgentInit = query({
     return {
       sessionId,
       turnId: session.currentTurnId,
+      branchRootTurnId: session.branchRootTurnId,  // For time travel detection
       instanceId: currentTurn.instanceId,
       instance: currentTurn.instance,
       displayInstance: currentTurn.displayInstance,

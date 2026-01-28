@@ -4,6 +4,7 @@ import { v } from "convex/values";
 export default defineSchema({
   sessions: defineTable({
     currentTurnId: v.optional(v.id("machineTurns")),
+    branchRootTurnId: v.optional(v.id("machineTurns")),  // Only changes on user-initiated time travel
   }),
 
   machineTurns: defineTable({

@@ -179,39 +179,23 @@ export default defineAgent({
       return;
     }
 
-    const { sessionId, turnId: initialTurnId, instance: serializedInstance, history: rawHistory } = agentInit;
-    let currentTurnId = initialTurnId;
-    const history = rawHistory as MachineMessage[];
-    console.log(`[DemoAgent] Session ID: ${sessionId}, ${history.length} history messages`);
+    const { sessionId, turnId: initialTurnId, branchRootTurnId: initialBranchRootTurnId, instance: serializedInstance, history: rawHistory } = agentInit;
+    const initialHistory = rawHistory as MachineMessage[];
+    console.log(`[DemoAgent] Session ID: ${sessionId}, ${initialHistory.length} history messages`);
 
-    // Deserialize instance from session
-    console.log("[DemoAgent] Deserializing instance...");
-    let instance;
-    try {
-      instance = deserializeInstance(demoCharterLiveKit, serializedInstance as any);
-      console.log(`[DemoAgent] Instance deserialized: node=${instance.node?.id}`);
-    } catch (err) {
-      console.error("[DemoAgent] deserializeInstance FAILED:", err);
-      throw err;
-    }
-
-    // Subscribe to session changes (for time travel support)
-    // When user time travels, update both the turn ID and machine state
-    convex.onUpdate(api.sessions.get, { id: sessionId }, (session) => {
-      if (session?.turnId && session.turnId !== currentTurnId) {
-        console.log(`[DemoAgent] Time travel detected: ${currentTurnId} -> ${session.turnId}`);
-        currentTurnId = session.turnId;
-        // Also update machine state to match the traveled-to turn
-        if (session.instance) {
-          try {
-            instance = deserializeInstance(demoCharterLiveKit, session.instance as any);
-            console.log(`[DemoAgent] Instance updated: node=${instance.node?.id}`);
-          } catch (err) {
-            console.error("[DemoAgent] Failed to deserialize time-traveled instance:", err);
-          }
-        }
-      }
-    });
+    // Mutable context - all closures reference this instead of local variables
+    // This enables safe time travel by swapping the machine without breaking references
+    const context: {
+      machine: Machine | null;
+      currentTurnId: typeof initialTurnId;
+      branchRootTurnId: typeof initialBranchRootTurnId;  // Only changes on user-initiated time travel
+      generation: number;
+    } = {
+      machine: null,
+      currentTurnId: initialTurnId,
+      branchRootTurnId: initialBranchRootTurnId,
+      generation: 0,
+    };
 
     // Callback for persisting messages when enqueued
     // Save external messages (user input from LiveKit STT, etc.)
@@ -243,25 +227,34 @@ export default defineAgent({
           sessionId,
           role,
           content,
-          turnId: currentTurnId,
+          turnId: context.currentTurnId,
         });
       } catch (error) {
         console.error(`[DemoAgent] Failed to persist ${role} message:`, error);
       }
     };
 
-    // Create machine with loaded state
-    console.log("[DemoAgent] Creating machine...");
-    let machine;
-    try {
-      machine = createMachine(demoCharterLiveKit, {
+    // Function to create a machine from serialized state
+    const initMachine = (serializedInst: unknown, history: MachineMessage[]): Machine => {
+      const instance = deserializeInstance(demoCharterLiveKit, serializedInst as any);
+      console.log(`[DemoAgent] Instance deserialized: node=${instance.node?.id}`);
+
+      const machine = createMachine(demoCharterLiveKit, {
         instance,
         history: filterValidMessages(history),
         onMessageEnqueue,
       });
       console.log(`[DemoAgent] Machine created with node: ${machine.instance.node.id}`);
+
+      return machine;
+    };
+
+    // Create initial machine
+    console.log("[DemoAgent] Creating initial machine...");
+    try {
+      context.machine = initMachine(serializedInstance, initialHistory);
     } catch (err) {
-      console.error("[DemoAgent] createMachine FAILED:", err);
+      console.error("[DemoAgent] Initial machine creation FAILED:", err);
       throw err;
     }
 
@@ -300,7 +293,7 @@ export default defineAgent({
     const liveKitExecutor = getLiveKitExecutor();
     console.log("[DemoAgent] Connecting executor to machine...");
     try {
-      await liveKitExecutor.connect(machine, {
+      await liveKitExecutor.connect(context.machine!, {
         session: voiceSession,
         agent,
         room: ctx.room,
@@ -323,8 +316,8 @@ export default defineAgent({
 
     // Create a turn when user starts speaking in live mode
     voiceSession.on(voice.AgentSessionEventTypes.UserStateChanged, async (ev) => {
-      if (ev.newState === "speaking" && liveKitExecutor.isLive) {
-        const activeInstance = getActiveInstance(machine.instance);
+      if (ev.newState === "speaking" && liveKitExecutor.isLive && context.machine) {
+        const activeInstance = getActiveInstance(context.machine.instance);
         await createTurn(activeInstance.id, "[voice input]");
         console.log("[DemoAgent] Created turn for voice input");
       }
@@ -379,15 +372,16 @@ export default defineAgent({
 
     // Helper to create a new turn when user message is received
     const createTurn = async (instanceId: string, userContent: string) => {
+      if (!context.machine) return null;
       try {
         const newTurnId = await convex.mutation(api.machineTurns.create, {
           sessionId,
-          parentId: currentTurnId,
+          parentId: context.currentTurnId,
           instanceId,
-          instance: serializeInstance(machine.instance, demoCharterLiveKit),
-          displayInstance: serializeInstanceForDisplay(machine.instance, demoCharterLiveKit),
+          instance: serializeInstance(context.machine.instance, demoCharterLiveKit),
+          displayInstance: serializeInstanceForDisplay(context.machine.instance, demoCharterLiveKit),
         });
-        currentTurnId = newTurnId;
+        context.currentTurnId = newTurnId;
 
         console.log(`[DemoAgent] Created turn: ${newTurnId}`);
         return newTurnId;
@@ -401,15 +395,16 @@ export default defineAgent({
     const updateTurn = async (
       step: MachineStep,
       allMessages: MachineMessage[],
+      turnId: typeof context.currentTurnId,
     ) => {
       try {
         await convex.mutation(api.sessions.finalizeTurn, {
-          turnId: currentTurnId,
+          turnId,
           instance: serializeInstance(step.instance, demoCharterLiveKit),
           displayInstance: serializeInstanceForDisplay(step.instance, demoCharterLiveKit),
           messages: allMessages,
         });
-        console.log(`[DemoAgent] Updated turn: ${currentTurnId}`);
+        console.log(`[DemoAgent] Updated turn: ${turnId}`);
       } catch (error) {
         console.error("[DemoAgent] Failed to update turn:", error);
       }
@@ -425,15 +420,19 @@ export default defineAgent({
         const { payload } = data;
         console.log(`[DemoAgent] RPC sendMessage: "${payload.slice(0, 80)}..."`);
 
+        if (!context.machine) {
+          throw new Error("Machine not initialized");
+        }
+
         try {
           // Create a new turn for this user message
-          const activeInstance = getActiveInstance(machine.instance);
+          const activeInstance = getActiveInstance(context.machine.instance);
           await createTurn(activeInstance.id, payload);
 
           // Enqueue the user message for the main loop to process
           // external: true marks this as a user-originated message (from RPC)
           const message = userMessage(payload, { source: { external: true } });
-          machine.enqueue([message]);
+          context.machine.enqueue([message]);
 
           console.log("[DemoAgent] RPC message enqueued");
           return JSON.stringify(message);
@@ -462,6 +461,13 @@ export default defineAgent({
         const { payload } = data;
         console.log(`[DemoAgent] RPC executeCommand: ${payload}`);
 
+        if (!context.machine) {
+          return JSON.stringify({
+            success: false,
+            error: "Machine not initialized",
+          });
+        }
+
         try {
           const { commandName, input } = JSON.parse(payload) as {
             commandName: string;
@@ -470,13 +476,13 @@ export default defineAgent({
 
           // Execute command directly (runCommand enqueues the command message for history)
           const { machine: updatedMachine, result } = await runCommand(
-            machine,
+            context.machine,
             commandName,
             input,
           );
 
           // Update machine state
-          machine.instance = updatedMachine.instance;
+          context.machine.instance = updatedMachine.instance;
 
           console.log(`[DemoAgent] Command ${commandName} executed: ${result.success ? "success" : result.error}`);
           return JSON.stringify({
@@ -496,12 +502,26 @@ export default defineAgent({
 
     console.log("[DemoAgent] RPC methods registered");
 
-    // Main machine loop - processes turns continuously
-    const runMainLoop = async () => {
-      console.log("[DemoAgent] Starting main machine loop...");
-      while (!isShuttingDown) {
-        await machine.waitForQueue();
-        if (isShuttingDown) break;
+    // Machine loop - processes turns continuously, exits when generation changes
+    const startMachineLoop = async (loopGeneration: number) => {
+      console.log(`[DemoAgent] Starting machine loop (generation ${loopGeneration})...`);
+
+      while (context.generation === loopGeneration && !isShuttingDown) {
+        if (!context.machine) {
+          console.error("[DemoAgent] Machine is null in loop");
+          break;
+        }
+
+        await context.machine.waitForQueue();
+
+        // Check again after waking - might have been time traveled or shut down
+        if (context.generation !== loopGeneration || isShuttingDown) {
+          console.log(`[DemoAgent] Loop generation ${loopGeneration} exiting after waitForQueue (current: ${context.generation})`);
+          break;
+        }
+
+        // Capture the turn ID at the start of processing
+        const turnIdForThisTurn = context.currentTurnId;
 
         // Set processing = true
         await convex.mutation(api.sessionEphemera.setProcessing, {
@@ -513,8 +533,14 @@ export default defineAgent({
         const allMessages: MachineMessage[] = [];
         let stepNumber = 0;
 
-        for await (const step of runMachine(machine)) {
+        for await (const step of runMachine(context.machine)) {
           stepNumber++;
+
+          // Check after each step - exit gracefully if time traveled
+          if (context.generation !== loopGeneration) {
+            console.log(`[DemoAgent] Time travel detected mid-turn at step ${stepNumber}, exiting loop`);
+            break;
+          }
 
           const msgCount = step.history.length;
           const msgDesc = describeMessages(step.history);
@@ -527,7 +553,7 @@ export default defineAgent({
             console.log("%%% add machine step", truncateForLog(responseText));
             await convex.mutation(api.machineSteps.add, {
               sessionId,
-              turnId: currentTurnId,
+              turnId: turnIdForThisTurn,
               stepNumber,
               yieldReason: step.yieldReason,
               response: responseText,
@@ -549,10 +575,11 @@ export default defineAgent({
           await liveKitExecutor.pushConfigToLiveKit();
         }
 
-        if (lastStep) {
+        // Only finalize turn if we're still the active generation
+        if (context.generation === loopGeneration && lastStep) {
           const responseText = getStepResponse(lastStep);
           console.log("[DemoAgent] Turn complete", truncateForLog(responseText));
-          await updateTurn(lastStep, allMessages);
+          await updateTurn(lastStep, allMessages, turnIdForThisTurn);
         }
 
         // Set processing = false
@@ -561,13 +588,64 @@ export default defineAgent({
           isProcessing: false,
         });
       }
+
+      console.log(`[DemoAgent] Machine loop generation ${loopGeneration} ended`);
     };
 
+    // Handle time travel by creating a new machine and starting a new loop
+    const handleTimeTravel = async (newTurnId: typeof context.currentTurnId, newBranchRootTurnId: typeof context.branchRootTurnId) => {
+      console.log(`[DemoAgent] Time travel: branch root ${context.branchRootTurnId} -> ${newBranchRootTurnId}`);
+
+      // Increment generation to signal old loop to exit
+      context.generation++;
+      const newGeneration = context.generation;
+
+      // Fetch fresh state from Convex
+      const agentState = await convex.query(api.livekitAgent.getAgentInit, { roomName });
+      if (!agentState) {
+        console.error("[DemoAgent] Failed to fetch state for time travel");
+        return;
+      }
+
+      // Create new machine with the time-traveled state
+      const newMachine = initMachine(agentState.instance, agentState.history as MachineMessage[]);
+
+      // Update context
+      context.machine = newMachine;
+      context.currentTurnId = newTurnId;
+      context.branchRootTurnId = newBranchRootTurnId;
+
+      // Reconnect executor to new machine
+      await liveKitExecutor.connect(newMachine, {
+        session: voiceSession,
+        agent,
+        room: ctx.room,
+      });
+
+      console.log(`[DemoAgent] Time travel complete, starting new loop (generation ${newGeneration})`);
+
+      // Start new loop (don't await - runs concurrently while old loop exits)
+      startMachineLoop(newGeneration).catch((err) => {
+        console.error(`[DemoAgent] Machine loop generation ${newGeneration} error:`, err);
+      });
+    };
+
+    // Subscribe to session changes (for time travel support)
+    // Only trigger time travel when branchRootTurnId changes (user-initiated)
+    // Normal agent turn creation only changes currentTurnId, not branchRootTurnId
+    convex.onUpdate(api.sessions.get, { id: sessionId }, (session) => {
+      if (session?.branchRootTurnId && session.branchRootTurnId !== context.branchRootTurnId) {
+        handleTimeTravel(session.turnId, session.branchRootTurnId);
+      }
+    });
+
     try {
-      await runMainLoop();
+      await startMachineLoop(context.generation);
     } catch (error) {
       console.error("[DemoAgent] Machine loop error:", error);
-    } finally {
+    }
+    // Only cleanup if we're actually shutting down (not just switching generations due to time travel)
+    if (isShuttingDown) {
       await cleanup();
     }
 
