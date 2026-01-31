@@ -1,6 +1,9 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useState, useRef, useEffect, useCallback, type ReactNode } from "react";
+import { useMutation } from "convex/react";
+import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 import type { Ref, SerialNode, SerializedInstance } from "markov-machines/client";
 import { isRef, isSerialTransition } from "markov-machines/client";
 import type { DisplayNode, DisplayPack } from "@/src/types/display";
@@ -177,7 +180,90 @@ function getServerNodeName(instance: ServerInstance): string {
   return "[inline]";
 }
 
-function NodeSection({ node }: { node: NodeType }) {
+type EditingNode = { instanceId: string; instructions: string } | null;
+
+function InstructionsEditModal({
+  editing,
+  sessionId,
+  onClose,
+}: {
+  editing: NonNullable<EditingNode>;
+  sessionId: Id<"sessions">;
+  onClose: () => void;
+}) {
+  const [value, setValue] = useState(editing.instructions);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const editCurrentInstance = useMutation(api.sessions.editCurrentInstance);
+
+  useEffect(() => {
+    textareaRef.current?.focus();
+  }, []);
+
+  const handleSave = useCallback(async () => {
+    await editCurrentInstance({
+      sessionId,
+      instanceId: editing.instanceId,
+      patch: { instructions: value },
+    });
+    onClose();
+  }, [editCurrentInstance, sessionId, editing.instanceId, value, onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
+      onClick={onClose}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onClose();
+      }}
+    >
+      <div
+        className="bg-terminal-bg border border-terminal-green-dimmer p-4 w-[600px] max-h-[80vh] flex flex-col gap-3 font-mono"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="text-terminal-green text-sm font-bold">
+          Edit Instructions
+        </div>
+        <textarea
+          ref={textareaRef}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && e.metaKey) {
+              e.preventDefault();
+              handleSave();
+            }
+          }}
+          className="bg-black border border-terminal-green-dimmer text-terminal-green text-xs p-2 w-full min-h-[200px] resize-y focus:outline-none focus:border-terminal-green terminal-scrollbar"
+          spellCheck={false}
+        />
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="px-3 py-1 text-xs text-terminal-green-dim border border-terminal-green-dimmer hover:text-terminal-green hover:border-terminal-green"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            className="px-3 py-1 text-xs text-terminal-green border border-terminal-green hover:bg-terminal-green hover:text-black"
+          >
+            Enter
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NodeSection({
+  node,
+  instanceId,
+  onEditInstructions,
+}: {
+  node: NodeType;
+  instanceId?: string;
+  onEditInstructions?: (instanceId: string, instructions: string) => void;
+}) {
   if (isRef(node)) {
     return (
       <div className="text-xs text-terminal-green-dim italic">
@@ -188,6 +274,14 @@ function NodeSection({ node }: { node: NodeType }) {
 
   const instructionPreview = truncate(node.instructions.replace(/\n/g, " "), 100);
 
+  const handleInstructionsClick = (e: React.MouseEvent) => {
+    if (e.metaKey && instanceId && onEditInstructions) {
+      e.preventDefault();
+      e.stopPropagation();
+      onEditInstructions(instanceId, node.instructions);
+    }
+  };
+
   if (isDisplayNode(node)) {
     const toolNames = node.tools;
     const transitions = node.transitions;
@@ -195,10 +289,15 @@ function NodeSection({ node }: { node: NodeType }) {
 
     return (
       <div className="space-y-1">
-        <KeyValue
-          k="instructions"
-          v={<span className="italic">"{instructionPreview}"</span>}
-        />
+        <div
+          onClick={handleInstructionsClick}
+          className={onEditInstructions ? "cursor-pointer hover:bg-terminal-green/10 -mx-1 px-1 rounded" : ""}
+        >
+          <KeyValue
+            k="instructions"
+            v={<span className="italic">"{instructionPreview}"</span>}
+          />
+        </div>
 
         <Expander label="validator" preview={node.validator}>
           <JsonBlock data={node.validator} />
@@ -266,10 +365,15 @@ function NodeSection({ node }: { node: NodeType }) {
 
   return (
     <div className="space-y-1">
-      <KeyValue
-        k="instructions"
-        v={<span className="italic">"{instructionPreview}"</span>}
-      />
+      <div
+        onClick={handleInstructionsClick}
+        className={onEditInstructions ? "cursor-pointer hover:bg-terminal-green/10 -mx-1 px-1 rounded" : ""}
+      >
+        <KeyValue
+          k="instructions"
+          v={<span className="italic">"{instructionPreview}"</span>}
+        />
+      </div>
 
       <Expander label="validator" preview={serialNode.validator}>
         <JsonBlock data={serialNode.validator} />
@@ -314,7 +418,13 @@ function NodeSection({ node }: { node: NodeType }) {
   );
 }
 
-function ServerInstanceContent({ instance }: { instance: ServerInstance }) {
+function ServerInstanceContent({
+  instance,
+  onEditInstructions,
+}: {
+  instance: ServerInstance;
+  onEditInstructions?: (instanceId: string, instructions: string) => void;
+}) {
   // Get packs from node if it's a DisplayNode
   const nodePacks = isDisplayNode(instance.node) ? (instance.node.packs || []) : [];
   const packStates = instance.packStates || {};
@@ -365,7 +475,11 @@ function ServerInstanceContent({ instance }: { instance: ServerInstance }) {
       )}
 
       <Expander label="node" preview={instance.node}>
-        <NodeSection node={instance.node} />
+        <NodeSection
+          node={instance.node}
+          instanceId={instance.id}
+          onEditInstructions={onEditInstructions}
+        />
       </Expander>
 
       {instance.executorConfig && (
@@ -399,13 +513,33 @@ function getServerBadge(instance: ServerInstance): ReactNode {
   return null;
 }
 
-export function TreeView({ instance }: { instance: ServerInstance }) {
+export function TreeView({ sessionId, instance }: { sessionId: Id<"sessions">; instance: ServerInstance }) {
+  const [editing, setEditing] = useState<EditingNode>(null);
+
+  const handleEditInstructions = useCallback((instanceId: string, instructions: string) => {
+    setEditing({ instanceId, instructions });
+  }, []);
+
   return (
-    <TreeNode
-      item={instance}
-      getName={getServerNodeName}
-      renderContent={(inst) => <ServerInstanceContent instance={inst} />}
-      getBadge={getServerBadge}
-    />
+    <>
+      <TreeNode
+        item={instance}
+        getName={getServerNodeName}
+        renderContent={(inst) => (
+          <ServerInstanceContent
+            instance={inst}
+            onEditInstructions={handleEditInstructions}
+          />
+        )}
+        getBadge={getServerBadge}
+      />
+      {editing && (
+        <InstructionsEditModal
+          editing={editing}
+          sessionId={sessionId}
+          onClose={() => setEditing(null)}
+        />
+      )}
+    </>
   );
 }

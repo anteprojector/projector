@@ -97,7 +97,7 @@ export const AgentPane = forwardRef<HTMLDivElement, AgentPaneProps>(
         {/* Tab content */}
         <div className="flex-1 overflow-hidden p-4">
           {activeTab === "tree" && (
-            <InstanceTreeTab instance={instance ?? null} displayInstance={displayInstance ?? null} />
+            <InstanceTreeTab sessionId={sessionId} instance={instance ?? null} displayInstance={displayInstance ?? null} />
           )}
           {activeTab === "state" && <StateTab instance={displayInstance ?? null} />}
           {activeTab === "history" && <HistoryTab sessionId={sessionId} />}

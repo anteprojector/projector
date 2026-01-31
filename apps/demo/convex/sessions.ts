@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+import { createBranch } from "./branching";
 
 export const create = mutation({
   args: {
@@ -26,7 +27,8 @@ export const create = mutation({
 
     await ctx.db.patch(sessionId, {
       currentTurnId: turnId,
-      branchRootTurnId: turnId,  // Initial branch root is the first turn
+      branchRootTurnId: turnId,
+      branchAncestors: [turnId],
     });
 
     return sessionId;
@@ -135,7 +137,7 @@ export const timeTravel = mutation({
 
     await ctx.db.patch(sessionId, {
       currentTurnId: targetTurnId,
-      branchRootTurnId: targetTurnId,  // User is starting a new branch from this turn
+      branchRootTurnId: undefined,  // signals time-travel mode; branch created on next turn
     });
   },
 });
@@ -153,5 +155,71 @@ export const updateInstance = mutation({
     }
 
     await ctx.db.patch(session.currentTurnId, { instance, displayInstance });
+  },
+});
+
+/**
+ * Edit the current instance and create a new branch.
+ * Patches a specific node in the instance tree (identified by instanceId)
+ * with the provided fields, then branches from the current turn.
+ */
+export const editCurrentInstance = mutation({
+  args: {
+    sessionId: v.id("sessions"),
+    instanceId: v.string(),
+    patch: v.object({
+      instructions: v.optional(v.string()),
+      validator: v.optional(v.any()),
+    }),
+  },
+  handler: async (ctx, { sessionId, instanceId, patch }) => {
+    const session = await ctx.db.get(sessionId);
+    if (!session?.currentTurnId) {
+      throw new Error("Session has no current turn");
+    }
+
+    const currentTurn = await ctx.db.get(session.currentTurnId);
+    if (!currentTurn) throw new Error("Current turn not found");
+
+    // Deep clone instance and displayInstance
+    const modifiedInstance = JSON.parse(JSON.stringify(currentTurn.instance));
+    const modifiedDisplayInstance = currentTurn.displayInstance
+      ? JSON.parse(JSON.stringify(currentTurn.displayInstance))
+      : undefined;
+
+    // Walk instance tree and apply patch to the matching node
+    function patchNode(inst: any): boolean {
+      if (inst.id === instanceId) {
+        if (patch.instructions !== undefined) {
+          inst.node.instructions = patch.instructions;
+        }
+        if (patch.validator !== undefined) {
+          inst.node.validator = patch.validator;
+        }
+        return true;
+      }
+      if (inst.children) {
+        for (const child of inst.children) {
+          if (patchNode(child)) return true;
+        }
+      }
+      return false;
+    }
+
+    if (!patchNode(modifiedInstance)) {
+      throw new Error(`Instance node ${instanceId} not found in instance tree`);
+    }
+    if (modifiedDisplayInstance) {
+      patchNode(modifiedDisplayInstance);
+    }
+
+    // Create a new branch with the modified instance
+    await createBranch(ctx, {
+      sessionId,
+      session,
+      instanceId: currentTurn.instanceId,
+      instance: modifiedInstance,
+      displayInstance: modifiedDisplayInstance,
+    });
   },
 });

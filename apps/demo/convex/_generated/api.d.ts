@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as branching from "../branching.js";
 import type * as http from "../http.js";
 import type * as livekitAgent from "../livekitAgent.js";
 import type * as livekitAgentActions from "../livekitAgentActions.js";
@@ -25,6 +26,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  branching: typeof branching;
   http: typeof http;
   livekitAgent: typeof livekitAgent;
   livekitAgentActions: typeof livekitAgentActions;

@@ -634,8 +634,19 @@ export default defineAgent({
     // Only trigger time travel when branchRootTurnId changes (user-initiated)
     // Normal agent turn creation only changes currentTurnId, not branchRootTurnId
     convex.onUpdate(api.sessions.get, { id: sessionId }, (session) => {
-      if (session?.branchRootTurnId && session.branchRootTurnId !== context.branchRootTurnId) {
-        handleTimeTravel(session.turnId, session.branchRootTurnId);
+      const newRoot = session?.branchRootTurnId;
+      const oldRoot = context.branchRootTurnId;
+      if (newRoot !== oldRoot) {
+        if (newRoot === undefined) {
+          // Time travel: branchRootTurnId went null
+          handleTimeTravel(session!.turnId, undefined);
+        } else if (oldRoot === undefined) {
+          // Branch created after time travel (by agent's machineTurns.create) — just sync
+          context.branchRootTurnId = newRoot;
+        } else {
+          // External branch (e.g. instruction edit) — reload
+          handleTimeTravel(session!.turnId, newRoot);
+        }
       }
     });
 
