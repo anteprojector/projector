@@ -2,6 +2,13 @@ import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { createBranch } from "./branching";
+import { serializeNode, resolveNodeRef } from "markov-machines";
+import { isRef } from "markov-machines/client";
+import { createDemoCharter } from "../../../apps/demo-agent/src/agent/charter.js";
+import { sanitizeForConvex } from "../src/convex-json.js";
+
+// Charter for serialization ref resolution only — executor is unused
+const charter = createDemoCharter({ run: async () => ({ response: [] }) } as any);
 
 export const create = mutation({
   args: {
@@ -162,14 +169,20 @@ export const updateInstance = mutation({
  * Edit the current instance and create a new branch.
  * Patches a specific node in the instance tree (identified by instanceId)
  * with the provided fields, then branches from the current turn.
+ *
+ * Patch shape mirrors the instance: { state?, node?: { instructions?, validator? } }
+ * When patching a Ref node, it's converted to an inline SerialNode using serializeNode.
  */
 export const editCurrentInstance = mutation({
   args: {
     sessionId: v.id("sessions"),
     instanceId: v.string(),
     patch: v.object({
-      instructions: v.optional(v.string()),
-      validator: v.optional(v.any()),
+      state: v.optional(v.any()),
+      node: v.optional(v.object({
+        instructions: v.optional(v.string()),
+        validator: v.optional(v.any()),
+      })),
     }),
   },
   handler: async (ctx, { sessionId, instanceId, patch }) => {
@@ -187,30 +200,74 @@ export const editCurrentInstance = mutation({
       ? JSON.parse(JSON.stringify(currentTurn.displayInstance))
       : undefined;
 
-    // Walk instance tree and apply patch to the matching node
-    function patchNode(inst: any): boolean {
+    // Walk serialized instance tree and apply patch
+    function patchSerializedNode(inst: any): boolean {
       if (inst.id === instanceId) {
-        if (patch.instructions !== undefined) {
-          inst.node.instructions = patch.instructions;
+        // Patch state (instance-level)
+        if (patch.state !== undefined) {
+          inst.state = patch.state;
         }
-        if (patch.validator !== undefined) {
-          inst.node.validator = patch.validator;
+
+        // Patch node fields
+        if (patch.node) {
+          if (isRef(inst.node)) {
+            // Resolve Ref → runtime Node, apply edits, re-serialize as inline
+            const runtimeNode = resolveNodeRef(charter, inst.node);
+            const edited = {
+              ...runtimeNode,
+              ...(patch.node.instructions !== undefined ? { instructions: patch.node.instructions } : {}),
+              ...(patch.node.validator !== undefined ? { validator: patch.node.validator } : {}),
+            };
+            inst.node = sanitizeForConvex(serializeNode(edited, charter, { noNodeRef: true }));
+          } else {
+            // Already inline SerialNode — patch fields directly
+            if (patch.node.instructions !== undefined) {
+              inst.node.instructions = patch.node.instructions;
+            }
+            if (patch.node.validator !== undefined) {
+              inst.node.validator = patch.node.validator;
+            }
+          }
         }
         return true;
       }
       if (inst.children) {
         for (const child of inst.children) {
-          if (patchNode(child)) return true;
+          if (patchSerializedNode(child)) return true;
         }
       }
       return false;
     }
 
-    if (!patchNode(modifiedInstance)) {
+    // Walk display instance tree and apply patch (display nodes are always resolved)
+    function patchDisplayNode(inst: any): boolean {
+      if (inst.id === instanceId) {
+        if (patch.state !== undefined) {
+          inst.state = patch.state;
+        }
+        if (patch.node) {
+          if (patch.node.instructions !== undefined) {
+            inst.node.instructions = patch.node.instructions;
+          }
+          if (patch.node.validator !== undefined) {
+            inst.node.validator = patch.node.validator;
+          }
+        }
+        return true;
+      }
+      if (inst.children) {
+        for (const child of inst.children) {
+          if (patchDisplayNode(child)) return true;
+        }
+      }
+      return false;
+    }
+
+    if (!patchSerializedNode(modifiedInstance)) {
       throw new Error(`Instance node ${instanceId} not found in instance tree`);
     }
     if (modifiedDisplayInstance) {
-      patchNode(modifiedDisplayInstance);
+      patchDisplayNode(modifiedDisplayInstance);
     }
 
     // Create a new branch with the modified instance

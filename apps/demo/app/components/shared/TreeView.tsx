@@ -203,7 +203,7 @@ function InstructionsEditModal({
     await editCurrentInstance({
       sessionId,
       instanceId: editing.instanceId,
-      patch: { instructions: value },
+      patch: { node: { instructions: value } },
     });
     onClose();
   }, [editCurrentInstance, sessionId, editing.instanceId, value, onClose]);

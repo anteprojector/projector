@@ -10,8 +10,12 @@ import {
   type Node,
 } from "markov-machines";
 import { nameGateNode } from "../../../apps/demo-agent/src/agent/nodes.js";
-import { demoCharterStandard } from "../../../apps/demo-agent/src/agent/charter.js";
+import { createDemoCharter } from "../../../apps/demo-agent/src/agent/charter.js";
 import { serializeInstanceForDisplay } from "../../../apps/demo-agent/src/serializeForDisplay.js";
+import { sanitizeForConvex } from "../src/convex-json.js";
+
+// Charter for serialization only — executor is unused
+const demoCharter = createDemoCharter({ run: async () => ({ response: [] }) } as any);
 
 function initPackStates(node: Node<unknown>): Record<string, unknown> {
   const packStates: Record<string, unknown> = {};
@@ -29,8 +33,8 @@ export const createSession = action({
     const packStates = initPackStates(nameGateNode as Node<unknown>);
     const instance: Instance = createInstance(nameGateNode as Node<unknown>, {}, undefined, packStates);
 
-    const serializedInstance = serializeInstance(instance, demoCharterStandard);
-    const displayInstance = serializeInstanceForDisplay(instance, demoCharterStandard);
+    const serializedInstance = sanitizeForConvex(serializeInstance(instance, demoCharter));
+    const displayInstance = serializeInstanceForDisplay(instance, demoCharter);
 
     const sessionId = await ctx.runMutation(api.sessions.create, {
       instanceId: instance.id,

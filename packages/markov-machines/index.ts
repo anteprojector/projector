@@ -43,7 +43,11 @@ export { generateToolDefinitions } from "./src/tools/index.js";
 
 // Serialization
 export { serializeNode, serializeInstance, serializeMachine } from "./src/serialization/serialize.js";
+export type { SerializeNodeOptions } from "./src/serialization/serialize.js";
 export { deserializeMachine, deserializeInstance, deserializeNode } from "./src/serialization/deserialize.js";
+
+// Ref resolution
+export { resolveNodeRef, resolveNestedTransitionRef, resolvePackToolRef } from "./src/runtime/transition-executor.js";
 
 // Types
 export type {

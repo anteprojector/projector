@@ -23,6 +23,7 @@ import { api } from "demo/convex/_generated/api.js";
 import { fileURLToPath } from "node:url";
 import {
   createMachine,
+  createStandardExecutor,
   deserializeInstance,
   serializeInstance,
   runMachine,
@@ -37,15 +38,22 @@ import {
   type OnMessageEnqueue,
 } from "markov-machines";
 
-import { demoCharterStandard } from "./agent/charter.js";
+import { createDemoCharter } from "./agent/charter.js";
 import { getLiveKitExecutor } from "./agent/livekit.js";
 
-// Create LiveKit version of the charter by overriding the executor
+// Create charters with their respective executors
+const demoCharterStandard = createDemoCharter(
+  createStandardExecutor({
+    model: "claude-sonnet-4-5",
+    apiKey: process.env.ANTHROPIC_API_KEY,
+  }),
+);
 const demoCharterLiveKit = {
   ...demoCharterStandard,
   executor: getLiveKitExecutor(),
 };
 import { serializeInstanceForDisplay } from "./serializeForDisplay.js";
+import { sanitizeForConvex, desanitizeForConvex } from "../../demo/src/convex-json.js";
 
 const ENABLE_REALTIME = process.env.ENABLE_REALTIME_MODEL === "true";
 
@@ -236,7 +244,7 @@ export default defineAgent({
 
     // Function to create a machine from serialized state
     const initMachine = (serializedInst: unknown, history: MachineMessage[]): Machine => {
-      const instance = deserializeInstance(demoCharterLiveKit, serializedInst as any);
+      const instance = deserializeInstance(demoCharterLiveKit, desanitizeForConvex(serializedInst) as any);
       console.log(`[DemoAgent] Instance deserialized: node=${instance.node?.id}`);
 
       const machine = createMachine(demoCharterLiveKit, {
@@ -374,11 +382,12 @@ export default defineAgent({
     const createTurn = async (instanceId: string, userContent: string) => {
       if (!context.machine) return null;
       try {
+        let serialInstance = sanitizeForConvex(serializeInstance(context.machine.instance, demoCharterLiveKit))
         const newTurnId = await convex.mutation(api.machineTurns.create, {
           sessionId,
           parentId: context.currentTurnId,
           instanceId,
-          instance: serializeInstance(context.machine.instance, demoCharterLiveKit),
+          instance: serialInstance,
           displayInstance: serializeInstanceForDisplay(context.machine.instance, demoCharterLiveKit),
         });
         context.currentTurnId = newTurnId;
@@ -400,7 +409,7 @@ export default defineAgent({
       try {
         await convex.mutation(api.sessions.finalizeTurn, {
           turnId,
-          instance: serializeInstance(step.instance, demoCharterLiveKit),
+          instance: sanitizeForConvex(serializeInstance(step.instance, demoCharterLiveKit)),
           displayInstance: serializeInstanceForDisplay(step.instance, demoCharterLiveKit),
           messages: allMessages,
         });
@@ -550,7 +559,6 @@ export default defineAgent({
           const activeInstance = getActiveInstance(step.instance);
           const responseText = getStepResponse(step);
           try {
-            console.log("%%% add machine step", truncateForLog(responseText));
             await convex.mutation(api.machineSteps.add, {
               sessionId,
               turnId: turnIdForThisTurn,
@@ -559,7 +567,7 @@ export default defineAgent({
               response: responseText,
               done: step.done,
               messages: step.history,
-              instance: serializeInstance(step.instance, demoCharterLiveKit),
+              instance: sanitizeForConvex(serializeInstance(step.instance, demoCharterLiveKit)),
               displayInstance: serializeInstanceForDisplay(step.instance, demoCharterLiveKit),
               activeNodeInstructions: activeInstance.node.instructions ?? "",
             });

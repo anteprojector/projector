@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Instance } from "markov-machines";
 import type { Charter } from "markov-machines";
+import { sanitizeForConvex } from "../../demo/src/convex-json.js";
 
 /**
  * Custom serialization for display purposes.
@@ -48,26 +49,6 @@ interface DisplayInstance {
     suspendedAt: string;
     metadata?: Record<string, unknown>;
   };
-}
-
-/**
- * Sanitize an object for Convex storage by replacing $ prefixed keys.
- * Convex doesn't allow field names starting with $.
- */
-function sanitizeForConvex(obj: unknown): unknown {
-  if (obj === null || obj === undefined) return obj;
-  if (typeof obj !== "object") return obj;
-  if (Array.isArray(obj)) {
-    return obj.map(sanitizeForConvex);
-  }
-
-  const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
-    // Replace $ prefix with _ to make it Convex-safe
-    const safeKey = key.startsWith("$") ? `_${key.slice(1)}` : key;
-    result[safeKey] = sanitizeForConvex(value);
-  }
-  return result;
 }
 
 function getTransitionTarget(transition: unknown, charter?: Charter): string {

@@ -6,6 +6,7 @@ import type {
   DisplayNode,
   DisplayPack,
 } from "./types/display";
+import { sanitizeForConvex } from "./convex-json";
 
 /**
  * Custom serialization for display purposes.
@@ -13,26 +14,6 @@ import type {
  * (showing instructions, validator, etc.) instead of converting to refs.
  * Tools and transitions are shown as refs/names only.
  */
-
-/**
- * Sanitize an object for Convex storage by replacing $ prefixed keys.
- * Convex doesn't allow field names starting with $.
- */
-function sanitizeForConvex(obj: unknown): unknown {
-  if (obj === null || obj === undefined) return obj;
-  if (typeof obj !== "object") return obj;
-  if (Array.isArray(obj)) {
-    return obj.map(sanitizeForConvex);
-  }
-
-  const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
-    // Replace $ prefix with _ to make it Convex-safe
-    const safeKey = key.startsWith("$") ? `_${key.slice(1)}` : key;
-    result[safeKey] = sanitizeForConvex(value);
-  }
-  return result;
-}
 
 function getTransitionTarget(transition: unknown, charter?: Charter): string {
   if (!transition) return "unknown";
