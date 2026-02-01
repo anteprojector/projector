@@ -1,6 +1,6 @@
 import { v4 as uuid } from "uuid";
-import { z } from "zod";
 import type { Charter } from "../types/charter.js";
+import { fromSafeJsonSchema } from "../helpers/json-schema.js";
 import type { Node } from "../types/node.js";
 import type {
   Transition,
@@ -146,7 +146,7 @@ export function deserializeNode<S>(
   serialNode: SerialNode<S>,
 ): Node<never, S> {
   // Deserialize the JSON Schema validator back to a Zod schema.
-  const validator = z.fromJSONSchema(serialNode.validator) as z.ZodType<S>;
+  const validator = fromSafeJsonSchema<S>(serialNode.validator as Record<string, unknown>);
 
   // Resolve transition refs (supports dotted nested refs)
   const transitions: Record<string, Transition<S>> = {};

@@ -5,7 +5,6 @@ import { createBranch } from "./branching";
 import { serializeNode, resolveNodeRef } from "markov-machines";
 import { isRef } from "markov-machines/client";
 import { createDemoCharter } from "../../../apps/demo-agent/src/agent/charter.js";
-import { sanitizeForConvex } from "../src/convex-json.js";
 
 // Charter for serialization ref resolution only — executor is unused
 const charter = createDemoCharter({ run: async () => ({ response: [] }) } as any);
@@ -218,7 +217,7 @@ export const editCurrentInstance = mutation({
               ...(patch.node.instructions !== undefined ? { instructions: patch.node.instructions } : {}),
               ...(patch.node.validator !== undefined ? { validator: patch.node.validator } : {}),
             };
-            inst.node = sanitizeForConvex(serializeNode(edited, charter, { noNodeRef: true }));
+            inst.node = serializeNode(edited, charter, { noNodeRef: true });
           } else {
             // Already inline SerialNode — patch fields directly
             if (patch.node.instructions !== undefined) {

@@ -45,6 +45,10 @@ export { generateToolDefinitions } from "./src/tools/index.js";
 export { serializeNode, serializeInstance, serializeMachine } from "./src/serialization/serialize.js";
 export type { SerializeNodeOptions } from "./src/serialization/serialize.js";
 export { deserializeMachine, deserializeInstance, deserializeNode } from "./src/serialization/deserialize.js";
+export { serializeInstanceForDisplay } from "./src/serialization/serialize-display.js";
+
+// JSON Schema helpers
+export { escapeSchemaKeys, restoreSchemaKeys, toSafeJsonSchema, fromSafeJsonSchema } from "./src/helpers/json-schema.js";
 
 // Ref resolution
 export { resolveNodeRef, resolveNestedTransitionRef, resolvePackToolRef } from "./src/runtime/transition-executor.js";
@@ -145,6 +149,11 @@ export type {
   ClientInstance,
   DryClientPack,
   ClientPack,
+  // Display
+  DisplayCommand,
+  DisplayInstance,
+  DisplayNode,
+  DisplayPack,
 } from "./src/types/index.js";
 
 // Type guards and helpers

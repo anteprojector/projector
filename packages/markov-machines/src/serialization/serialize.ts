@@ -11,7 +11,7 @@ import type { Charter } from "../types/charter.js";
 import type { Transition } from "../types/transitions.js";
 import { isRef, isSerialTransition } from "../types/refs.js";
 import { isCodeTransition, isGeneralTransition } from "../types/transitions.js";
-import { ZOD_JSON_SCHEMA_TARGET_DRAFT_2020_12 } from "../helpers/json-schema.js";
+import { toSafeJsonSchema } from "../helpers/json-schema.js";
 
 export interface SerializeNodeOptions {
   /** If true, always inline this node even if registered in charter. Tool/transition refs are unaffected. */
@@ -50,9 +50,7 @@ export function serializeNode<S>(
 
   // Serialize the validator to JSON Schema (pass through if already JSONSchema)
   const validator: Record<string, unknown> = isZodSchema(node.validator)
-    ? (z.toJSONSchema(node.validator, {
-        target: ZOD_JSON_SCHEMA_TARGET_DRAFT_2020_12,
-      }) as Record<string, unknown>)
+    ? toSafeJsonSchema(node.validator)
     : (node.validator as Record<string, unknown>);
 
   // Serialize transitions
