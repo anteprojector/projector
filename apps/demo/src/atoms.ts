@@ -55,3 +55,130 @@ export interface LiveClientHandle {
   isConnected: () => boolean;
 }
 export const liveClientAtom = atom<LiveClientHandle | null>(null);
+
+// LiveKit streaming (ephemeral UI enhancement; Convex is source of truth)
+export type StreamPacket =
+  | {
+    v: 1;
+    t: "mm.stream";
+    turnId: string;
+    event:
+      | { type: "message_start"; messageId: string; seq: number }
+      | {
+        type: "message_update";
+        messageId: string;
+        seq: number;
+        delta: { kind: "text" | "thinking"; contentIndex: number; delta: string };
+      }
+      | { type: "message_end"; messageId: string; seq: number }
+      | { type: "message_error"; messageId: string; seq: number; error: { message: string; code?: string } };
+  };
+
+export type StreamBuffer = {
+  messageId: string;
+  /** Last applied seq */
+  seq: number;
+  /** Accumulated text */
+  content: string;
+  /** Local timestamp for display ordering when Convex envelope hasn't arrived yet */
+  startedAt: number;
+  ended?: boolean;
+  error?: string;
+};
+
+export const streamBuffersAtom = atom<Record<string, StreamBuffer>>({});
+
+export const ingestStreamPacketAtom = atom(null, (get, set, packet: StreamPacket) => {
+  if (packet.v !== 1 || packet.t !== "mm.stream") return;
+
+  const event = packet.event;
+  const messageId = event.messageId;
+  const nextSeq = event.seq;
+
+  set(streamBuffersAtom, (prev) => {
+    const existing = prev[messageId];
+
+    // Ignore out-of-order or duplicate events.
+    if (existing && nextSeq <= existing.seq) {
+      return prev;
+    }
+
+    const base: StreamBuffer = existing ?? {
+      messageId,
+      seq: 0,
+      content: "",
+      startedAt: Date.now(),
+    };
+
+    if (event.type === "message_start") {
+      return {
+        ...prev,
+        [messageId]: {
+          ...base,
+          seq: nextSeq,
+          // Keep existing content if we already started buffering via early deltas.
+          content: base.content,
+        },
+      };
+    }
+
+    if (event.type === "message_update") {
+      if (event.delta.kind !== "text") {
+        return {
+          ...prev,
+          [messageId]: {
+            ...base,
+            seq: nextSeq,
+          },
+        };
+      }
+
+      return {
+        ...prev,
+        [messageId]: {
+          ...base,
+          seq: nextSeq,
+          content: base.content + event.delta.delta,
+        },
+      };
+    }
+
+    if (event.type === "message_end") {
+      return {
+        ...prev,
+        [messageId]: {
+          ...base,
+          seq: nextSeq,
+          ended: true,
+        },
+      };
+    }
+
+    // message_error
+    return {
+      ...prev,
+      [messageId]: {
+        ...base,
+        seq: nextSeq,
+        ended: true,
+        error: event.error.message,
+      },
+    };
+  });
+});
+
+export const pruneStreamBuffersAtom = atom(null, (get, set, messageIds: string[]) => {
+  if (messageIds.length === 0) return;
+  const current = get(streamBuffersAtom);
+  let changed = false;
+  const next: Record<string, StreamBuffer> = { ...current };
+  for (const id of messageIds) {
+    if (id in next) {
+      delete next[id];
+      changed = true;
+    }
+  }
+  if (changed) {
+    set(streamBuffersAtom, next);
+  }
+});

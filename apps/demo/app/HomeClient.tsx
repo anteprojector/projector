@@ -16,6 +16,8 @@ import {
   isLiveModeAtom,
   liveClientAtom,
   voiceAgentConnectedAtom,
+  streamBuffersAtom,
+  pruneStreamBuffersAtom,
   type AgentTab,
 } from "@/src/atoms";
 import { useSessionId } from "@/src/hooks";
@@ -43,13 +45,18 @@ export function HomeClient({
   const isLiveMode = useAtomValue(isLiveModeAtom);
   const setLiveClient = useSetAtom(liveClientAtom);
   const voiceAgentConnected = useAtomValue(voiceAgentConnectedAtom);
+  const streamBuffers = useAtomValue(streamBuffersAtom);
+  const setStreamBuffers = useSetAtom(streamBuffersAtom);
+  const pruneStreamBuffers = useSetAtom(pruneStreamBuffersAtom);
 
   const terminalInputRef = useRef<HTMLTextAreaElement>(null);
   const agentPaneRef = useRef<HTMLDivElement>(null);
   const liveClientRef = useRef<LiveVoiceClientHandle>(null);
 
   // Optimistic pending message for instant feedback
-  const [pendingMessage, setPendingMessage] = useState<string | null>(null);
+  const [pendingMessage, setPendingMessage] = useState<{ id: string; content: string } | null>(
+    null
+  );
 
   // Expose liveClient to atom when ref is set (via callback ref pattern)
   const handleLiveClientRef = useCallback((handle: LiveVoiceClientHandle | null) => {
@@ -80,7 +87,7 @@ export function HomeClient({
   useEffect(() => {
     if (pendingMessage && serverMessages) {
       const found = serverMessages.some(
-        (msg) => msg.role === "user" && msg.content === pendingMessage
+        (msg) => msg.role === "user" && msg.content === pendingMessage.content
       );
       if (found) {
         setPendingMessage(null);
@@ -88,20 +95,71 @@ export function HomeClient({
     }
   }, [serverMessages, pendingMessage]);
 
+  // Best-effort: once Convex has the final message content, drop the local stream buffer
+  // so Convex remains the only source of truth.
+  useEffect(() => {
+    if (!serverMessages) return;
+    const finalizedIds = serverMessages
+      .filter((m) => m.role === "assistant" && m.idempotencyKey && m.content.length > 0)
+      .map((m) => m.idempotencyKey!) as string[];
+    if (finalizedIds.length > 0) {
+      pruneStreamBuffers(finalizedIds);
+    }
+  }, [serverMessages, pruneStreamBuffers]);
+
   // Combine server messages with pending optimistic message
   const messages = useMemo(() => {
     const base = serverMessages ?? [];
-    if (!pendingMessage) return base;
-    return [
-      ...base,
-      {
-        _id: `pending-${Date.now()}`,
-        role: "user" as const,
-        content: pendingMessage,
-        createdAt: Date.now(),
-      },
-    ];
-  }, [serverMessages, pendingMessage]);
+
+    // Streaming overlay is disabled while previewing history to avoid mixing branches/timelines.
+    const shouldOverlayStreaming = !isPreviewing;
+
+    const messageIdsInBase = shouldOverlayStreaming
+      ? new Set(base.map((m) => m.idempotencyKey).filter(Boolean) as string[])
+      : new Set<string>();
+
+    const withStreamOverlay = shouldOverlayStreaming
+      ? base.map((msg) => {
+        if (msg.role !== "assistant") return msg;
+        const messageId = msg.idempotencyKey;
+        if (!messageId) return msg;
+
+        // Convex is source of truth: once content is non-empty, never overlay.
+        if (msg.content.length > 0) return msg;
+
+        const buf = streamBuffers[messageId];
+        if (!buf) return msg;
+        return { ...msg, content: buf.content };
+      })
+      : base;
+
+    const ephemeralStreamingMessages = shouldOverlayStreaming
+      ? Object.values(streamBuffers)
+        .filter((b) => !messageIdsInBase.has(b.messageId) && (b.content.length > 0 || b.error))
+        .map((b) => ({
+          _id: `stream-${b.messageId}`,
+          role: "assistant" as const,
+          content: b.content,
+          createdAt: b.startedAt,
+          idempotencyKey: b.messageId,
+        }))
+      : [];
+
+    const pending = pendingMessage
+      ? [
+        {
+          _id: pendingMessage.id,
+          role: "user" as const,
+          content: pendingMessage.content,
+          createdAt: Date.now(), // local ordering only; server message will replace
+        },
+      ]
+      : [];
+
+    return [...withStreamOverlay, ...ephemeralStreamingMessages, ...pending].sort(
+      (a, b) => a.createdAt - b.createdAt
+    );
+  }, [serverMessages, pendingMessage, streamBuffers, isPreviewing]);
 
   // Create session on mount if none exists or if stale
   useEffect(() => {
@@ -119,6 +177,11 @@ export function HomeClient({
       createSession().then(setSessionId);
     }
   }, [sessionId, session, createSession, setSessionId]);
+
+  // Clear any in-flight streaming state when switching sessions.
+  useEffect(() => {
+    setStreamBuffers({});
+  }, [sessionId, setStreamBuffers]);
 
   // Global keyboard shortcuts
   useEffect(() => {
@@ -200,7 +263,10 @@ export function HomeClient({
 
     const message = input.trim();
     setInput("");
-    setPendingMessage(message); // Optimistic update - show immediately
+    setPendingMessage({
+      id: `pending-${typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : Date.now()}`,
+      content: message,
+    }); // Optimistic update - show immediately
 
     try {
       if (!liveClientRef.current?.isConnected()) {

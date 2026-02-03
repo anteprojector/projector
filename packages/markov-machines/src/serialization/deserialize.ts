@@ -1,6 +1,7 @@
 import type { Charter } from "../types/charter.js";
 import type {
   Machine,
+  OnMessageEnqueue,
   SerializedMachine,
   SerializedInstance,
 } from "../types/machine.js";
@@ -56,8 +57,12 @@ export function deserializeInstance(
 export function deserializeMachine<AppMessage = unknown>(
   charter: Charter<AppMessage>,
   serialized: SerializedMachine<AppMessage>,
+  options?: {
+    onMessageEnqueue?: OnMessageEnqueue<AppMessage>;
+  },
 ): Machine<AppMessage> {
   const queue: MachineMessage<AppMessage>[] = [];
+  const onMessageEnqueue = options?.onMessageEnqueue;
 
   // Queue notification system for waitForQueue
   let queueResolvers: Array<() => void> = [];
@@ -85,7 +90,23 @@ export function deserializeMachine<AppMessage = unknown>(
     history: serialized.history,
     queue,
     enqueue: (messages: MachineMessage<AppMessage>[]) => {
-      queue.push(...messages);
+      for (const message of messages) {
+        const messageId = message.metadata?.messageId;
+        if (messageId) {
+          const existingIndex = queue.findIndex((m) => m.metadata?.messageId === messageId);
+          if (existingIndex !== -1) {
+            queue[existingIndex] = message;
+          } else {
+            queue.push(message);
+          }
+        } else {
+          queue.push(message);
+        }
+
+        if (onMessageEnqueue) {
+          onMessageEnqueue(message);
+        }
+      }
       notifyQueue();
     },
     waitForQueue,

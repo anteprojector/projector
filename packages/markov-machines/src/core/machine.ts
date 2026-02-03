@@ -110,10 +110,20 @@ export function createMachine<AppMessage = unknown>(
     history,
     queue,
     enqueue: (messages: MachineMessage<AppMessage>[]) => {
-      queue.push(...messages);
-      // Call onMessageEnqueue for each message
-      if (onMessageEnqueue) {
-        for (const message of messages) {
+      for (const message of messages) {
+        const messageId = message.metadata?.messageId;
+        if (messageId) {
+          const existingIndex = queue.findIndex((m) => m.metadata?.messageId === messageId);
+          if (existingIndex !== -1) {
+            queue[existingIndex] = message;
+          } else {
+            queue.push(message);
+          }
+        } else {
+          queue.push(message);
+        }
+
+        if (onMessageEnqueue) {
           onMessageEnqueue(message);
         }
       }

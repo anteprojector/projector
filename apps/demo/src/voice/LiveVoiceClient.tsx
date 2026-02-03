@@ -7,7 +7,9 @@ import { Room, RoomEvent, Track, ConnectionState, ParticipantKind } from "liveki
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { CommandExecutionResult } from "markov-machines/client";
-import { isLiveModeAtom, voiceConnectionStatusAtom, voiceAgentConnectedAtom } from "@/src/atoms";
+import { ingestStreamPacketAtom, isLiveModeAtom, voiceConnectionStatusAtom, voiceAgentConnectedAtom } from "@/src/atoms";
+
+const STREAM_TOPIC = "mm.stream.v1";
 
 interface LiveVoiceClientProps {
   sessionId: Id<"sessions">;
@@ -40,6 +42,7 @@ export const LiveVoiceClient = forwardRef<LiveVoiceClientHandle, LiveVoiceClient
     const [isLiveMode] = useAtom(isLiveModeAtom);
     const setConnectionStatus = useSetAtom(voiceConnectionStatusAtom);
     const setAgentConnected = useSetAtom(voiceAgentConnectedAtom);
+    const ingestStreamPacket = useSetAtom(ingestStreamPacketAtom);
     const getToken = useAction(api.livekitAgentActions.getToken);
 
     // Store action function in ref to avoid unstable dependencies
@@ -138,6 +141,19 @@ export const LiveVoiceClient = forwardRef<LiveVoiceClientHandle, LiveVoiceClient
                 )
               : false;
             setAgentConnected(stillHasAgent);
+          }
+        });
+
+        // Handle streaming deltas from the agent over LiveKit data channel
+        room.on(RoomEvent.DataReceived, (payload, _participant, _kind, topic) => {
+          if (topic !== STREAM_TOPIC) return;
+          try {
+            const text = new TextDecoder().decode(payload);
+            const packet = JSON.parse(text) as unknown;
+            // Best-effort validation happens in the atom.
+            ingestStreamPacket(packet as any);
+          } catch (error) {
+            console.warn("Failed to parse stream packet:", error);
           }
         });
 

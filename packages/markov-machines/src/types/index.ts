@@ -111,6 +111,9 @@ export {
   isModelMessage,
 } from "./messages.js";
 
+// Streaming
+export type { MessageStreamEvent, MessageStreamDelta, MessageStreamError } from "./stream.js";
+
 // Machine
 export type {
   Machine,

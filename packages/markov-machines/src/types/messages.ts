@@ -167,6 +167,14 @@ export interface MessageSource {
 export interface MessageMetadata {
   /** Source attribution for this message */
   source?: MessageSource;
+  /** Stable identifier for this message across streaming updates */
+  messageId?: string;
+  /** Streaming state metadata when streamWhenAvailable is enabled */
+  stream?: {
+    state: "streaming" | "complete" | "error";
+    /** Monotonic per-message sequence for stream events */
+    seq?: number;
+  };
   /**
    * If true, this message is added to history for context but does not trigger
    * leaf execution (LLM inference). Use for logging/context messages that

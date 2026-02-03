@@ -36,6 +36,7 @@ import {
   type MachineMessage,
   type MachineItem,
   type OnMessageEnqueue,
+  type MessageStreamEvent,
 } from "markov-machines";
 
 import { createDemoCharter } from "./agent/charter.js";
@@ -55,6 +56,7 @@ const demoCharterLiveKit = {
 import { serializeInstanceForDisplay } from "markov-machines";
 
 const ENABLE_REALTIME = process.env.ENABLE_REALTIME_MODEL === "true";
+const STREAM_TOPIC = "mm.stream.v1";
 
 console.log("[DemoAgent] Configuration:");
 console.log(`  ENABLE_REALTIME_MODEL: ${ENABLE_REALTIME}`);
@@ -221,7 +223,21 @@ export default defineAgent({
         ? message.items
         : getMessageText(message);
 
-      if (!content) {
+      const idempotencyKey =
+        message.role === "assistant"
+          ? message.metadata?.messageId
+          : undefined;
+      const streamState =
+        message.role === "assistant"
+          ? message.metadata?.stream?.state
+          : undefined;
+      const streamSeq =
+        message.role === "assistant"
+          ? message.metadata?.stream?.seq
+          : undefined;
+
+      // Persist streaming assistant envelopes even when content is empty.
+      if (!content && !idempotencyKey) {
         return; // No displayable content
       }
 
@@ -230,12 +246,34 @@ export default defineAgent({
         `[DemoAgent] Persisting ${role} message: "${truncateForLog(content)}"`
       );
       try {
-        await convex.mutation(api.messages.add, {
-          sessionId,
-          role,
-          content,
-          turnId: context.currentTurnId,
-        });
+        const persist = async () => {
+          await convex.mutation(api.messages.add, {
+            sessionId,
+            role,
+            content,
+            turnId: context.currentTurnId,
+            ...(idempotencyKey ? { idempotencyKey } : {}),
+            ...(streamState !== undefined ? { streamState } : {}),
+            ...(streamSeq !== undefined ? { streamSeq } : {}),
+          });
+        };
+
+        // Durability: if streaming finalization fails to persist, retry with backoff.
+        if (idempotencyKey && (streamState === "complete" || streamState === "error")) {
+          const maxAttempts = 5;
+          for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+              await persist();
+              break;
+            } catch (err) {
+              if (attempt === maxAttempts) throw err;
+              const delayMs = 200 * (2 ** (attempt - 1));
+              await new Promise((resolve) => setTimeout(resolve, delayMs));
+            }
+          }
+        } else {
+          await persist();
+        }
       } catch (error) {
         console.error(`[DemoAgent] Failed to persist ${role} message:`, error);
       }
@@ -541,7 +579,56 @@ export default defineAgent({
         const allMessages: MachineMessage[] = [];
         let stepNumber = 0;
 
-        for await (const step of runMachine(context.machine)) {
+        const textEncoder = new TextEncoder();
+        let publishChain: Promise<void> = Promise.resolve();
+
+        const publishStreamPacket = (packet: unknown) => {
+          const lp = ctx.room.localParticipant;
+          if (!lp) return;
+          const bytes = textEncoder.encode(JSON.stringify(packet));
+          publishChain = publishChain
+            .then(() => lp.publishData(bytes, { reliable: true, topic: STREAM_TOPIC }))
+            .catch((err) => {
+              console.warn("[DemoAgent] Failed to publish stream packet:", err);
+            });
+        };
+
+        const onMessageStream = (event: MessageStreamEvent<unknown>) => {
+          // Only stream primary leaf output to the UI.
+          if (event.source?.isPrimary === false) return;
+
+          if (event.type === "message_update" && event.delta.kind !== "text") {
+            return; // ignore non-text deltas for terminal UI
+          }
+
+          publishStreamPacket({
+            v: 1,
+            t: "mm.stream",
+            turnId: turnIdForThisTurn,
+            event:
+              event.type === "message_update"
+                ? {
+                  type: event.type,
+                  messageId: event.messageId,
+                  seq: event.seq,
+                  delta: event.delta,
+                }
+                : event.type === "message_error"
+                  ? {
+                    type: event.type,
+                    messageId: event.messageId,
+                    seq: event.seq,
+                    error: event.error,
+                  }
+                  : {
+                    type: event.type,
+                    messageId: event.messageId,
+                    seq: event.seq,
+                  },
+          });
+        };
+
+        for await (const step of runMachine(context.machine, { streamWhenAvailable: true, onMessageStream })) {
           stepNumber++;
 
           // Check after each step - exit gracefully if time traveled

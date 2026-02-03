@@ -113,6 +113,10 @@ export type {
   ToolResultBlock,
   ThinkingBlock,
   OutputBlock,
+  // Streaming
+  MessageStreamEvent,
+  MessageStreamDelta,
+  MessageStreamError,
   // Instance payloads
   InstancePayload,
   StateUpdatePayload,
