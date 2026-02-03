@@ -1,4 +1,4 @@
-export { isRef, isSerialTransition } from "./helpers";
+export { isRef, isSerialTransition } from "./helpers.ts";
 
 // Re-export client-safe types only.
 export type { Ref, SerialNode, SerialTransition, JSONSchema } from "./src/types/refs";
@@ -15,9 +15,12 @@ export type { SerializedInstance, SerializedSuspendInfo } from "./src/types/mach
 export type {
   MachineMessage,
   ConversationMessage,
+  EphemeralMessage,
   InstanceMessage,
   MachineItem,
   TextBlock,
+  ImageDetail,
+  ImageBlock,
   ToolUseBlock,
   ToolResultBlock,
   ThinkingBlock,

@@ -6,6 +6,7 @@ import type {
 } from "../types/machine.js";
 import type { Instance } from "../types/instance.js";
 import type { MachineMessage } from "../types/messages.js";
+import { isEphemeralMessage } from "../types/messages.js";
 import { resolveNodeRef } from "../runtime/transition-executor.js";
 export { deserializeNode } from "../runtime/transition-executor.js";
 
@@ -71,7 +72,7 @@ export function deserializeMachine<AppMessage = unknown>(
   };
 
   const waitForQueue = (): Promise<void> => {
-    if (queue.length > 0) {
+    if (queue.some((m) => !isEphemeralMessage(m))) {
       return Promise.resolve();
     }
     return new Promise<void>((resolve) => {
@@ -86,7 +87,9 @@ export function deserializeMachine<AppMessage = unknown>(
     queue,
     enqueue: (messages: MachineMessage<AppMessage>[]) => {
       queue.push(...messages);
-      notifyQueue();
+      if (messages.some((m) => !isEphemeralMessage(m))) {
+        notifyQueue();
+      }
     },
     waitForQueue,
     notifyQueue,

@@ -2,6 +2,7 @@ import { atom } from "jotai";
 import { atomWithStorage } from "jotai/utils";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { CommandExecutionResult } from "markov-machines/client";
+import type { Room } from "livekit-client";
 
 // Chat input state
 export const inputAtom = atom<string>("");
@@ -42,8 +43,10 @@ export const displayHueAtom = atom<number>(120);
 // Voice mode state
 export type VoiceConnectionStatus = "disconnected" | "connecting" | "connected";
 export const isLiveModeAtom = atom<boolean>(false);
+export const isCameraEnabledAtom = atom<boolean>(false);
 export const voiceConnectionStatusAtom = atom<VoiceConnectionStatus>("disconnected");
 export const voiceAgentConnectedAtom = atom<boolean>(false);
+export const liveKitRoomAtom = atom<Room | null>(null);
 
 // LiveKit client handle for RPC calls
 export interface LiveClientHandle {

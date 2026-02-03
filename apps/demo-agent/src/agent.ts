@@ -16,6 +16,7 @@ import {
   defineAgent,
   voice,
 } from "@livekit/agents";
+import { RoomEvent, TrackKind, TrackSource } from "@livekit/rtc-node";
 import * as openai from "@livekit/agents-plugin-openai";
 import * as silero from "@livekit/agents-plugin-silero";
 import { ConvexClient } from "convex/browser";
@@ -29,6 +30,7 @@ import {
   runMachine,
   runCommand,
   userMessage,
+  instanceMessage,
   getMessageText,
   getActiveInstance,
   type Machine,
@@ -40,6 +42,8 @@ import {
 
 import { createDemoCharter } from "./agent/charter.js";
 import { getLiveKitExecutor } from "./agent/livekit.js";
+import { attachVisionSampler, type VisionSamplerHandle } from "./agent/vision.js";
+import { liveModePack } from "./agent/packs/live-mode.js";
 
 // Create charters with their respective executors
 const demoCharterStandard = createDemoCharter(
@@ -155,6 +159,37 @@ export default defineAgent({
     console.log(`[DemoAgent] Connected to room: ${roomName}`);
     console.log(`[DemoAgent] Participants:`, ctx.room.remoteParticipants?.size ?? 0);
 
+    ctx.room.on(RoomEvent.ParticipantConnected, (participant) => {
+      console.log(
+        `[DemoAgent] ParticipantConnected: identity=${participant.identity} kind=${participant.kind}`
+      );
+    });
+    ctx.room.on(RoomEvent.ParticipantDisconnected, (participant) => {
+      console.log(
+        `[DemoAgent] ParticipantDisconnected: identity=${participant.identity} kind=${participant.kind}`
+      );
+    });
+    ctx.room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+      console.log(
+        `[DemoAgent] TrackSubscribed: identity=${participant.identity} kind=${publication.kind} source=${publication.source} sid=${publication.sid}`
+      );
+    });
+    ctx.room.on(RoomEvent.TrackUnsubscribed, (_track, publication, participant) => {
+      console.log(
+        `[DemoAgent] TrackUnsubscribed: identity=${participant.identity} kind=${publication.kind} source=${publication.source} sid=${publication.sid}`
+      );
+    });
+    ctx.room.on(RoomEvent.TrackMuted, (publication, participant) => {
+      console.log(
+        `[DemoAgent] TrackMuted: identity=${participant.identity} kind=${publication.kind} source=${publication.source} sid=${publication.sid}`
+      );
+    });
+    ctx.room.on(RoomEvent.TrackUnmuted, (publication, participant) => {
+      console.log(
+        `[DemoAgent] TrackUnmuted: identity=${participant.identity} kind=${publication.kind} source=${publication.source} sid=${publication.sid}`
+      );
+    });
+
     if (!roomName) {
       console.error("[DemoAgent] No room name - cannot load session");
       return;
@@ -267,6 +302,7 @@ export default defineAgent({
 
     // Set up voice session
     const agent = new VoiceAssistant();
+    let visionSampler: VisionSamplerHandle | null = null;
     let voiceSession: voice.AgentSession;
 
     if (ENABLE_REALTIME) {
@@ -323,6 +359,8 @@ export default defineAgent({
 
     // Create a turn when user starts speaking in live mode
     voiceSession.on(voice.AgentSessionEventTypes.UserStateChanged, async (ev) => {
+      console.log(`[DemoAgent] UserState: ${ev.oldState} -> ${ev.newState}`);
+      visionSampler?.setMode(ev.newState === "speaking" ? "active" : "idle");
       if (ev.newState === "speaking" && liveKitExecutor.isLive && context.machine) {
         const activeInstance = getActiveInstance(context.machine.instance);
         await createTurn(activeInstance.id, "[voice input]");
@@ -347,6 +385,15 @@ export default defineAgent({
       throw err;
     }
 
+    // Start camera frame sampling (1 fps) and feed frames into the realtime chat context.
+    // This is a demo-only implementation (no adaptive sampling).
+    visionSampler = attachVisionSampler({
+      room: ctx.room,
+      agent,
+      getMachine: () => context.machine,
+      config: { activeFps: 1, idleFps: 1 / 3, maxDimension: 1024, jpegQuality: 92, detail: "low" },
+    });
+
     // Graceful shutdown handling
     let isShuttingDown = false;
 
@@ -354,6 +401,13 @@ export default defineAgent({
       if (isShuttingDown) return;
       isShuttingDown = true;
       console.log("[DemoAgent] Shutting down...");
+
+      // Stop camera sampling
+      try {
+        await visionSampler?.stop();
+      } catch (e) {
+        console.error("[DemoAgent] Error stopping vision sampler:", e);
+      }
 
       // Remove voice session event listeners
       try {
@@ -458,8 +512,32 @@ export default defineAgent({
         const isLive = data.payload === "true";
         console.log(`[DemoAgent] RPC setLiveMode: ${isLive}`);
         liveKitExecutor.setLive(isLive);
+        context.machine?.enqueue([
+          instanceMessage({
+            kind: "packState",
+            packName: liveModePack.name,
+            patch: { voiceEnabled: isLive },
+          }),
+        ]);
         return JSON.stringify({ isLive });
       }
+    );
+
+    // RPC to toggle camera enabled state (UI intent; sampler will also update based on tracks)
+    ctx.room.localParticipant?.registerRpcMethod(
+      "setCameraEnabled",
+      async (data) => {
+        const enabled = data.payload === "true";
+        console.log(`[DemoAgent] RPC setCameraEnabled: ${enabled}`);
+        context.machine?.enqueue([
+          instanceMessage({
+            kind: "packState",
+            packName: liveModePack.name,
+            patch: { cameraEnabled: enabled },
+          }),
+        ]);
+        return JSON.stringify({ cameraEnabled: enabled });
+      },
     );
 
     // RPC to execute a command

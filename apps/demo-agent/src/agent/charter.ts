@@ -11,6 +11,7 @@ import { createCharter, type Executor } from "markov-machines";
 
 import { memoryPack } from "./packs/memory.js";
 import { themePack } from "./packs/theme.js";
+import { liveModePack } from "./packs/live-mode.js";
 import { nameGateNode } from "./nodes/root.js";
 import { fooNode } from "./nodes/foo.js";
 import { demoMemoryNode } from "./nodes/demo-memory.js";
@@ -22,7 +23,7 @@ export function createDemoCharter(executor: Executor<any>) {
     name: "demo-assistant",
     instructions: "Be concise. No qualifiers or flowery language. State things simply. Always respond to the user after becoming active via a transition.",
     executor,
-    packs: [memoryPack, themePack],
+    packs: [memoryPack, themePack, liveModePack],
     nodes: {
       nameGateNode,
       fooNode,

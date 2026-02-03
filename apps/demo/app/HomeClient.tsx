@@ -276,6 +276,7 @@ export function HomeClient({
           <TerminalPane
             ref={terminalInputRef}
             sessionId={sessionId}
+            displayInstance={session?.displayInstance}
             messages={messages ?? []}
             input={input}
             onInputChange={setInput}

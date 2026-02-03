@@ -237,6 +237,9 @@ export class LiveKitExecutor implements Executor {
 
     // User speech transcription - store reference for later cleanup
     this.eventHandlers.userInputTranscribed = (ev) => {
+      this.log(
+        `UserInputTranscribed: isFinal=${ev.isFinal} length=${ev.transcript?.length ?? 0}`
+      );
       if (ev.isFinal) {
         this.log(`User transcript: "${ev.transcript}"`);
         // Mark as external (from LiveKit STT)

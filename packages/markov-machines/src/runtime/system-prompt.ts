@@ -136,9 +136,15 @@ export function buildPacksSection<S>(
   if (activePacks.length === 0) return "";
 
   const sections = activePacks.map((pack) => {
-    const state = packStates[pack.name];
+    const state = packStates[pack.name] ?? pack.initialState ?? {};
+    const instructions =
+      typeof pack.instructions === "function"
+        ? pack.instructions(state as any)
+        : pack.instructions;
+    const instructionsText = typeof instructions === "string" ? instructions.trim() : "";
     return `### ${pack.name}
 ${pack.description}
+${instructionsText ? `\nInstructions:\n${instructionsText}\n` : ""}
 State: \`\`\`json
 ${JSON.stringify(state, null, 2)}
 \`\`\``;
