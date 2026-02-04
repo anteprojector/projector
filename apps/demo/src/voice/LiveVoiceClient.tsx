@@ -7,7 +7,14 @@ import { Room, RoomEvent, Track, ConnectionState, ParticipantKind } from "liveki
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { CommandExecutionResult } from "markov-machines/client";
-import { ingestStreamPacketAtom, isLiveModeAtom, voiceConnectionStatusAtom, voiceAgentConnectedAtom } from "@/src/atoms";
+import {
+  ingestStreamPacketAtom,
+  isLiveModeAtom,
+  isCameraEnabledAtom,
+  liveKitRoomAtom,
+  voiceConnectionStatusAtom,
+  voiceAgentConnectedAtom,
+} from "@/src/atoms";
 
 const STREAM_TOPIC = "mm.stream.v1";
 
@@ -37,17 +44,25 @@ export interface LiveVoiceClientHandle {
  *
  * Transcripts are persisted by the voice agent directly to Convex.
  */
-export const LiveVoiceClient = forwardRef<LiveVoiceClientHandle, LiveVoiceClientProps>(
+  export const LiveVoiceClient = forwardRef<LiveVoiceClientHandle, LiveVoiceClientProps>(
   function LiveVoiceClient({ sessionId }, ref) {
     const [isLiveMode] = useAtom(isLiveModeAtom);
+    const [isCameraEnabled] = useAtom(isCameraEnabledAtom);
     const setConnectionStatus = useSetAtom(voiceConnectionStatusAtom);
     const setAgentConnected = useSetAtom(voiceAgentConnectedAtom);
     const ingestStreamPacket = useSetAtom(ingestStreamPacketAtom);
+    const setLiveKitRoom = useSetAtom(liveKitRoomAtom);
     const getToken = useAction(api.livekitAgentActions.getToken);
 
     // Store action function in ref to avoid unstable dependencies
     const getTokenRef = useRef(getToken);
     getTokenRef.current = getToken;
+
+    const isLiveModeRef = useRef(isLiveMode);
+    isLiveModeRef.current = isLiveMode;
+
+    const isCameraEnabledRef = useRef(isCameraEnabled);
+    isCameraEnabledRef.current = isCameraEnabled;
 
     const roomRef = useRef<Room | null>(null);
     const audioElementRef = useRef<HTMLAudioElement | null>(null);
@@ -59,13 +74,14 @@ export const LiveVoiceClient = forwardRef<LiveVoiceClientHandle, LiveVoiceClient
         await roomRef.current.disconnect();
         roomRef.current = null;
       }
+      setLiveKitRoom(null);
       if (audioElementRef.current) {
         audioElementRef.current.srcObject = null;
       }
       setConnectionStatus("disconnected");
       setAgentConnected(false);
       isConnectingRef.current = false;
-    }, [setConnectionStatus, setAgentConnected]);
+    }, [setConnectionStatus, setAgentConnected, setLiveKitRoom]);
 
     // Connect to LiveKit room
     const connect = useCallback(async () => {
@@ -88,11 +104,37 @@ export const LiveVoiceClient = forwardRef<LiveVoiceClientHandle, LiveVoiceClient
         });
 
         roomRef.current = room;
+        setLiveKitRoom(room);
 
         // Handle connection state changes
         room.on(RoomEvent.ConnectionStateChanged, (state) => {
+          console.log(`[LiveVoiceClient] ConnectionStateChanged: ${state}`);
           if (state === ConnectionState.Connected) {
             setConnectionStatus("connected");
+            // Apply current mic/camera state (in case user toggled before connect finished)
+            room.localParticipant
+              .setMicrophoneEnabled(isLiveModeRef.current)
+              .then(() => {
+                console.log(
+                  `[LiveVoiceClient] setMicrophoneEnabled(${isLiveModeRef.current}) ok`
+                );
+              })
+              .catch((error) => {
+                console.error("Failed to toggle microphone:", error);
+              });
+            room.localParticipant
+              .setCameraEnabled(isCameraEnabledRef.current, {
+                resolution: { width: 1280, height: 720 },
+                frameRate: 30,
+              })
+              .then(() => {
+                console.log(
+                  `[LiveVoiceClient] setCameraEnabled(${isCameraEnabledRef.current}) ok`
+                );
+              })
+              .catch((error) => {
+                console.error("Failed to toggle camera:", error);
+              });
           } else if (state === ConnectionState.Disconnected) {
             setConnectionStatus("disconnected");
           }
@@ -118,10 +160,23 @@ export const LiveVoiceClient = forwardRef<LiveVoiceClientHandle, LiveVoiceClient
           }
         });
 
+        // Log local track publish/unpublish (debug mic/camera)
+        room.on(RoomEvent.LocalTrackPublished, (publication) => {
+          console.log(
+            `[LiveVoiceClient] LocalTrackPublished: source=${publication.source} kind=${publication.kind} sid=${publication.trackSid} muted=${publication.isMuted}`
+          );
+        });
+        room.on(RoomEvent.LocalTrackUnpublished, (publication) => {
+          console.log(
+            `[LiveVoiceClient] LocalTrackUnpublished: source=${publication.source} kind=${publication.kind} sid=${publication.trackSid}`
+          );
+        });
+
         // Handle disconnection
         room.on(RoomEvent.Disconnected, () => {
           setConnectionStatus("disconnected");
           setAgentConnected(false);
+          setLiveKitRoom(null);
         });
 
         // Handle participant connections (to detect agent)
@@ -170,9 +225,12 @@ export const LiveVoiceClient = forwardRef<LiveVoiceClientHandle, LiveVoiceClient
       } catch (error) {
         console.error("Failed to connect to voice room:", error);
         setConnectionStatus("disconnected");
+        setAgentConnected(false);
+        setLiveKitRoom(null);
+        roomRef.current = null;
         isConnectingRef.current = false;
       }
-    }, [sessionId, setConnectionStatus, setAgentConnected]);
+    }, [sessionId, setConnectionStatus, setAgentConnected, setLiveKitRoom]);
 
     // Always connect when component mounts with a valid session
     useEffect(() => {
@@ -189,9 +247,14 @@ export const LiveVoiceClient = forwardRef<LiveVoiceClientHandle, LiveVoiceClient
       if (!room || room.state !== ConnectionState.Connected) return;
 
       // Enable/disable microphone based on live mode
-      room.localParticipant.setMicrophoneEnabled(isLiveMode).catch((error) => {
-        console.error("Failed to toggle microphone:", error);
-      });
+      room.localParticipant
+        .setMicrophoneEnabled(isLiveMode)
+        .then(() => {
+          console.log(`[LiveVoiceClient] setMicrophoneEnabled(${isLiveMode}) ok`);
+        })
+        .catch((error) => {
+          console.error("Failed to toggle microphone:", error);
+        });
 
       // Also notify agent of mode change via RPC
       const agentParticipant = Array.from(room.remoteParticipants.values()).find(
@@ -211,6 +274,42 @@ export const LiveVoiceClient = forwardRef<LiveVoiceClientHandle, LiveVoiceClient
           });
       }
     }, [isLiveMode]);
+
+    // Toggle camera independently of live mode
+    useEffect(() => {
+      const room = roomRef.current;
+      if (!room || room.state !== ConnectionState.Connected) return;
+
+      room.localParticipant
+        .setCameraEnabled(isCameraEnabled, {
+          resolution: { width: 1280, height: 720 },
+          frameRate: 30,
+        })
+        .then(() => {
+          console.log(`[LiveVoiceClient] setCameraEnabled(${isCameraEnabled}) ok`);
+        })
+        .catch((error) => {
+          console.error("Failed to toggle camera:", error);
+        });
+
+      // Also notify agent of camera intent via RPC (pack state updates)
+      const agentParticipant = Array.from(room.remoteParticipants.values()).find(
+        (p) => p.kind === ParticipantKind.AGENT
+      );
+
+      if (agentParticipant) {
+        room.localParticipant
+          .performRpc({
+            destinationIdentity: agentParticipant.identity,
+            method: "setCameraEnabled",
+            payload: isCameraEnabled ? "true" : "false",
+            responseTimeout: 5000,
+          })
+          .catch((error) => {
+            console.error("Failed to notify agent of camera change:", error);
+          });
+      }
+    }, [isCameraEnabled]);
 
     // Cleanup audio element on unmount
     useEffect(() => {

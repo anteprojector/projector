@@ -477,6 +477,18 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
       if (block.type === "text") {
         return { type: "text" as const, text: block.text };
       }
+      if (block.type === "image") {
+        return {
+          type: "image" as const,
+          source: {
+            type: "base64" as const,
+            // Anthropic SDK typing can be restrictive; accept any media type string.
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            media_type: block.mimeType as any,
+            data: block.data,
+          },
+        };
+      }
       if (block.type === "tool_use") {
         return {
           type: "tool_use" as const,

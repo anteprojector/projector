@@ -28,6 +28,7 @@ export function createPack<S>(config: PackConfig<S>): Pack<S> {
   return {
     name: config.name,
     description: config.description,
+    instructions: config.instructions,
     validator: config.validator,
     tools: config.tools ?? {},
     commands: config.commands,

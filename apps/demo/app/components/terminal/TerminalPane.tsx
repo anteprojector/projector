@@ -1,13 +1,22 @@
 "use client";
 
-import { forwardRef, useEffect, useRef } from "react";
+import { forwardRef, useEffect, useRef, useCallback } from "react";
 import { useAtom, useAtomValue } from "jotai";
-import { shiftHeldAtom, isLiveModeAtom, voiceConnectionStatusAtom, voiceAgentConnectedAtom } from "@/src/atoms";
+import {
+  shiftHeldAtom,
+  isLiveModeAtom,
+  isCameraEnabledAtom,
+  liveKitRoomAtom,
+  voiceConnectionStatusAtom,
+  voiceAgentConnectedAtom,
+} from "@/src/atoms";
 import { TerminalMessage } from "./TerminalMessage";
 import { TerminalInput } from "./TerminalInput";
 import { ScanlinesToggle } from "./Scanlines";
 import { ThinkingSpinner } from "./ThinkingSpinner";
 import type { Id } from "@/convex/_generated/dataModel";
+import type { DisplayInstance } from "@/src/types/display";
+import { RoomEvent, Track } from "livekit-client";
 
 interface Message {
   _id: string;
@@ -20,6 +29,7 @@ interface Message {
 
 interface TerminalPaneProps {
   sessionId: Id<"sessions">;
+  displayInstance?: DisplayInstance | null;
   messages: Message[];
   input: string;
   onInputChange: (value: string) => void;
@@ -29,17 +39,120 @@ interface TerminalPaneProps {
 
 export const TerminalPane = forwardRef<HTMLTextAreaElement, TerminalPaneProps>(
   function TerminalPane(
-    { sessionId, messages, input, onInputChange, onSend, isLoading },
+    { sessionId, displayInstance, messages, input, onInputChange, onSend, isLoading },
     ref
   ) {
     const containerRef = useRef<HTMLDivElement>(null);
     const shiftHeld = useAtomValue(shiftHeldAtom);
     const [isLiveMode, setIsLiveMode] = useAtom(isLiveModeAtom);
+    const [isCameraEnabled, setIsCameraEnabled] = useAtom(isCameraEnabledAtom);
+    const room = useAtomValue(liveKitRoomAtom);
     const voiceConnectionStatus = useAtomValue(voiceConnectionStatusAtom);
     const voiceAgentConnected = useAtomValue(voiceAgentConnectedAtom);
 
+    // Camera preview
+    const previewVideoRef = useRef<HTMLVideoElement>(null);
+    const previewTrackRef = useRef<any>(null);
+
+    const getActiveDisplayInstance = (instance: DisplayInstance): DisplayInstance => {
+      if (!instance.children || instance.children.length === 0) return instance;
+      const lastChild = instance.children[instance.children.length - 1];
+      if (!lastChild) return instance;
+      return getActiveDisplayInstance(lastChild);
+    };
+
+    const liveModePackEnabled = (() => {
+      if (!displayInstance) return undefined;
+      const active = getActiveDisplayInstance(displayInstance);
+      return active.node.packNames?.includes("liveMode") === true;
+    })();
+    const liveModeAllowed = liveModePackEnabled === true;
+
+    // If live mode isn't supported in this node, force-disable mic/camera so the UI doesn't get stuck.
+    useEffect(() => {
+      if (liveModePackEnabled === false) {
+        if (isLiveMode) setIsLiveMode(false);
+        if (isCameraEnabled) setIsCameraEnabled(false);
+      }
+    }, [liveModePackEnabled, isLiveMode, isCameraEnabled, setIsLiveMode, setIsCameraEnabled]);
+
+    const detachCameraPreview = useCallback(() => {
+      const video = previewVideoRef.current;
+      const track = previewTrackRef.current;
+      if (video && track && typeof track.detach === "function") {
+        try {
+          track.detach(video);
+        } catch {
+          // ignore
+        }
+      }
+      previewTrackRef.current = null;
+      if (video) {
+        video.srcObject = null;
+      }
+    }, []);
+
+    const attachCameraPreview = useCallback(() => {
+      const video = previewVideoRef.current;
+      if (!video || !room) return;
+
+      const pub = room.localParticipant?.getTrackPublication(Track.Source.Camera);
+      const track = pub?.track as any;
+      if (!track || typeof track.attach !== "function") {
+        detachCameraPreview();
+        return;
+      }
+
+      if (previewTrackRef.current && previewTrackRef.current !== track) {
+        try {
+          previewTrackRef.current.detach(video);
+        } catch {
+          // ignore
+        }
+      }
+
+      previewTrackRef.current = track;
+      try {
+        track.attach(video);
+      } catch {
+        // ignore
+      }
+    }, [room, detachCameraPreview]);
+
+    useEffect(() => {
+      if (!liveModeAllowed || !isCameraEnabled || !room) {
+        detachCameraPreview();
+        return;
+      }
+
+      attachCameraPreview();
+
+      const onLocalTrackPublished = (publication: any) => {
+        if (publication?.source === Track.Source.Camera) {
+          attachCameraPreview();
+        }
+      };
+      const onLocalTrackUnpublished = (publication: any) => {
+        if (publication?.source === Track.Source.Camera) {
+          detachCameraPreview();
+        }
+      };
+
+      room.on(RoomEvent.LocalTrackPublished, onLocalTrackPublished);
+      room.on(RoomEvent.LocalTrackUnpublished, onLocalTrackUnpublished);
+
+      return () => {
+        room.off(RoomEvent.LocalTrackPublished, onLocalTrackPublished);
+        room.off(RoomEvent.LocalTrackUnpublished, onLocalTrackUnpublished);
+      };
+    }, [room, liveModeAllowed, isCameraEnabled, attachCameraPreview, detachCameraPreview]);
+
     const handleToggleLiveMode = () => {
       setIsLiveMode((prev) => !prev);
+    };
+
+    const handleToggleCamera = () => {
+      setIsCameraEnabled((prev) => !prev);
     };
 
     // Auto-scroll on any DOM content change (new messages AND streaming deltas),
@@ -94,6 +207,22 @@ export const TerminalPane = forwardRef<HTMLTextAreaElement, TerminalPaneProps>(
           <ScanlinesToggle />
         </div>
 
+        {/* Camera preview (top-right) */}
+        {liveModeAllowed && isCameraEnabled && (
+          <div className="absolute top-12 right-4 z-10 w-32 aspect-video border border-terminal-green-dimmer bg-black/30 overflow-hidden">
+            <video
+              ref={previewVideoRef}
+              muted
+              playsInline
+              autoPlay
+              className="w-full h-full object-cover"
+            />
+            <div className="absolute bottom-0 left-0 px-1 py-[1px] text-[10px] font-mono text-terminal-green-dim bg-terminal-bg/70 border-t border-terminal-green-dimmer">
+              CAM
+            </div>
+          </div>
+        )}
+
         {/* Messages area with sticky input */}
         <div
           ref={containerRef}
@@ -128,10 +257,12 @@ export const TerminalPane = forwardRef<HTMLTextAreaElement, TerminalPaneProps>(
             onChange={onInputChange}
             onSend={onSend}
             isLoading={isLoading}
-            isLiveMode={isLiveMode}
+            isLiveMode={liveModeAllowed ? isLiveMode : false}
+            isCameraEnabled={liveModeAllowed ? isCameraEnabled : false}
             voiceConnectionStatus={voiceConnectionStatus}
             voiceAgentConnected={voiceAgentConnected}
-            onToggleLiveMode={handleToggleLiveMode}
+            onToggleLiveMode={liveModeAllowed ? handleToggleLiveMode : undefined}
+            onToggleCamera={liveModeAllowed ? handleToggleCamera : undefined}
           />
         </div>
       </div>
