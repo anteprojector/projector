@@ -161,6 +161,10 @@ export function serializeInstanceForDisplay(
     });
   }
 
+  if (packs) {
+    node.packs = packs;
+  }
+
   return {
     id: instance.id,
     node,
