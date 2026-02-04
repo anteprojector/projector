@@ -12,9 +12,11 @@ import type {
   TextBlock,
 } from "../types/messages.js";
 import type { YieldReason } from "../executor/types.js";
+import type { Charter } from "../types/charter.js";
 import { getActiveLeaves, isWorkerInstance, getSuspendedInstances, findInstanceById, clearSuspension, createInstance } from "../types/instance.js";
 import { userMessage, isInstanceMessage, isEphemeralMessage } from "../types/messages.js";
 import { isResume } from "../types/commands.js";
+import { serializeNode } from "../serialization/serialize.js";
 
 
 /** Check if packStates has any entries */
@@ -210,14 +212,51 @@ export function drainQueue<AppMessage = unknown>(
 }
 
 /**
+ * Serialize Node references in instance messages to Ref/SerialNode for history persistence.
+ * Transition and spawn payloads contain live Node objects with functions/validators
+ * that are not serializable. This replaces them with charter refs.
+ */
+function serializeInstanceMessageForHistory<AppMessage>(
+  msg: InstanceMessage<AppMessage>,
+  charter?: Charter<AppMessage>,
+): InstanceMessage<AppMessage> {
+  const payload = msg.items;
+  switch (payload.kind) {
+    case "transition":
+      return {
+        ...msg,
+        items: {
+          ...payload,
+          node: serializeNode(payload.node, charter) as any,
+        },
+      };
+    case "spawn":
+      return {
+        ...msg,
+        items: {
+          ...payload,
+          children: payload.children.map(c => ({
+            ...c,
+            node: serializeNode(c.node, charter) as any,
+          })),
+        },
+      };
+    default:
+      return msg;
+  }
+}
+
+/**
  * Build step history from ordered drain output.
  * - Non-ephemeral messages pass through in order.
  * - Non-singleton ephemerals pass through in order.
  * - Singleton ephemerals collapse: only the last message per singleton key is kept,
  *   annotated with singletonFrameCount.
+ * - Instance messages have Node references serialized for persistence.
  */
 function buildStepHistory<AppMessage = unknown>(
   ordered: MachineMessage<AppMessage>[],
+  charter?: Charter<AppMessage>,
 ): MachineMessage<AppMessage>[] {
   // First pass: find last index and count for each singleton key
   const lastIndexBySingleton = new Map<string, number>();
@@ -232,10 +271,15 @@ function buildStepHistory<AppMessage = unknown>(
     countBySingleton.set(singleton, (countBySingleton.get(singleton) ?? 0) + 1);
   }
 
-  // Second pass: build result, collapsing singleton ephemerals
+  // Second pass: build result, collapsing singleton ephemerals and serializing instance messages
   const result: MachineMessage<AppMessage>[] = [];
   for (let i = 0; i < ordered.length; i++) {
     const msg = ordered[i]!;
+
+    if (isInstanceMessage(msg)) {
+      result.push(serializeInstanceMessageForHistory(msg, charter));
+      continue;
+    }
 
     if (isEphemeralMessage(msg)) {
       const singleton = msg.metadata?.singleton;
@@ -454,7 +498,7 @@ export async function* runMachine<AppMessage = unknown>(
 ): AsyncGenerator<MachineStep<AppMessage>> {
   // Initial drain of queue
   const initialDrain = drainQueue(machine);
-  const initialStepHistory = buildStepHistory(initialDrain.ordered);
+  const initialStepHistory = buildStepHistory(initialDrain.ordered, machine.charter);
 
   // Check for Resume in system messages
   for (const msg of initialDrain.conversationMessages) {
@@ -522,6 +566,8 @@ export async function* runMachine<AppMessage = unknown>(
   const maxSteps = options?.maxSteps ?? 50;
   let steps = 0;
   let tokenRecoveryAttempted = false;
+  // Initial drain messages are prepended to the first yielded step's history
+  let pendingInitialHistory: MachineMessage<AppMessage>[] | null = initialStepHistory;
 
   while (steps < maxSteps) {
     steps++;
@@ -616,10 +662,16 @@ export async function* runMachine<AppMessage = unknown>(
     const { hasCede, cedeContents } = applyInstanceMessages(machine, stepDrain.instanceMessages, steps);
 
     // Step history is all drained messages in queue order
-    const stepHistory = buildStepHistory(stepDrain.ordered);
+    const stepHistory = buildStepHistory(stepDrain.ordered, machine.charter);
 
     // Add step history to machine.history
     machine.history = [...machine.history, ...stepHistory];
+
+    // First step includes initial drain messages (user input, etc.)
+    const fullStepHistory = pendingInitialHistory
+      ? [...pendingInitialHistory, ...stepHistory]
+      : stepHistory;
+    pendingInitialHistory = null;
 
     // Determine primary yield reason (from non-worker leaf)
     const primaryResult = results.find(r => !r.isWorker);
@@ -659,7 +711,7 @@ export async function* runMachine<AppMessage = unknown>(
       if (activeLeaves.length === 1) {
         yield {
           instance: machine.instance,
-          history: stepHistory,
+          history: fullStepHistory,
           yieldReason: "cede",
           done: false,
           cedeContent,
@@ -679,7 +731,7 @@ export async function* runMachine<AppMessage = unknown>(
         // Yield the partial step (not final)
         yield {
           instance: machine.instance,
-          history: stepHistory,
+          history: fullStepHistory,
           yieldReason: "max_tokens",
           done: false,
         };
@@ -694,7 +746,7 @@ export async function* runMachine<AppMessage = unknown>(
         // Recovery already attempted, treat as final
         yield {
           instance: machine.instance,
-          history: stepHistory,
+          history: fullStepHistory,
           yieldReason: "max_tokens",
           done: true,
         };
@@ -709,7 +761,7 @@ export async function* runMachine<AppMessage = unknown>(
 
     yield {
       instance: machine.instance,
-      history: stepHistory,
+      history: fullStepHistory,
       yieldReason: primaryYieldReason,
       done: isFinal,
     };
