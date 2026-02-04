@@ -637,7 +637,7 @@ describe("command with instanceId targeting", () => {
       machine,
       "setValue",
       { newValue: "updated-parent" },
-      parent.id,
+      { instanceId: parent.id },
     );
 
     expect(result.success).toBe(true);

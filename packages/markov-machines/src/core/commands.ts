@@ -61,14 +61,17 @@ export async function runCommand<AppMessage = unknown>(
   machine: Machine<AppMessage>,
   commandName: string,
   input: unknown = {},
-  instanceId?: string,
+  options?: { instanceId?: string; clientId?: string },
 ): Promise<{
   machine: Machine<AppMessage>;
   result: CommandExecutionResult;
   messages?: MachineMessage<AppMessage>[];
 }> {
+  const instanceId = options?.instanceId;
+  const clientId = options?.clientId;
+
   // Enqueue the command message for history tracking
-  const command = { type: "command" as const, name: commandName, input, instanceId };
+  const command = { type: "command" as const, name: commandName, input, instanceId, clientId };
   machine.enqueue([commandMessage([command])]);
 
   // Find the target instance

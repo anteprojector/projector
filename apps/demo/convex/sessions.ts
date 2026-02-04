@@ -50,6 +50,18 @@ export const get = query({
     const currentTurn = await ctx.db.get(session.currentTurnId);
     if (!currentTurn) return null;
 
+    // Extract clientIds from command messages for optimistic update reconciliation
+    const recentCommandResidue: string[] = [];
+    for (const msg of currentTurn.messages as any[]) {
+      if (msg.role === "command" && Array.isArray(msg.items)) {
+        for (const item of msg.items) {
+          if (item.type === "command" && item.clientId) {
+            recentCommandResidue.push(item.clientId);
+          }
+        }
+      }
+    }
+
     return {
       sessionId: id,
       turnId: session.currentTurnId,
@@ -59,6 +71,7 @@ export const get = query({
       displayInstance: currentTurn.displayInstance,
       messages: currentTurn.messages,
       createdAt: currentTurn.createdAt,
+      recentCommandResidue,
     };
   },
 });

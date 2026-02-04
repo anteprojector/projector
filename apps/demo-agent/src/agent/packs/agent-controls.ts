@@ -4,7 +4,7 @@ import { commandResult, createPack } from "markov-machines";
 export const agentControlsStateValidator = z.object({
   voiceEnabled: z.boolean().default(false),
   cameraEnabled: z.boolean().default(false),
-  enableStreaming: z.boolean().default(true),
+  enableStreaming: z.boolean().default(false),
 });
 
 export type AgentControlsState = z.infer<typeof agentControlsStateValidator>;
@@ -17,7 +17,7 @@ export const agentControlsPack = createPack({
     const parsed = agentControlsStateValidator.safeParse(state ?? {});
     const safeState: AgentControlsState = parsed.success
       ? parsed.data
-      : { voiceEnabled: false, cameraEnabled: false, enableStreaming: true };
+      : { voiceEnabled: false, cameraEnabled: false, enableStreaming: false };
 
     const parts: string[] = [];
 
@@ -101,5 +101,5 @@ export const agentControlsPack = createPack({
       },
     },
   },
-  initialState: { voiceEnabled: false, cameraEnabled: false, enableStreaming: true },
+  initialState: { voiceEnabled: false, cameraEnabled: false, enableStreaming: false },
 });

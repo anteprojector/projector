@@ -517,7 +517,15 @@ export default defineAgent({
       const isTextDelta =
         type === "response.output_text.delta" || type === "response.text.delta";
 
+      // Check streaming preference on each event so mid-session toggles take effect.
+      const streamingControls = context.machine?.instance?.packStates?.agentControls as AgentControlsState | undefined;
+      const isStreamingEnabled = streamingControls?.enableStreaming ?? false;
+
       if (isAudioTranscriptDelta || isTextDelta) {
+        // When streaming is disabled, skip incremental packets and envelopes.
+        // The complete message will arrive via LiveKitExecutor → onMessageEnqueue.
+        if (!isStreamingEnabled) return;
+
         const messageId = event.item_id as unknown;
         const delta = event.delta as unknown;
         const contentIndex = event.content_index as unknown;
@@ -574,11 +582,15 @@ export default defineAgent({
 
         const messageId = item.id;
         const stream = activeTranscriptStreams.get(messageId);
-        if (!stream) return;
+        if (stream) {
+          activeTranscriptStreams.delete(messageId);
+        }
+
+        // Only emit message_end if we were actively streaming this message.
+        if (!stream || !isStreamingEnabled) return;
 
         const nextSeq = stream.seq + 1;
         stream.seq = nextSeq;
-        activeTranscriptStreams.delete(messageId);
 
         publishTranscriptPacket({
           v: 1,
@@ -758,9 +770,10 @@ export default defineAgent({
         }
 
         try {
-          const { commandName, input } = JSON.parse(payload) as {
+          const { commandName, input, clientId } = JSON.parse(payload) as {
             commandName: string;
             input: Record<string, unknown>;
+            clientId?: string;
           };
 
           // Execute command directly (runCommand enqueues the command message for history)
@@ -768,6 +781,7 @@ export default defineAgent({
             context.machine,
             commandName,
             input,
+            { clientId },
           );
 
           // Update machine state

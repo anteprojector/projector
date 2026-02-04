@@ -51,15 +51,12 @@ export interface LiveClientHandle {
   sendMessage: (message: string) => Promise<{ response: string; instance: unknown } | null>;
   executeCommand: (
     commandName: string,
-    input: Record<string, unknown>
+    input: Record<string, unknown>,
+    clientId?: string,
   ) => Promise<CommandExecutionResult>;
   isConnected: () => boolean;
 }
 export const liveClientAtom = atom<LiveClientHandle | null>(null);
-
-// Optimistic overlay for pack state commands — merged into displayInstance before
-// passing downstream so toggles feel instant while the Convex round-trip completes.
-export const packStateOverridesAtom = atom<Record<string, Record<string, unknown>>>({});
 
 // LiveKit streaming (ephemeral UI enhancement; Convex is source of truth)
 export type StreamPacket =

@@ -18,10 +18,9 @@ import {
   streamBuffersAtom,
   streamPresenceAtom,
   pruneStreamBuffersAtom,
-  packStateOverridesAtom,
   type AgentTab,
 } from "@/src/atoms";
-import { useSessionId } from "@/src/hooks";
+import { useSessionId, useOptimisticCommands } from "@/src/hooks";
 import { TerminalPane } from "./components/terminal/TerminalPane";
 import { AgentPane } from "./components/agent/AgentPane";
 import { ThemeProvider } from "./components/ThemeProvider";
@@ -49,8 +48,7 @@ export function HomeClient({
   const setStreamBuffers = useSetAtom(streamBuffersAtom);
   const setStreamPresence = useSetAtom(streamPresenceAtom);
   const pruneStreamBuffers = useSetAtom(pruneStreamBuffersAtom);
-  const packStateOverrides = useAtomValue(packStateOverridesAtom);
-  const setPackStateOverrides = useSetAtom(packStateOverridesAtom);
+  const liveClient = useAtomValue(liveClientAtom);
 
   const terminalInputRef = useRef<HTMLTextAreaElement>(null);
   const agentPaneRef = useRef<HTMLDivElement>(null);
@@ -86,24 +84,14 @@ export function HomeClient({
   );
   const session = useQuery(api.sessions.get, sessionId ? { id: sessionId } : "skip");
 
-  // Merge optimistic pack state overrides into displayInstance so toggles feel instant.
-  const effectiveDisplayInstance = useMemo(() => {
-    if (!session?.displayInstance || Object.keys(packStateOverrides).length === 0) {
-      return session?.displayInstance;
-    }
-    const base = { ...session.displayInstance };
-    const basePS = (base.packStates as Record<string, any>) ?? {};
-    base.packStates = Object.entries(packStateOverrides).reduce(
-      (acc, [pack, ov]) => ({ ...acc, [pack]: { ...acc[pack], ...ov } }),
-      { ...basePS }
-    );
-    return base;
-  }, [session?.displayInstance, packStateOverrides]);
-
-  // Clear overrides when server displayInstance changes (reconciliation).
-  useEffect(() => {
-    setPackStateOverrides({});
-  }, [session?.displayInstance, setPackStateOverrides]);
+  // Per-command optimistic tracking — overlays are kept until the server confirms
+  // each command's clientId in recentCommandResidue.
+  const optimistic = useOptimisticCommands(
+    session?.displayInstance,
+    session?.recentCommandResidue,
+    liveClient,
+  );
+  const effectiveDisplayInstance = optimistic.instance;
 
   // Derive voice/camera state from effective (optimistic) display instance
   const effectivePackStates = effectiveDisplayInstance?.packStates as Record<string, any> | undefined;
@@ -371,6 +359,7 @@ export function HomeClient({
             onInputChange={setInput}
             onSend={handleSend}
             isLoading={isLoading}
+            executeCommand={optimistic.executeCommand}
           />
         </div>
 

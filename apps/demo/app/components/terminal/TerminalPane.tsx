@@ -4,12 +4,11 @@ import { forwardRef, useEffect, useRef, useCallback } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
   shiftHeldAtom,
-  liveClientAtom,
   liveKitRoomAtom,
   voiceConnectionStatusAtom,
   voiceAgentConnectedAtom,
-  packStateOverridesAtom,
 } from "@/src/atoms";
+import type { OptimisticPatch } from "@/src/hooks";
 import { TerminalMessage } from "./TerminalMessage";
 import { TerminalInput } from "./TerminalInput";
 import { ScanlinesToggle } from "./Scanlines";
@@ -36,17 +35,20 @@ interface TerminalPaneProps {
   onInputChange: (value: string) => void;
   onSend: () => void;
   isLoading: boolean;
+  executeCommand: (
+    commandName: string,
+    input: Record<string, unknown>,
+    optimistic?: OptimisticPatch,
+  ) => Promise<{ success: boolean; value?: unknown; error?: string }>;
 }
 
 export const TerminalPane = forwardRef<HTMLTextAreaElement, TerminalPaneProps>(
   function TerminalPane(
-    { sessionId, displayInstance, messages, input, onInputChange, onSend, isLoading },
+    { sessionId, displayInstance, messages, input, onInputChange, onSend, isLoading, executeCommand },
     ref
   ) {
     const containerRef = useRef<HTMLDivElement>(null);
     const shiftHeld = useAtomValue(shiftHeldAtom);
-    const liveClient = useAtomValue(liveClientAtom);
-    const setOverrides = useSetAtom(packStateOverridesAtom);
     const room = useAtomValue(liveKitRoomAtom);
     const voiceConnectionStatus = useAtomValue(voiceConnectionStatusAtom);
     const voiceAgentConnected = useAtomValue(voiceAgentConnectedAtom);
@@ -74,6 +76,11 @@ export const TerminalPane = forwardRef<HTMLTextAreaElement, TerminalPaneProps>(
     const agentControls = packStates?.agentControls;
     const voiceEnabled = (agentControls?.voiceEnabled as boolean) ?? false;
     const cameraEnabled = (agentControls?.cameraEnabled as boolean) ?? false;
+
+    const cameraEnabledRef = useRef(cameraEnabled);
+    cameraEnabledRef.current = cameraEnabled;
+    const liveModeAllowedRef = useRef(liveModeAllowed);
+    liveModeAllowedRef.current = liveModeAllowed;
 
     const detachCameraPreview = useCallback(() => {
       const video = previewVideoRef.current;
@@ -119,21 +126,17 @@ export const TerminalPane = forwardRef<HTMLTextAreaElement, TerminalPaneProps>(
       }
     }, [room, detachCameraPreview]);
 
+    // Effect A: Always-on track event listeners. Depends only on `room` so
+    // listeners persist across cameraEnabled toggles and never miss events.
     useEffect(() => {
-      if (!liveModeAllowed || !cameraEnabled || !room) {
-        detachCameraPreview();
-        return;
-      }
-
-      attachCameraPreview();
-
-      // Retry attach after a short delay — covers the race where the track
-      // isn't published yet when the effect first runs and the
-      // LocalTrackPublished event fired before the listener was registered.
-      const retryTimer = setTimeout(() => attachCameraPreview(), 500);
+      if (!room) return;
 
       const onLocalTrackPublished = (publication: any) => {
-        if (publication?.source === Track.Source.Camera) {
+        if (
+          publication?.source === Track.Source.Camera &&
+          cameraEnabledRef.current &&
+          liveModeAllowedRef.current
+        ) {
           attachCameraPreview();
         }
       };
@@ -147,37 +150,32 @@ export const TerminalPane = forwardRef<HTMLTextAreaElement, TerminalPaneProps>(
       room.on(RoomEvent.LocalTrackUnpublished, onLocalTrackUnpublished);
 
       return () => {
-        clearTimeout(retryTimer);
         room.off(RoomEvent.LocalTrackPublished, onLocalTrackPublished);
         room.off(RoomEvent.LocalTrackUnpublished, onLocalTrackUnpublished);
       };
+    }, [room, attachCameraPreview, detachCameraPreview]);
+
+    // Effect B: Reactive attach/detach when state changes. Handles the case
+    // where the track is already published when cameraEnabled becomes true.
+    useEffect(() => {
+      if (!liveModeAllowed || !cameraEnabled || !room) {
+        detachCameraPreview();
+        return;
+      }
+      attachCameraPreview();
     }, [room, liveModeAllowed, cameraEnabled, attachCameraPreview, detachCameraPreview]);
 
     const handleToggleLiveMode = () => {
       const next = !voiceEnabled;
-      setOverrides((prev) => ({
-        ...prev,
-        agentControls: { ...(prev.agentControls ?? {}), voiceEnabled: next },
-      }));
-      liveClient?.executeCommand("setVoiceEnabled", { enabled: next }).then((r) => {
-        if (!r.success) setOverrides((prev) => {
-          const { voiceEnabled: _, ...rest } = (prev.agentControls ?? {}) as any;
-          return { ...prev, agentControls: rest };
-        });
+      executeCommand("setVoiceEnabled", { enabled: next }, {
+        packState: { agentControls: { voiceEnabled: next } },
       });
     };
 
     const handleToggleCamera = () => {
       const next = !cameraEnabled;
-      setOverrides((prev) => ({
-        ...prev,
-        agentControls: { ...(prev.agentControls ?? {}), cameraEnabled: next },
-      }));
-      liveClient?.executeCommand("setCameraEnabled", { enabled: next }).then((r) => {
-        if (!r.success) setOverrides((prev) => {
-          const { cameraEnabled: _, ...rest } = (prev.agentControls ?? {}) as any;
-          return { ...prev, agentControls: rest };
-        });
+      executeCommand("setCameraEnabled", { enabled: next }, {
+        packState: { agentControls: { cameraEnabled: next } },
       });
     };
 
@@ -231,7 +229,7 @@ export const TerminalPane = forwardRef<HTMLTextAreaElement, TerminalPaneProps>(
             {shiftHeld ? <u>M</u> : "M"}ESSAGES
           </h1>
           <div className="flex items-center gap-3">
-            <StreamingToggle displayInstance={displayInstance} />
+            <StreamingToggle displayInstance={displayInstance} executeCommand={executeCommand} />
             <ScanlinesToggle />
           </div>
         </div>

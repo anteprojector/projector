@@ -1,17 +1,22 @@
 "use client";
 
-import { useAtomValue, useSetAtom } from "jotai";
-import { liveClientAtom, packStateOverridesAtom } from "@/src/atoms";
 import type { DisplayInstance } from "@/src/types/display";
+import type { OptimisticPatch } from "@/src/hooks";
 import { findCommand } from "markov-machines/client";
 import { demoContract } from "demo-agent/src/agent/contract";
 
 const setStreamingEnabled = demoContract.commands.agentControls.setStreamingEnabled;
 
-export function StreamingToggle({ displayInstance }: { displayInstance?: DisplayInstance | null }) {
-  const liveClient = useAtomValue(liveClientAtom);
-  const setOverrides = useSetAtom(packStateOverridesAtom);
+interface StreamingToggleProps {
+  displayInstance?: DisplayInstance | null;
+  executeCommand: (
+    commandName: string,
+    input: Record<string, unknown>,
+    optimistic?: OptimisticPatch,
+  ) => Promise<{ success: boolean; value?: unknown; error?: string }>;
+}
 
+export function StreamingToggle({ displayInstance, executeCommand }: StreamingToggleProps) {
   if (!displayInstance) return null;
 
   // Only show toggle if the setStreamingEnabled command is available
@@ -25,15 +30,8 @@ export function StreamingToggle({ displayInstance }: { displayInstance?: Display
 
   const handleToggle = () => {
     const next = !enabled;
-    setOverrides((prev) => ({
-      ...prev,
-      agentControls: { ...(prev.agentControls ?? {}), enableStreaming: next },
-    }));
-    liveClient?.executeCommand(cmd.name, { enabled: next }).then((r) => {
-      if (!r.success) setOverrides((prev) => {
-        const { enableStreaming: _, ...rest } = (prev.agentControls ?? {}) as any;
-        return { ...prev, agentControls: rest };
-      });
+    executeCommand(cmd.name, { enabled: next }, {
+      packState: { agentControls: { enableStreaming: next } },
     });
   };
 

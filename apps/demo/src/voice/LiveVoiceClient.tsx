@@ -320,7 +320,7 @@ export interface LiveVoiceClientHandle {
 
     // Execute a command on the agent via RPC
     const executeCommand = useCallback(
-      async (commandName: string, input: Record<string, unknown>): Promise<CommandExecutionResult> => {
+      async (commandName: string, input: Record<string, unknown>, clientId?: string): Promise<CommandExecutionResult> => {
         const room = roomRef.current;
         if (!room || room.state !== ConnectionState.Connected) {
           console.error("Cannot execute command: room not connected");
@@ -341,7 +341,7 @@ export interface LiveVoiceClientHandle {
           const response = await room.localParticipant.performRpc({
             destinationIdentity: agentParticipant.identity,
             method: "executeCommand",
-            payload: JSON.stringify({ commandName, input }),
+            payload: JSON.stringify({ commandName, input, clientId }),
             responseTimeout: 30000, // 30s timeout for command execution
           });
 

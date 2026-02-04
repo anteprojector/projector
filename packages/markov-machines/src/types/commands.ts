@@ -153,6 +153,8 @@ export interface Command {
   input: unknown;
   /** Target specific instance (defaults to active instance) */
   instanceId?: string;
+  /** Client-generated ID for optimistic update tracking */
+  clientId?: string;
 }
 
 /**
