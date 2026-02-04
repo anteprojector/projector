@@ -596,7 +596,7 @@ describe("message attribution", () => {
 
     // First step should contain history from both leaves (user input is in machine.history)
     const firstStep = steps[0]!;
-    expect(firstStep.history.length).toBe(2); // 2 model outputs (user input now in machine.history)
+    expect(firstStep.history.length).toBe(3); // 2 assistant messages + 1 cede instance message
 
     // All messages should have source.instanceId metadata
     for (const msg of firstStep.history) {

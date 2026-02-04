@@ -149,6 +149,8 @@ function removeInstanceById(root: Instance, targetId: string): Instance {
  * Result of draining the queue.
  */
 export interface DrainResult<AppMessage = unknown> {
+  /** All drained messages in original queue order */
+  ordered: MachineMessage<AppMessage>[];
   /** Instance mutation messages (applied to machine.instance) */
   instanceMessages: InstanceMessage<AppMessage>[];
   /** Conversation messages (user, assistant, system, command) for history */
@@ -204,57 +206,75 @@ export function drainQueue<AppMessage = unknown>(
     }
   }
 
-  return { instanceMessages, conversationMessages, ephemeralMessages };
+  return { ordered: messages, instanceMessages, conversationMessages, ephemeralMessages };
 }
 
-function collapseEphemeralMessages<AppMessage = unknown>(
-  messages: EphemeralMessage<AppMessage>[],
-): EphemeralMessage<AppMessage>[] {
+/**
+ * Build step history from ordered drain output.
+ * - Non-ephemeral messages pass through in order.
+ * - Non-singleton ephemerals pass through in order.
+ * - Singleton ephemerals collapse: only the last message per singleton key is kept,
+ *   annotated with singletonFrameCount.
+ */
+function buildStepHistory<AppMessage = unknown>(
+  ordered: MachineMessage<AppMessage>[],
+): MachineMessage<AppMessage>[] {
+  // First pass: find last index and count for each singleton key
   const lastIndexBySingleton = new Map<string, number>();
   const countBySingleton = new Map<string, number>();
 
-  for (let i = 0; i < messages.length; i++) {
-    const singleton = messages[i]?.metadata?.singleton;
+  for (let i = 0; i < ordered.length; i++) {
+    const msg = ordered[i]!;
+    if (!isEphemeralMessage(msg)) continue;
+    const singleton = msg.metadata?.singleton;
     if (!singleton) continue;
     lastIndexBySingleton.set(singleton, i);
     countBySingleton.set(singleton, (countBySingleton.get(singleton) ?? 0) + 1);
   }
 
-  const collapsed: EphemeralMessage<AppMessage>[] = [];
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i]!;
-    const singleton = msg.metadata?.singleton;
-    if (!singleton) {
-      collapsed.push(msg);
+  // Second pass: build result, collapsing singleton ephemerals
+  const result: MachineMessage<AppMessage>[] = [];
+  for (let i = 0; i < ordered.length; i++) {
+    const msg = ordered[i]!;
+
+    if (isEphemeralMessage(msg)) {
+      const singleton = msg.metadata?.singleton;
+      if (!singleton) {
+        result.push(msg);
+        continue;
+      }
+      // Only keep the last message for this singleton key
+      if (lastIndexBySingleton.get(singleton) !== i) continue;
+      const frameCount = countBySingleton.get(singleton) ?? 1;
+      result.push({
+        ...msg,
+        metadata: {
+          ...(msg.metadata ?? {}),
+          singletonFrameCount: frameCount,
+        },
+      });
       continue;
     }
-    const lastIndex = lastIndexBySingleton.get(singleton);
-    if (lastIndex !== i) continue;
 
-    const frameCount = countBySingleton.get(singleton) ?? 1;
-    collapsed.push({
-      ...msg,
-      metadata: {
-        ...(msg.metadata ?? {}),
-        singletonFrameCount: frameCount,
-      },
-    });
+    result.push(msg);
   }
 
-  return collapsed;
+  return result;
 }
 
-function buildSyntheticEphemeralUserMessages<AppMessage = unknown>(
-  messages: EphemeralMessage<AppMessage>[],
+/**
+ * Convert ephemeral messages in history to model-friendly user messages.
+ * Non-ephemeral messages pass through unchanged.
+ */
+function convertEphemeralsForModel<AppMessage = unknown>(
+  history: MachineMessage<AppMessage>[],
 ): MachineMessage<AppMessage>[] {
-  const synthetic: MachineMessage<AppMessage>[] = [];
+  return history.flatMap((msg) => {
+    if (!isEphemeralMessage(msg)) return msg;
 
-  for (const msg of messages) {
     const items = msg.items;
     if (typeof items === "string") {
-      // Generic ephemeral text context
-      synthetic.push(userMessage<AppMessage>(items, { silent: true }));
-      continue;
+      return userMessage<AppMessage>(items, { silent: true });
     }
 
     const imageBlocks = items.filter(
@@ -268,17 +288,13 @@ function buildSyntheticEphemeralUserMessages<AppMessage = unknown>(
         text: `[Camera frame] This is a snapshot from the user's live camera (not an uploaded file). Frames since last turn: ${frameCount}.`,
       };
 
-      for (const image of imageBlocks) {
-        synthetic.push(userMessage<AppMessage>([preamble, image], { silent: true }));
-      }
-      continue;
+      return imageBlocks.map((image) =>
+        userMessage<AppMessage>([preamble, image], { silent: true }),
+      );
     }
 
-    // Generic ephemeral blocks (no special handling)
-    synthetic.push(userMessage<AppMessage>(items, { silent: true }));
-  }
-
-  return synthetic;
+    return userMessage<AppMessage>(items, { silent: true });
+  });
 }
 
 /**
@@ -436,12 +452,9 @@ export async function* runMachine<AppMessage = unknown>(
   machine: Machine<AppMessage>,
   options?: RunOptions<AppMessage>,
 ): AsyncGenerator<MachineStep<AppMessage>> {
-  const historyBeforeRunLength = machine.history.length;
-
   // Initial drain of queue
   const initialDrain = drainQueue(machine);
-  const collapsedEphemerals = collapseEphemeralMessages(initialDrain.ephemeralMessages);
-  const syntheticEphemeralUserMessages = buildSyntheticEphemeralUserMessages(collapsedEphemerals);
+  const initialStepHistory = buildStepHistory(initialDrain.ordered);
 
   // Check for Resume in system messages
   for (const msg of initialDrain.conversationMessages) {
@@ -483,8 +496,8 @@ export async function* runMachine<AppMessage = unknown>(
     }
   }
 
-  // Add initial conversation messages to machine.history
-  machine.history = [...machine.history, ...initialDrain.conversationMessages];
+  // Add initial step history to machine.history (all messages in queue order, singletons collapsed)
+  machine.history = [...machine.history, ...initialStepHistory];
 
   // Apply any initial instance messages
   applyInstanceMessages(machine, initialDrain.instanceMessages, 0);
@@ -499,7 +512,7 @@ export async function* runMachine<AppMessage = unknown>(
     // Yield step without running leaves
     yield {
       instance: machine.instance,
-      history: [...initialDrain.conversationMessages, ...initialDrain.instanceMessages],
+      history: initialStepHistory,
       yieldReason: "end_turn",
       done: true,
     };
@@ -552,11 +565,7 @@ export async function* runMachine<AppMessage = unknown>(
       console.log(`[runMachine]   Active leaves: ${activeLeaves.length} (${nonWorkerLeaves.length} non-worker)`);
     }
 
-    const historyForModel: MachineMessage<AppMessage>[] = [
-      ...machine.history.slice(0, historyBeforeRunLength),
-      ...syntheticEphemeralUserMessages,
-      ...machine.history.slice(historyBeforeRunLength),
-    ];
+    const historyForModel = convertEphemeralsForModel(machine.history);
 
     // Execute all leaves in parallel - they enqueue messages directly
     const results = await Promise.all(
@@ -606,15 +615,11 @@ export async function* runMachine<AppMessage = unknown>(
     // Apply instance messages and collect cede info
     const { hasCede, cedeContents } = applyInstanceMessages(machine, stepDrain.instanceMessages, steps);
 
-    // Step history is all conversation messages from this step
-    const stepHistory: MachineMessage<AppMessage>[] = [...stepDrain.conversationMessages];
+    // Step history is all drained messages in queue order
+    const stepHistory = buildStepHistory(stepDrain.ordered);
 
-    // Add step history to machine.history (includes instance messages for future reference)
-    machine.history = [
-      ...machine.history,
-      ...stepDrain.conversationMessages,
-      ...stepDrain.instanceMessages,
-    ];
+    // Add step history to machine.history
+    machine.history = [...machine.history, ...stepHistory];
 
     // Determine primary yield reason (from non-worker leaf)
     const primaryResult = results.find(r => !r.isWorker);

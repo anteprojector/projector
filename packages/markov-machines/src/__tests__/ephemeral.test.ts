@@ -117,9 +117,11 @@ describe("ephemeral messages", () => {
     expect(syntheticItems[1]?.type).toBe("image");
     expect(syntheticItems[1]?.data).toBe("BBB"); // last-write-wins
 
-    // Synthetic ephemerals are not persisted.
-    expect(machine.history.some((m) => Array.isArray(m.items) && (m.items as any[]).some((b) => b.type === "image"))).toBe(false);
-    expect(machine.history.some(isEphemeralMessage)).toBe(false);
+    // Collapsed ephemerals are persisted in machine.history.
+    expect(machine.history.some(isEphemeralMessage)).toBe(true);
+    const ephemeralInHistory = machine.history.filter(isEphemeralMessage);
+    expect(ephemeralInHistory).toHaveLength(1); // collapsed from 2 to 1
+    expect(ephemeralInHistory[0]?.metadata?.singletonFrameCount).toBe(2);
   });
 
   it("does not drain ephemerals during step drains (they remain queued for next run)", async () => {
