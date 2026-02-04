@@ -341,33 +341,37 @@ export default defineAgent({
     // Set up voice session
     const agent = new VoiceAssistant();
     let visionSampler: VisionSamplerHandle | null = null;
-    let voiceSession: voice.AgentSession;
 
-    if (ENABLE_REALTIME) {
-      console.log("[DemoAgent] Using OpenAI Realtime mode");
-      voiceSession = new voice.AgentSession({
-        llm: new openai.realtime.RealtimeModel({
-          model: "gpt-realtime",
-          voice: "alloy",
-          turnDetection: {
-            type: "server_vad",
-            threshold: 0.5,
-            silence_duration_ms: 500,
-          },
-          inputAudioTranscription: {
-            model: "whisper-1",
-          },
-        }),
-      });
-    } else {
-      console.log("[DemoAgent] Using STT->LLM->TTS pipeline mode");
-      voiceSession = new voice.AgentSession({
-        stt: new openai.STT(),
-        llm: new openai.LLM({ model: "gpt-4o-mini" }),
-        tts: new openai.TTS({ voice: "alloy" }),
-        vad: ctx.proc.userData.vad as silero.VAD,
-      });
-    }
+    // Helper: create a fresh voice.AgentSession (used at startup and on participant reconnect)
+    const createVoiceSession = (): voice.AgentSession => {
+      if (ENABLE_REALTIME) {
+        console.log("[DemoAgent] Creating voice session (OpenAI Realtime mode)");
+        return new voice.AgentSession({
+          llm: new openai.realtime.RealtimeModel({
+            model: "gpt-realtime",
+            voice: "alloy",
+            turnDetection: {
+              type: "server_vad",
+              threshold: 0.5,
+              silence_duration_ms: 500,
+            },
+            inputAudioTranscription: {
+              model: "whisper-1",
+            },
+          }),
+        });
+      } else {
+        console.log("[DemoAgent] Creating voice session (STT->LLM->TTS pipeline mode)");
+        return new voice.AgentSession({
+          stt: new openai.STT(),
+          llm: new openai.LLM({ model: "gpt-4o-mini" }),
+          tts: new openai.TTS({ voice: "alloy" }),
+          vad: ctx.proc.userData.vad as silero.VAD,
+        });
+      }
+    };
+
+    let voiceSession = createVoiceSession();
 
     // Get executor and connect to machine
     console.log("[DemoAgent] Getting LiveKit executor...");
@@ -390,25 +394,28 @@ export default defineAgent({
     liveKitExecutor.setLive(initialControls?.voiceEnabled ?? false);
     console.log(`[DemoAgent] Executor set from pack state (isLive=${initialControls?.voiceEnabled ?? false})`);
 
-    // Voice session event handlers
-    voiceSession.on(voice.AgentSessionEventTypes.AgentStateChanged, (ev) => {
-      console.log(`[DemoAgent] State: ${ev.oldState} -> ${ev.newState}`);
-    });
+    // Helper: attach event handlers to a voice session (used at startup and on reconnect)
+    const attachVoiceSessionHandlers = (session: voice.AgentSession) => {
+      session.on(voice.AgentSessionEventTypes.AgentStateChanged, (ev) => {
+        console.log(`[DemoAgent] State: ${ev.oldState} -> ${ev.newState}`);
+      });
+      // Create a turn when user starts speaking in live mode
+      session.on(voice.AgentSessionEventTypes.UserStateChanged, async (ev) => {
+        console.log(`[DemoAgent] UserState: ${ev.oldState} -> ${ev.newState}`);
+        visionSampler?.setMode(ev.newState === "speaking" ? "active" : "idle");
+        if (ev.newState === "speaking" && liveKitExecutor.isLive && context.machine) {
+          const activeInstance = getActiveInstance(context.machine.instance);
+          await createTurn(activeInstance.id, "[voice input]");
+          console.log("[DemoAgent] Created turn for voice input");
+        }
+      });
+      session.on(voice.AgentSessionEventTypes.Error, (ev) => {
+        console.error(`[DemoAgent] Error:`, ev.error);
+      });
+    };
 
-    // Create a turn when user starts speaking in live mode
-    voiceSession.on(voice.AgentSessionEventTypes.UserStateChanged, async (ev) => {
-      console.log(`[DemoAgent] UserState: ${ev.oldState} -> ${ev.newState}`);
-      visionSampler?.setMode(ev.newState === "speaking" ? "active" : "idle");
-      if (ev.newState === "speaking" && liveKitExecutor.isLive && context.machine) {
-        const activeInstance = getActiveInstance(context.machine.instance);
-        await createTurn(activeInstance.id, "[voice input]");
-        console.log("[DemoAgent] Created turn for voice input");
-      }
-    });
-
-    voiceSession.on(voice.AgentSessionEventTypes.Error, (ev) => {
-      console.error(`[DemoAgent] Error:`, ev.error);
-    });
+    // Attach initial event handlers
+    attachVoiceSessionHandlers(voiceSession);
 
     // Start voice session
     console.log("[DemoAgent] Starting agent session...");
@@ -495,7 +502,7 @@ export default defineAgent({
       return task;
     };
 
-    const realtimeSession = agent._agentActivity?.realtimeLLMSession as any;
+    let realtimeSession = agent._agentActivity?.realtimeLLMSession as any;
     const onOpenAIServerEvent = (event: any) => {
       if (!event || typeof event !== "object") return;
 
@@ -620,12 +627,18 @@ export default defineAgent({
       }
     };
 
-    if (ENABLE_REALTIME && realtimeSession && typeof realtimeSession.on === "function") {
-      realtimeSession.on("openai_server_event_received", onOpenAIServerEvent);
-      console.log("[DemoAgent] Attached realtime transcript streaming handler");
-    } else if (ENABLE_REALTIME) {
-      console.warn("[DemoAgent] Realtime session not available for transcript streaming");
-    }
+    // Helper: attach onOpenAIServerEvent to the current realtime session
+    const attachRealtimeHandler = () => {
+      realtimeSession = agent._agentActivity?.realtimeLLMSession as any;
+      if (ENABLE_REALTIME && realtimeSession && typeof realtimeSession.on === "function") {
+        realtimeSession.on("openai_server_event_received", onOpenAIServerEvent);
+        console.log("[DemoAgent] Attached realtime transcript streaming handler");
+      } else if (ENABLE_REALTIME) {
+        console.warn("[DemoAgent] Realtime session not available for transcript streaming");
+      }
+    };
+
+    attachRealtimeHandler();
 
     // Start camera frame sampling (1 fps) and feed frames into the realtime chat context.
     // This is a demo-only implementation (no adaptive sampling).
@@ -680,6 +693,83 @@ export default defineAgent({
     // Register signal handlers for graceful shutdown
     process.on("SIGTERM", cleanup);
     process.on("SIGINT", cleanup);
+
+    // ── Voice session reconnection on page refresh ──
+    // When a user refreshes the page, their old participant disconnects and a new
+    // one joins.  The SDK's RoomIO calls _closeSoon() (closeOnDisconnect=true by
+    // default) which permanently tears down the voice session.  We detect the
+    // reconnection and spin up a fresh voice session + executor connection.
+
+    let userParticipantIdentity: string | null = null;
+    let awaitingVoiceReconnect = false;
+
+    // Seed initial identity from participants already in the room
+    for (const p of ctx.room.remoteParticipants.values()) {
+      if (!userParticipantIdentity) {
+        userParticipantIdentity = p.identity;
+      }
+    }
+
+    const restartVoiceSession = async () => {
+      console.log("[DemoAgent] Restarting voice session for reconnected participant...");
+
+      // Clean up old session
+      try {
+        if (realtimeSession && typeof realtimeSession.off === "function") {
+          realtimeSession.off("openai_server_event_received", onOpenAIServerEvent);
+        }
+        voiceSession.removeAllListeners();
+      } catch (e) {
+        console.warn("[DemoAgent] Old voice session cleanup error:", e);
+      }
+
+      // Create, configure, and start new session
+      const newSession = createVoiceSession();
+      attachVoiceSessionHandlers(newSession);
+      await newSession.start({ agent, room: ctx.room });
+
+      // Reconnect executor to the new session
+      await liveKitExecutor.connect(context.machine!, {
+        session: newSession,
+        agent,
+        room: ctx.room,
+      });
+
+      // Update mutable references
+      voiceSession = newSession;
+      attachRealtimeHandler();
+
+      // Sync live mode from current pack state
+      const controls = context.machine?.instance?.packStates?.agentControls as AgentControlsState | undefined;
+      liveKitExecutor.setLive(controls?.voiceEnabled ?? false);
+
+      console.log("[DemoAgent] Voice session restarted successfully");
+    };
+
+    ctx.room.on(RoomEvent.ParticipantDisconnected, (participant) => {
+      if (participant.identity === userParticipantIdentity) {
+        console.log(`[DemoAgent] User participant disconnected: ${participant.identity} — awaiting reconnect`);
+        awaitingVoiceReconnect = true;
+      }
+    });
+
+    ctx.room.on(RoomEvent.ParticipantConnected, async (participant) => {
+      // Track the first remote (user) participant
+      if (!userParticipantIdentity) {
+        userParticipantIdentity = participant.identity;
+      }
+
+      if (awaitingVoiceReconnect) {
+        awaitingVoiceReconnect = false;
+        userParticipantIdentity = participant.identity;
+        console.log(`[DemoAgent] User participant reconnected: ${participant.identity} — restarting voice session`);
+        try {
+          await restartVoiceSession();
+        } catch (err) {
+          console.error("[DemoAgent] Failed to restart voice session:", err);
+        }
+      }
+    });
 
     // Helper to create a new turn when user message is received
     const createTurn = async (instanceId: string, userContent: string) => {

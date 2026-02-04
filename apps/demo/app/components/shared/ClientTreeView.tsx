@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   TreeNode,
   Expander,
@@ -36,6 +37,47 @@ function getClientNodeName(instance: ClientInstance): string {
   return isDisplayNode(instance.node) ? instance.node.name : "client";
 }
 
+function ClientPackInstructionsField({
+  instructions,
+  isDynamic,
+}: {
+  instructions: string | undefined;
+  isDynamic?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const hasInstructions = instructions !== undefined;
+
+  const handleClick = () => {
+    if (hasInstructions) {
+      setExpanded(!expanded);
+    }
+  };
+
+  return (
+    <div className="text-xs overflow-hidden">
+      <button
+        onClick={handleClick}
+        className="flex items-start gap-1 text-left w-full min-w-0"
+      >
+        <span className="w-2.5 shrink-0" />
+        <span className="text-terminal-cyan shrink-0">instructions:</span>
+        {hasInstructions ? (
+          <>
+            <span className={`text-terminal-green-dim italic text-left min-w-0 ${expanded ? "whitespace-pre-wrap" : "truncate"}`}>
+              "{instructions}"
+            </span>
+            {isDynamic && (
+              <span className="text-terminal-yellow shrink-0">(dynamic)</span>
+            )}
+          </>
+        ) : (
+          <span className="text-terminal-green-dimmer italic">undefined</span>
+        )}
+      </button>
+    </div>
+  );
+}
+
 function ClientNodeSection({ node }: { node: DisplayNode }) {
   const instructionPreview = truncate(node.instructions.replace(/\n/g, " "), 100);
   const commandNames = Object.keys(node.commands);
@@ -69,10 +111,10 @@ function ClientNodeSection({ node }: { node: DisplayNode }) {
   );
 }
 
-function ClientInstanceContent({ instance }: { instance: ClientInstance }) {
+function ClientInstanceContent({ instance, rootPackStates }: { instance: ClientInstance; rootPackStates: Record<string, unknown> }) {
   // Get packs from node if it's a DisplayNode
   const nodePacks = isDisplayNode(instance.node) ? (instance.node.packs || []) : [];
-  const packStates = instance.packStates || {};
+  const packStates = rootPackStates;
   const hasPacks = nodePacks.length > 0;
 
   return (
@@ -93,6 +135,10 @@ function ClientInstanceContent({ instance }: { instance: ClientInstance }) {
               return (
                 <Expander key={pack.name} label={pack.name} preview={packState}>
                   <div className="space-y-1">
+                    <ClientPackInstructionsField
+                      instructions={pack.instructions}
+                      isDynamic={pack.instructionsDynamic}
+                    />
                     <Expander label="state" preview={packState}>
                       <JsonBlock data={packState} />
                     </Expander>
@@ -136,7 +182,7 @@ export function ClientTreeView({ instance }: { instance: ClientInstance }) {
       <TreeNode
         item={instance}
         getName={getClientNodeName}
-        renderContent={(inst) => <ClientInstanceContent instance={inst} />}
+        renderContent={(inst) => <ClientInstanceContent instance={inst} rootPackStates={instance.packStates || {}} />}
       />
     </div>
   );

@@ -11,6 +11,8 @@ export interface DisplayCommand {
 export interface DisplayPack {
   name: string;
   description: string;
+  instructions?: string;
+  instructionsDynamic?: boolean;
   state: unknown;
   validator: Record<string, unknown>;
   commands: Record<string, DisplayCommand>;
@@ -36,6 +38,7 @@ export interface DisplayInstance {
   children?: DisplayInstance[];
   packs?: DisplayPack[];
   packStates?: Record<string, unknown>;
+  packInstructionOverrides?: Record<string, string>;
   executorConfig?: StandardNodeConfig;
   suspended?: SerializedSuspendInfo;
 }

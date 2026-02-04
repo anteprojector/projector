@@ -40,6 +40,8 @@ export interface Instance<N extends Node<any, any> = Node<any, any>> {
   children?: Instance[];
   /** Pack states (only on root instance, shared across all nodes) */
   packStates?: Record<string, unknown>;
+  /** Pack instruction overrides (only on root instance, keyed by pack name) */
+  packInstructionOverrides?: Record<string, string>;
   /** Effective executor config for this instance (override or from node) */
   executorConfig?: StandardNodeConfig;
   /** Suspension info - if present, instance is suspended */

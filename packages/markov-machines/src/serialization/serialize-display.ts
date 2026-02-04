@@ -118,8 +118,15 @@ function serializeNodeForDisplay(node: Instance["node"], charter?: Charter): Dis
 }
 
 function serializePackForDisplay(
-  pack: { name: string; description: string; validator: { _def?: unknown }; commands?: Record<string, { name: string; description: string; inputSchema: { _def?: unknown } }> },
+  pack: {
+    name: string;
+    description: string;
+    instructions?: string | ((state: unknown) => string);
+    validator: { _def?: unknown };
+    commands?: Record<string, { name: string; description: string; inputSchema: { _def?: unknown } }>;
+  },
   state: unknown,
+  instructionOverride?: string,
 ): DisplayPack {
   let validator: Record<string, unknown> = {};
   try {
@@ -130,9 +137,29 @@ function serializePackForDisplay(
 
   const commands = serializeCommandsForDisplay(pack.commands as any);
 
+  // Resolve instructions (may be static string, function of state, or an override)
+  let instructions: string | undefined;
+  let instructionsDynamic = false;
+
+  if (instructionOverride !== undefined) {
+    // User has edited this pack's instructions - use the override
+    instructions = instructionOverride;
+  } else if (typeof pack.instructions === "function") {
+    instructionsDynamic = true;
+    try {
+      instructions = pack.instructions(state);
+    } catch {
+      instructions = "(error resolving dynamic instructions)";
+    }
+  } else {
+    instructions = pack.instructions;
+  }
+
   return {
     name: pack.name,
     description: pack.description,
+    ...(instructions !== undefined ? { instructions } : {}),
+    ...(instructionsDynamic ? { instructionsDynamic } : {}),
     state,
     validator,
     commands,
@@ -154,10 +181,12 @@ export function serializeInstanceForDisplay(
   let packs: DisplayPack[] | undefined;
   const nodePacks = instance.node.packs ?? [];
   const packStates = instance.packStates ?? {};
+  const packInstructionOverrides = instance.packInstructionOverrides ?? {};
   if (nodePacks.length > 0) {
     packs = nodePacks.map((pack) => {
       const state = packStates[pack.name] ?? pack.initialState ?? {};
-      return serializePackForDisplay(pack as any, state);
+      const instructionOverride = packInstructionOverrides[pack.name];
+      return serializePackForDisplay(pack as any, state, instructionOverride);
     });
   }
 

@@ -195,6 +195,11 @@ export const editCurrentInstance = mutation({
         instructions: v.optional(v.string()),
         validator: v.optional(v.any()),
       })),
+      pack: v.optional(v.object({
+        name: v.string(),
+        instructions: v.optional(v.string()),
+        state: v.optional(v.any()),
+      })),
     }),
   },
   handler: async (ctx, { sessionId, instanceId, patch }) => {
@@ -275,11 +280,82 @@ export const editCurrentInstance = mutation({
       return false;
     }
 
-    if (!patchSerializedNode(modifiedInstance)) {
-      throw new Error(`Instance node ${instanceId} not found in instance tree`);
+    // Handle pack edits (always applied to root instance)
+    if (patch.pack) {
+      const { name, instructions, state } = patch.pack;
+
+      // Update packStates if state is provided
+      if (state !== undefined) {
+        if (!modifiedInstance.packStates) {
+          modifiedInstance.packStates = {};
+        }
+        modifiedInstance.packStates[name] = state;
+
+        if (modifiedDisplayInstance) {
+          if (!modifiedDisplayInstance.packStates) {
+            modifiedDisplayInstance.packStates = {};
+          }
+          modifiedDisplayInstance.packStates[name] = state;
+          // Also update the pack state inside each node's packs array
+          function updatePackStateInPacks(inst: any) {
+            if (inst.node?.packs) {
+              for (const pack of inst.node.packs) {
+                if (pack.name === name) {
+                  pack.state = state;
+                }
+              }
+            }
+            if (inst.children) {
+              for (const child of inst.children) {
+                updatePackStateInPacks(child);
+              }
+            }
+          }
+          updatePackStateInPacks(modifiedDisplayInstance);
+        }
+      }
+
+      // Update packInstructionOverrides if instructions is provided
+      if (instructions !== undefined) {
+        if (!modifiedInstance.packInstructionOverrides) {
+          modifiedInstance.packInstructionOverrides = {};
+        }
+        modifiedInstance.packInstructionOverrides[name] = instructions;
+
+        if (modifiedDisplayInstance) {
+          if (!modifiedDisplayInstance.packInstructionOverrides) {
+            modifiedDisplayInstance.packInstructionOverrides = {};
+          }
+          modifiedDisplayInstance.packInstructionOverrides[name] = instructions;
+          // Also update the instructions inside each node's packs array
+          function updatePackInstructionsInPacks(inst: any) {
+            if (inst.node?.packs) {
+              for (const pack of inst.node.packs) {
+                if (pack.name === name) {
+                  pack.instructions = instructions;
+                  pack.instructionsDynamic = false; // No longer dynamic after override
+                }
+              }
+            }
+            if (inst.children) {
+              for (const child of inst.children) {
+                updatePackInstructionsInPacks(child);
+              }
+            }
+          }
+          updatePackInstructionsInPacks(modifiedDisplayInstance);
+        }
+      }
     }
-    if (modifiedDisplayInstance) {
-      patchDisplayNode(modifiedDisplayInstance);
+
+    // Handle instance-level edits (node state, node instructions, etc.)
+    if (patch.state !== undefined || patch.node) {
+      if (!patchSerializedNode(modifiedInstance)) {
+        throw new Error(`Instance node ${instanceId} not found in instance tree`);
+      }
+      if (modifiedDisplayInstance) {
+        patchDisplayNode(modifiedDisplayInstance);
+      }
     }
 
     // Create a new branch with the modified instance
