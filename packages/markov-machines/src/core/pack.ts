@@ -1,4 +1,4 @@
-import type { Pack, PackConfig } from "../types/pack.js";
+import type { Pack, PackConfig } from "../types/pack";
 
 /**
  * Create a new pack definition.

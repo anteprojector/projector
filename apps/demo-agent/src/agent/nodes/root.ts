@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createNode, createTransition, transitionTo } from "markov-machines";
 import { fooNode } from "./foo.js";
-import { liveModePack } from "../packs/live-mode.js";
+import { agentControlsPack } from "../packs/agent-controls.js";
 
 export const nameGateStateValidator = z.object({});
 
@@ -15,7 +15,7 @@ Keep asking this exact question until the user provides a name. Do not explain a
 Once they give a name, use the toFoo transition with that name.`,
 
   validator: nameGateStateValidator,
-  packs: [liveModePack],
+  packs: [agentControlsPack],
   transitions: {
     toFoo: createTransition<NameGateState>({
       description: "Transition to the Foo node with the given name",

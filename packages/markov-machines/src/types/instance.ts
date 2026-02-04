@@ -1,7 +1,7 @@
 import { v4 as uuid } from "uuid";
-import type { Node } from "./node.js";
-import type { StandardNodeConfig } from "../executor/types.js";
-import type { SuspendResult } from "./transitions.js";
+import type { Node } from "./node";
+import type { StandardNodeConfig } from "../executor/types";
+import type { SuspendResult } from "./transitions";
 
 /**
  * Helper to extract state type from a Node type.

@@ -1,10 +1,10 @@
 import { v4 as uuid } from "uuid";
-import type { Charter } from "../types/charter.js";
-import type { Machine, MachineConfig } from "../types/machine.js";
-import type { Instance } from "../types/instance.js";
-import type { Pack } from "../types/pack.js";
-import type { MachineMessage } from "../types/messages.js";
-import { isEphemeralMessage } from "../types/messages.js";
+import type { Charter } from "../types/charter";
+import type { Machine, MachineConfig } from "../types/machine";
+import type { Instance } from "../types/instance";
+import type { Pack } from "../types/pack";
+import type { MachineMessage } from "../types/messages";
+import { isEphemeralMessage } from "../types/messages";
 
 /**
  * Validate a node instance tree recursively.

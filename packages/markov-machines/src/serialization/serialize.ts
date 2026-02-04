@@ -1,17 +1,17 @@
 import { z } from "zod";
-import type { Node } from "../types/node.js";
-import type { Instance } from "../types/instance.js";
+import type { Node } from "../types/node";
+import type { Instance } from "../types/instance";
 import type {
   Machine,
   SerializedMachine,
   SerializedInstance,
-} from "../types/machine.js";
-import type { Ref, SerialNode, SerialTransition } from "../types/refs.js";
-import type { Charter } from "../types/charter.js";
-import type { Transition } from "../types/transitions.js";
-import { isRef, isSerialTransition } from "../types/refs.js";
-import { isCodeTransition, isGeneralTransition } from "../types/transitions.js";
-import { toSafeJsonSchema } from "../helpers/json-schema.js";
+} from "../types/machine";
+import type { Ref, SerialNode, SerialTransition } from "../types/refs";
+import type { Charter } from "../types/charter";
+import type { Transition } from "../types/transitions";
+import { isRef, isSerialTransition } from "../types/refs";
+import { isCodeTransition, isGeneralTransition } from "../types/transitions";
+import { toSafeJsonSchema } from "../helpers/json-schema";
 
 export interface SerializeNodeOptions {
   /** If true, always inline this node even if registered in charter. Tool/transition refs are unaffected. */

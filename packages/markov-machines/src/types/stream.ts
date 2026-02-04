@@ -1,4 +1,4 @@
-import type { ConversationMessage, MessageSource } from "./messages.js";
+import type { ConversationMessage, MessageSource } from "./messages";
 
 export interface MessageStreamDelta {
   kind: "text" | "thinking";

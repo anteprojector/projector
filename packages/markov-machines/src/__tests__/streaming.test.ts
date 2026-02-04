@@ -1,16 +1,16 @@
 import { describe, it, expect, vi } from "vitest";
 import { z } from "zod";
-import { createCharter } from "../core/charter.js";
-import { createNode } from "../core/node.js";
-import { createInstance } from "../types/instance.js";
-import { createMachine } from "../core/machine.js";
-import { runMachineToCompletion } from "../core/run.js";
-import { serializeMachine } from "../serialization/serialize.js";
-import { deserializeMachine } from "../serialization/deserialize.js";
-import type { Executor, RunResult, RunOptions } from "../executor/types.js";
-import type { Charter } from "../types/charter.js";
-import type { Instance } from "../types/instance.js";
-import { assistantMessage, userMessage } from "../types/messages.js";
+import { createCharter } from "../core/charter";
+import { createNode } from "../core/node";
+import { createInstance } from "../types/instance";
+import { createMachine } from "../core/machine";
+import { runMachineToCompletion } from "../core/run";
+import { serializeMachine } from "../serialization/serialize";
+import { deserializeMachine } from "../serialization/deserialize";
+import type { Executor, RunResult, RunOptions } from "../executor/types";
+import type { Charter } from "../types/charter";
+import type { Instance } from "../types/instance";
+import { assistantMessage, userMessage } from "../types/messages";
 
 function createNoopExecutor(): Executor<unknown> {
   return {

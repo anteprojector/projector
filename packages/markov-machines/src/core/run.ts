@@ -1,7 +1,7 @@
-import type { Machine } from "../types/machine.js";
-import type { RunOptions, MachineStep, RunResult, SuspendedInstanceInfo } from "../executor/types.js";
-import type { Instance, ActiveLeafInfo } from "../types/instance.js";
-import type { Resume } from "../types/commands.js";
+import type { Machine } from "../types/machine";
+import type { RunOptions, MachineStep, RunResult, SuspendedInstanceInfo } from "../executor/types";
+import type { Instance, ActiveLeafInfo } from "../types/instance";
+import type { Resume } from "../types/commands";
 import type {
   MachineMessage,
   InstanceMessage,
@@ -10,13 +10,13 @@ import type {
   InstancePayload,
   ImageBlock,
   TextBlock,
-} from "../types/messages.js";
-import type { YieldReason } from "../executor/types.js";
-import type { Charter } from "../types/charter.js";
-import { getActiveLeaves, isWorkerInstance, getSuspendedInstances, findInstanceById, clearSuspension, createInstance } from "../types/instance.js";
-import { userMessage, isInstanceMessage, isEphemeralMessage } from "../types/messages.js";
-import { isResume } from "../types/commands.js";
-import { serializeNode } from "../serialization/serialize.js";
+} from "../types/messages";
+import type { YieldReason } from "../executor/types";
+import type { Charter } from "../types/charter";
+import { getActiveLeaves, isWorkerInstance, getSuspendedInstances, findInstanceById, clearSuspension, createInstance } from "../types/instance";
+import { userMessage, isInstanceMessage, isEphemeralMessage } from "../types/messages";
+import { isResume } from "../types/commands";
+import { serializeNode } from "../serialization/serialize";
 
 
 /** Check if packStates has any entries */

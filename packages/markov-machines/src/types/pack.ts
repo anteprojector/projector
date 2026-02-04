@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import type { CommandValueResult } from "./commands.js";
+import type { CommandValueResult } from "./commands";
 
 /**
  * Context provided to pack tool and command execute functions.

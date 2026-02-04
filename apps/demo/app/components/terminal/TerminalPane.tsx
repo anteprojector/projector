@@ -1,18 +1,19 @@
 "use client";
 
 import { forwardRef, useEffect, useRef, useCallback } from "react";
-import { useAtom, useAtomValue } from "jotai";
+import { useAtomValue, useSetAtom } from "jotai";
 import {
   shiftHeldAtom,
-  isLiveModeAtom,
-  isCameraEnabledAtom,
+  liveClientAtom,
   liveKitRoomAtom,
   voiceConnectionStatusAtom,
   voiceAgentConnectedAtom,
+  packStateOverridesAtom,
 } from "@/src/atoms";
 import { TerminalMessage } from "./TerminalMessage";
 import { TerminalInput } from "./TerminalInput";
 import { ScanlinesToggle } from "./Scanlines";
+import { StreamingToggle } from "./StreamingToggle";
 import { ThinkingSpinner } from "./ThinkingSpinner";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { DisplayInstance } from "@/src/types/display";
@@ -44,8 +45,8 @@ export const TerminalPane = forwardRef<HTMLTextAreaElement, TerminalPaneProps>(
   ) {
     const containerRef = useRef<HTMLDivElement>(null);
     const shiftHeld = useAtomValue(shiftHeldAtom);
-    const [isLiveMode, setIsLiveMode] = useAtom(isLiveModeAtom);
-    const [isCameraEnabled, setIsCameraEnabled] = useAtom(isCameraEnabledAtom);
+    const liveClient = useAtomValue(liveClientAtom);
+    const setOverrides = useSetAtom(packStateOverridesAtom);
     const room = useAtomValue(liveKitRoomAtom);
     const voiceConnectionStatus = useAtomValue(voiceConnectionStatusAtom);
     const voiceAgentConnected = useAtomValue(voiceAgentConnectedAtom);
@@ -64,17 +65,15 @@ export const TerminalPane = forwardRef<HTMLTextAreaElement, TerminalPaneProps>(
     const liveModePackEnabled = (() => {
       if (!displayInstance) return undefined;
       const active = getActiveDisplayInstance(displayInstance);
-      return active.node.packNames?.includes("liveMode") === true;
+      return active.node.packNames?.includes("agentControls") === true;
     })();
     const liveModeAllowed = liveModePackEnabled === true;
 
-    // If live mode isn't supported in this node, force-disable mic/camera so the UI doesn't get stuck.
-    useEffect(() => {
-      if (liveModePackEnabled === false) {
-        if (isLiveMode) setIsLiveMode(false);
-        if (isCameraEnabled) setIsCameraEnabled(false);
-      }
-    }, [liveModePackEnabled, isLiveMode, isCameraEnabled, setIsLiveMode, setIsCameraEnabled]);
+    // Derive voice/camera from pack state (single source of truth)
+    const packStates = displayInstance?.packStates as Record<string, any> | undefined;
+    const agentControls = packStates?.agentControls;
+    const voiceEnabled = (agentControls?.voiceEnabled as boolean) ?? false;
+    const cameraEnabled = (agentControls?.cameraEnabled as boolean) ?? false;
 
     const detachCameraPreview = useCallback(() => {
       const video = previewVideoRef.current;
@@ -114,18 +113,24 @@ export const TerminalPane = forwardRef<HTMLTextAreaElement, TerminalPaneProps>(
       previewTrackRef.current = track;
       try {
         track.attach(video);
+        video.play().catch(() => {});
       } catch {
         // ignore
       }
     }, [room, detachCameraPreview]);
 
     useEffect(() => {
-      if (!liveModeAllowed || !isCameraEnabled || !room) {
+      if (!liveModeAllowed || !cameraEnabled || !room) {
         detachCameraPreview();
         return;
       }
 
       attachCameraPreview();
+
+      // Retry attach after a short delay — covers the race where the track
+      // isn't published yet when the effect first runs and the
+      // LocalTrackPublished event fired before the listener was registered.
+      const retryTimer = setTimeout(() => attachCameraPreview(), 500);
 
       const onLocalTrackPublished = (publication: any) => {
         if (publication?.source === Track.Source.Camera) {
@@ -142,17 +147,38 @@ export const TerminalPane = forwardRef<HTMLTextAreaElement, TerminalPaneProps>(
       room.on(RoomEvent.LocalTrackUnpublished, onLocalTrackUnpublished);
 
       return () => {
+        clearTimeout(retryTimer);
         room.off(RoomEvent.LocalTrackPublished, onLocalTrackPublished);
         room.off(RoomEvent.LocalTrackUnpublished, onLocalTrackUnpublished);
       };
-    }, [room, liveModeAllowed, isCameraEnabled, attachCameraPreview, detachCameraPreview]);
+    }, [room, liveModeAllowed, cameraEnabled, attachCameraPreview, detachCameraPreview]);
 
     const handleToggleLiveMode = () => {
-      setIsLiveMode((prev) => !prev);
+      const next = !voiceEnabled;
+      setOverrides((prev) => ({
+        ...prev,
+        agentControls: { ...(prev.agentControls ?? {}), voiceEnabled: next },
+      }));
+      liveClient?.executeCommand("setVoiceEnabled", { enabled: next }).then((r) => {
+        if (!r.success) setOverrides((prev) => {
+          const { voiceEnabled: _, ...rest } = (prev.agentControls ?? {}) as any;
+          return { ...prev, agentControls: rest };
+        });
+      });
     };
 
     const handleToggleCamera = () => {
-      setIsCameraEnabled((prev) => !prev);
+      const next = !cameraEnabled;
+      setOverrides((prev) => ({
+        ...prev,
+        agentControls: { ...(prev.agentControls ?? {}), cameraEnabled: next },
+      }));
+      liveClient?.executeCommand("setCameraEnabled", { enabled: next }).then((r) => {
+        if (!r.success) setOverrides((prev) => {
+          const { cameraEnabled: _, ...rest } = (prev.agentControls ?? {}) as any;
+          return { ...prev, agentControls: rest };
+        });
+      });
     };
 
     // Auto-scroll on any DOM content change (new messages AND streaming deltas),
@@ -204,11 +230,14 @@ export const TerminalPane = forwardRef<HTMLTextAreaElement, TerminalPaneProps>(
           <h1 className="text-terminal-green terminal-glow text-sm font-bold">
             {shiftHeld ? <u>M</u> : "M"}ESSAGES
           </h1>
-          <ScanlinesToggle />
+          <div className="flex items-center gap-3">
+            <StreamingToggle displayInstance={displayInstance} />
+            <ScanlinesToggle />
+          </div>
         </div>
 
         {/* Camera preview (top-right) */}
-        {liveModeAllowed && isCameraEnabled && (
+        {liveModeAllowed && cameraEnabled && (
           <div className="absolute top-12 right-4 z-10 w-32 aspect-video border border-terminal-green-dimmer bg-black/30 overflow-hidden">
             <video
               ref={previewVideoRef}
@@ -257,8 +286,8 @@ export const TerminalPane = forwardRef<HTMLTextAreaElement, TerminalPaneProps>(
             onChange={onInputChange}
             onSend={onSend}
             isLoading={isLoading}
-            isLiveMode={liveModeAllowed ? isLiveMode : false}
-            isCameraEnabled={liveModeAllowed ? isCameraEnabled : false}
+            isLiveMode={liveModeAllowed ? voiceEnabled : false}
+            isCameraEnabled={liveModeAllowed ? cameraEnabled : false}
             voiceConnectionStatus={voiceConnectionStatus}
             voiceAgentConnected={voiceAgentConnected}
             onToggleLiveMode={liveModeAllowed ? handleToggleLiveMode : undefined}

@@ -31,7 +31,6 @@ import {
   runMachine,
   runCommand,
   userMessage,
-  instanceMessage,
   getMessageText,
   getActiveInstance,
   type Machine,
@@ -45,7 +44,7 @@ import {
 import { createDemoCharter } from "./agent/charter.js";
 import { getLiveKitExecutor } from "./agent/livekit.js";
 import { attachVisionSampler, type VisionSamplerHandle } from "./agent/vision.js";
-import { liveModePack } from "./agent/packs/live-mode.js";
+import { type AgentControlsState } from "./agent/packs/agent-controls.js";
 
 // Create charters with their respective executors
 const demoCharterStandard = createDemoCharter(
@@ -386,10 +385,10 @@ export default defineAgent({
       throw err;
     }
 
-    // Start with isLive = false (text mode by default)
-    // Frontend will toggle this when user enables voice
-    liveKitExecutor.setLive(false);
-    console.log("[DemoAgent] Executor set to text mode (isLive=false)");
+    // Sync executor live mode from initial pack state
+    const initialControls = context.machine!.instance.packStates?.agentControls as AgentControlsState | undefined;
+    liveKitExecutor.setLive(initialControls?.voiceEnabled ?? false);
+    console.log(`[DemoAgent] Executor set from pack state (isLive=${initialControls?.voiceEnabled ?? false})`);
 
     // Voice session event handlers
     voiceSession.on(voice.AgentSessionEventTypes.AgentStateChanged, (ev) => {
@@ -744,41 +743,6 @@ export default defineAgent({
       }
     );
 
-    // RPC to toggle live mode
-    ctx.room.localParticipant?.registerRpcMethod(
-      "setLiveMode",
-      async (data) => {
-        const isLive = data.payload === "true";
-        console.log(`[DemoAgent] RPC setLiveMode: ${isLive}`);
-        liveKitExecutor.setLive(isLive);
-        context.machine?.enqueue([
-          instanceMessage({
-            kind: "packState",
-            packName: liveModePack.name,
-            patch: { voiceEnabled: isLive },
-          }),
-        ]);
-        return JSON.stringify({ isLive });
-      }
-    );
-
-    // RPC to toggle camera enabled state (UI intent; sampler will also update based on tracks)
-    ctx.room.localParticipant?.registerRpcMethod(
-      "setCameraEnabled",
-      async (data) => {
-        const enabled = data.payload === "true";
-        console.log(`[DemoAgent] RPC setCameraEnabled: ${enabled}`);
-        context.machine?.enqueue([
-          instanceMessage({
-            kind: "packState",
-            packName: liveModePack.name,
-            patch: { cameraEnabled: enabled },
-          }),
-        ]);
-        return JSON.stringify({ cameraEnabled: enabled });
-      },
-    );
-
     // RPC to execute a command
     ctx.room.localParticipant?.registerRpcMethod(
       "executeCommand",
@@ -907,7 +871,9 @@ export default defineAgent({
           });
         };
 
-        for await (const step of runMachine(context.machine, { streamWhenAvailable: true, onMessageStream })) {
+        const agentControls = context.machine.instance.packStates?.agentControls as AgentControlsState | undefined;
+        const streamWhenAvailable = agentControls?.enableStreaming ?? true;
+        for await (const step of runMachine(context.machine, { streamWhenAvailable, onMessageStream })) {
           stepNumber++;
 
           // Check after each step - exit gracefully if time traveled
@@ -942,6 +908,14 @@ export default defineAgent({
 
           allMessages.push(...step.history);
           lastStep = step;
+
+          // Sync live mode from pack state after each step
+          const stepControls = step.instance.packStates?.agentControls as AgentControlsState | undefined;
+          const stepVoiceEnabled = stepControls?.voiceEnabled ?? false;
+          if (liveKitExecutor.isLive !== stepVoiceEnabled) {
+            liveKitExecutor.setLive(stepVoiceEnabled);
+            console.log(`[DemoAgent] Synced live mode from pack state: ${stepVoiceEnabled}`);
+          }
 
           // Sync LiveKit config after each step in case instance changed
           // (e.g., transitions that didn't trigger executor.run())
@@ -994,6 +968,10 @@ export default defineAgent({
         agent,
         room: ctx.room,
       });
+
+      // Sync live mode from new machine's pack state
+      const ttControls = newMachine.instance.packStates?.agentControls as AgentControlsState | undefined;
+      liveKitExecutor.setLive(ttControls?.voiceEnabled ?? false);
 
       console.log(`[DemoAgent] Time travel complete, starting new loop (generation ${newGeneration})`);
 

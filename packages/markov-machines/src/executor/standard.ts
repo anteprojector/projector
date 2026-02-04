@@ -6,34 +6,34 @@ import type {
   ContentBlock as AnthropicContentBlock,
   Message as AnthropicMessage,
 } from "@anthropic-ai/sdk/resources/messages";
-import type { Charter } from "../types/charter.js";
-import type { Instance } from "../types/instance.js";
-import type { Node } from "../types/node.js";
+import type { Charter } from "../types/charter";
+import type { Instance } from "../types/instance";
+import type { Node } from "../types/node";
 import type {
   MachineMessage,
   MachineItem,
   OutputBlock,
   ConversationMessage,
   MessageSource,
-} from "../types/messages.js";
+} from "../types/messages";
 import {
   userMessage,
   assistantMessage,
   instanceMessage,
   isModelMessage,
-} from "../types/messages.js";
-import { generateToolDefinitions } from "../tools/tool-generator.js";
-import { buildSystemPrompt } from "../runtime/system-prompt.js";
-import { runToolPipeline } from "../runtime/tool-pipeline.js";
-import { getOrInitPackState } from "../core/machine.js";
-import { ZOD_JSON_SCHEMA_TARGET_OPENAPI_3 } from "../helpers/json-schema.js";
+} from "../types/messages";
+import { generateToolDefinitions } from "../tools/tool-generator";
+import { buildSystemPrompt } from "../runtime/system-prompt";
+import { runToolPipeline } from "../runtime/tool-pipeline";
+import { getOrInitPackState } from "../core/machine";
+import { ZOD_JSON_SCHEMA_TARGET_OPENAPI_3 } from "../helpers/json-schema";
 import type {
   Executor,
   StandardExecutorConfig,
   StandardNodeConfig,
   RunOptions,
   RunResult,
-} from "./types.js";
+} from "./types";
 
 /**
  * Filter out tool_use blocks that don't have corresponding tool_result blocks.

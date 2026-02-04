@@ -1,15 +1,15 @@
-import type { Charter } from "../types/charter.js";
+import type { Charter } from "../types/charter";
 import type {
   Machine,
   OnMessageEnqueue,
   SerializedMachine,
   SerializedInstance,
-} from "../types/machine.js";
-import type { Instance } from "../types/instance.js";
-import type { MachineMessage } from "../types/messages.js";
-import { isEphemeralMessage } from "../types/messages.js";
-import { resolveNodeRef } from "../runtime/transition-executor.js";
-export { deserializeNode } from "../runtime/transition-executor.js";
+} from "../types/machine";
+import type { Instance } from "../types/instance";
+import type { MachineMessage } from "../types/messages";
+import { isEphemeralMessage } from "../types/messages";
+import { resolveNodeRef } from "../runtime/transition-executor";
+export { deserializeNode } from "../runtime/transition-executor";
 
 /**
  * Deserialize a node instance from persisted state.

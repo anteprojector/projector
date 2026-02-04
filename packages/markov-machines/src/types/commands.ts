@@ -1,6 +1,6 @@
 import type { z } from "zod";
-import type { Node } from "./node.js";
-import type { MachineMessage } from "./messages.js";
+import type { Node } from "./node";
+import type { MachineMessage } from "./messages";
 import type {
   CedeResult,
   SpawnResult,
@@ -8,7 +8,7 @@ import type {
   SpawnOptions,
   TransitionToResult,
   SuspendResult,
-} from "./transitions.js";
+} from "./transitions";
 
 /**
  * Options for suspend helper in commands.

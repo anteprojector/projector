@@ -1,7 +1,7 @@
-import type { Charter } from "../types/charter.js";
-import type { Instance } from "../types/instance.js";
-import type { MachineMessage } from "../types/messages.js";
-import type { MessageStreamEvent } from "../types/stream.js";
+import type { Charter } from "../types/charter";
+import type { Instance } from "../types/instance";
+import type { MachineMessage } from "../types/messages";
+import type { MessageStreamEvent } from "../types/stream";
 
 
 /**

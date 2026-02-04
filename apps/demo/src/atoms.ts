@@ -42,8 +42,6 @@ export const displayHueAtom = atom<number>(120);
 
 // Voice mode state
 export type VoiceConnectionStatus = "disconnected" | "connecting" | "connected";
-export const isLiveModeAtom = atom<boolean>(false);
-export const isCameraEnabledAtom = atom<boolean>(false);
 export const voiceConnectionStatusAtom = atom<VoiceConnectionStatus>("disconnected");
 export const voiceAgentConnectedAtom = atom<boolean>(false);
 export const liveKitRoomAtom = atom<Room | null>(null);
@@ -58,6 +56,10 @@ export interface LiveClientHandle {
   isConnected: () => boolean;
 }
 export const liveClientAtom = atom<LiveClientHandle | null>(null);
+
+// Optimistic overlay for pack state commands — merged into displayInstance before
+// passing downstream so toggles feel instant while the Convex round-trip completes.
+export const packStateOverridesAtom = atom<Record<string, Record<string, unknown>>>({});
 
 // LiveKit streaming (ephemeral UI enhancement; Convex is source of truth)
 export type StreamPacket =

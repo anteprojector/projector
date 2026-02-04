@@ -1,7 +1,7 @@
-import type { Command, Resume } from "./commands.js";
-import type { Node } from "./node.js";
-import type { SuspendInfo } from "./instance.js";
-import type { StandardNodeConfig } from "../executor/types.js";
+import type { Command, Resume } from "./commands";
+import type { Node } from "./node";
+import type { SuspendInfo } from "./instance";
+import type { StandardNodeConfig } from "../executor/types";
 
 /**
  * Text content block (simplified for storage).

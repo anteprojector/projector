@@ -1,22 +1,23 @@
 import { z } from "zod";
 import { commandResult, createPack } from "markov-machines";
 
-export const liveModeStateValidator = z.object({
+export const agentControlsStateValidator = z.object({
   voiceEnabled: z.boolean().default(false),
   cameraEnabled: z.boolean().default(false),
+  enableStreaming: z.boolean().default(true),
 });
 
-export type LiveModeState = z.infer<typeof liveModeStateValidator>;
+export type AgentControlsState = z.infer<typeof agentControlsStateValidator>;
 
-export const liveModePack = createPack({
-  name: "liveMode",
-  description: "Tracks live voice/camera enable state for the demo app",
-  validator: liveModeStateValidator,
-  instructions: (state: LiveModeState) => {
-    const parsed = liveModeStateValidator.safeParse(state ?? {});
-    const safeState: LiveModeState = parsed.success
+export const agentControlsPack = createPack({
+  name: "agentControls",
+  description: "Agent controls: voice, camera, streaming preferences",
+  validator: agentControlsStateValidator,
+  instructions: (state: AgentControlsState) => {
+    const parsed = agentControlsStateValidator.safeParse(state ?? {});
+    const safeState: AgentControlsState = parsed.success
       ? parsed.data
-      : { voiceEnabled: false, cameraEnabled: false };
+      : { voiceEnabled: false, cameraEnabled: false, enableStreaming: true };
 
     const parts: string[] = [];
 
@@ -61,6 +62,15 @@ export const liveModePack = createPack({
         return `cameraEnabled set to ${input.enabled}`;
       },
     },
+    setStreamingEnabled: {
+      name: "setStreamingEnabled",
+      description: "Enable or disable streaming mode",
+      inputSchema: z.object({ enabled: z.boolean() }),
+      execute: (input, ctx) => {
+        ctx.updateState({ enableStreaming: input.enabled });
+        return `enableStreaming set to ${input.enabled}`;
+      },
+    },
   },
   commands: {
     setVoiceEnabled: {
@@ -81,6 +91,15 @@ export const liveModePack = createPack({
         return commandResult({ ...ctx.state, cameraEnabled: input.enabled });
       },
     },
+    setStreamingEnabled: {
+      name: "setStreamingEnabled",
+      description: "Enable or disable streaming mode",
+      inputSchema: z.object({ enabled: z.boolean() }),
+      execute: (input, ctx) => {
+        ctx.updateState({ enableStreaming: input.enabled });
+        return commandResult({ ...ctx.state, enableStreaming: input.enabled });
+      },
+    },
   },
-  initialState: { voiceEnabled: false, cameraEnabled: false },
+  initialState: { voiceEnabled: false, cameraEnabled: false, enableStreaming: true },
 });

@@ -13,12 +13,12 @@ import {
   isPreviewingAtom,
   activeAgentTabAtom,
   shiftHeldAtom,
-  isLiveModeAtom,
   liveClientAtom,
   voiceAgentConnectedAtom,
   streamBuffersAtom,
   streamPresenceAtom,
   pruneStreamBuffersAtom,
+  packStateOverridesAtom,
   type AgentTab,
 } from "@/src/atoms";
 import { useSessionId } from "@/src/hooks";
@@ -43,13 +43,14 @@ export function HomeClient({
   const isPreviewing = useAtomValue(isPreviewingAtom);
   const setActiveTab = useSetAtom(activeAgentTabAtom);
   const setShiftHeld = useSetAtom(shiftHeldAtom);
-  const isLiveMode = useAtomValue(isLiveModeAtom);
   const setLiveClient = useSetAtom(liveClientAtom);
   const voiceAgentConnected = useAtomValue(voiceAgentConnectedAtom);
   const streamPresence = useAtomValue(streamPresenceAtom);
   const setStreamBuffers = useSetAtom(streamBuffersAtom);
   const setStreamPresence = useSetAtom(streamPresenceAtom);
   const pruneStreamBuffers = useSetAtom(pruneStreamBuffersAtom);
+  const packStateOverrides = useAtomValue(packStateOverridesAtom);
+  const setPackStateOverrides = useSetAtom(packStateOverridesAtom);
 
   const terminalInputRef = useRef<HTMLTextAreaElement>(null);
   const agentPaneRef = useRef<HTMLDivElement>(null);
@@ -84,6 +85,30 @@ export function HomeClient({
     sessionId ? { sessionId, upToTurnId: effectiveTurnId } : "skip"
   );
   const session = useQuery(api.sessions.get, sessionId ? { id: sessionId } : "skip");
+
+  // Merge optimistic pack state overrides into displayInstance so toggles feel instant.
+  const effectiveDisplayInstance = useMemo(() => {
+    if (!session?.displayInstance || Object.keys(packStateOverrides).length === 0) {
+      return session?.displayInstance;
+    }
+    const base = { ...session.displayInstance };
+    const basePS = (base.packStates as Record<string, any>) ?? {};
+    base.packStates = Object.entries(packStateOverrides).reduce(
+      (acc, [pack, ov]) => ({ ...acc, [pack]: { ...acc[pack], ...ov } }),
+      { ...basePS }
+    );
+    return base;
+  }, [session?.displayInstance, packStateOverrides]);
+
+  // Clear overrides when server displayInstance changes (reconciliation).
+  useEffect(() => {
+    setPackStateOverrides({});
+  }, [session?.displayInstance, setPackStateOverrides]);
+
+  // Derive voice/camera state from effective (optimistic) display instance
+  const effectivePackStates = effectiveDisplayInstance?.packStates as Record<string, any> | undefined;
+  const voiceEnabled = (effectivePackStates?.agentControls?.voiceEnabled as boolean) ?? false;
+  const cameraEnabled = (effectivePackStates?.agentControls?.cameraEnabled as boolean) ?? false;
 
   // Clear pending message when we see it in the server messages
   useEffect(() => {
@@ -326,7 +351,12 @@ export function HomeClient({
   return (
     <ThemeProvider theme={theme}>
       {/* Live mode client - manages LiveKit connection for voice and text */}
-      <LiveVoiceClient ref={handleLiveClientRef} sessionId={sessionId} />
+      <LiveVoiceClient
+        ref={handleLiveClientRef}
+        sessionId={sessionId}
+        voiceEnabled={voiceEnabled}
+        cameraEnabled={cameraEnabled}
+      />
 
       <div className="h-screen flex">
         {/* Left side - Terminal pane */}
@@ -335,7 +365,7 @@ export function HomeClient({
           <TerminalPane
             ref={terminalInputRef}
             sessionId={sessionId}
-            displayInstance={session?.displayInstance}
+            displayInstance={effectiveDisplayInstance}
             messages={messages ?? []}
             input={input}
             onInputChange={setInput}
@@ -351,7 +381,7 @@ export function HomeClient({
             ref={agentPaneRef}
             sessionId={sessionId}
             instance={session?.instance}
-            displayInstance={session?.displayInstance}
+            displayInstance={effectiveDisplayInstance}
             onResetSession={handleResetSession}
           />
         </div>

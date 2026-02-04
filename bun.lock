@@ -16,6 +16,7 @@
         "@livekit/components-react": "^2.9.19",
         "cli-spinners": "^3.4.0",
         "convex": "^1.31.2",
+        "demo-agent": "workspace:*",
         "jotai": "^2.16.1",
         "js-cookie": "^3.0.5",
         "json5": "^2.2.3",

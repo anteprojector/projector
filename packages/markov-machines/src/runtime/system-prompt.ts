@@ -1,7 +1,7 @@
-import type { Instance } from "../types/instance.js";
-import type { Node } from "../types/node.js";
-import type { Transition } from "../types/transitions.js";
-import type { Charter } from "../types/charter.js";
+import type { Instance } from "../types/instance";
+import type { Node } from "../types/node";
+import type { Transition } from "../types/transitions";
+import type { Charter } from "../types/charter";
 
 export interface SystemPromptOptions {
   currentStep?: number;

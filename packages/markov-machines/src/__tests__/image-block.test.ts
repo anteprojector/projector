@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { StandardExecutor } from "../executor/standard.js";
+import { StandardExecutor } from "../executor/standard";
 
 describe("ImageBlock", () => {
   it("converts image blocks to Anthropic image content", () => {

@@ -1,12 +1,12 @@
-import type { Charter } from "../types/charter.js";
-import type { Instance } from "../types/instance.js";
+import type { Charter } from "../types/charter";
+import type { Instance } from "../types/instance";
 import type {
   DisplayCommand,
   DisplayInstance,
   DisplayNode,
   DisplayPack,
-} from "../types/display.js";
-import { toSafeJsonSchema } from "../helpers/json-schema.js";
+} from "../types/display";
+import { toSafeJsonSchema } from "../helpers/json-schema";
 
 /**
  * Custom serialization for display purposes.

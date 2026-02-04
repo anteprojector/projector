@@ -1,6 +1,6 @@
 // Refs
-export type { Ref, SerialNode, SerialTransition, JSONSchema } from "./refs.js";
-export { isRef, isSerialNode, isSerialTransition } from "./refs.js";
+export type { Ref, SerialNode, SerialTransition, JSONSchema } from "./refs";
+export { isRef, isSerialNode, isSerialTransition } from "./refs";
 
 // Tools
 export type {
@@ -10,8 +10,8 @@ export type {
   AnthropicToolDefinition,
   AnthropicBuiltinTool,
   ToolReply,
-} from "./tools.js";
-export { isAnthropicBuiltinTool, isToolReply, toolReply } from "./tools.js";
+} from "./tools";
+export { isAnthropicBuiltinTool, isToolReply, toolReply } from "./tools";
 
 // Transitions
 export type {
@@ -27,7 +27,7 @@ export type {
   SpawnTarget,
   SpawnOptions,
   TransitionToOptions,
-} from "./transitions.js";
+} from "./transitions";
 export {
   transitionTo,
   isCodeTransition,
@@ -37,11 +37,11 @@ export {
   isSpawnResult,
   isCedeResult,
   isSuspendResult,
-} from "./transitions.js";
+} from "./transitions";
 
 // State
-export type { StateUpdateResult } from "./state.js";
-export { shallowMerge } from "./state.js";
+export type { StateUpdateResult } from "./state";
+export { shallowMerge } from "./state";
 
 // Node
 export type {
@@ -51,11 +51,11 @@ export type {
   OutputConfig,
   WorkerNode,
   WorkerNodeConfig,
-} from "./node.js";
-export { isNode, isWorkerNode } from "./node.js";
+} from "./node";
+export { isNode, isWorkerNode } from "./node";
 
 // Instance
-export type { Instance, NodeState, ActiveLeafInfo, SuspendInfo } from "./instance.js";
+export type { Instance, NodeState, ActiveLeafInfo, SuspendInfo } from "./instance";
 export {
   createInstance,
   isInstance,
@@ -70,10 +70,10 @@ export {
   findInstanceById,
   createSuspendInfo,
   clearSuspension,
-} from "./instance.js";
+} from "./instance";
 
 // Charter
-export type { Charter, CharterConfig } from "./charter.js";
+export type { Charter, CharterConfig } from "./charter";
 
 // Messages
 export type {
@@ -99,7 +99,7 @@ export type {
   SpawnPayload,
   CedePayload,
   SuspendPayload,
-} from "./messages.js";
+} from "./messages";
 export {
   userMessage,
   assistantMessage,
@@ -114,10 +114,10 @@ export {
   isEphemeralMessage,
   isInstanceMessage,
   isModelMessage,
-} from "./messages.js";
+} from "./messages";
 
 // Streaming
-export type { MessageStreamEvent, MessageStreamDelta, MessageStreamError } from "./stream.js";
+export type { MessageStreamEvent, MessageStreamDelta, MessageStreamError } from "./stream";
 
 // Machine
 export type {
@@ -127,7 +127,7 @@ export type {
   SerializedMachine,
   SerializedInstance,
   SerializedSuspendInfo,
-} from "./machine.js";
+} from "./machine";
 
 // Pack
 export type {
@@ -140,8 +140,8 @@ export type {
   PackCommandDefinition,
   PackCommandResult,
   AnyPackCommandDefinition,
-} from "./pack.js";
-export { isPack, isPackToolDefinition } from "./pack.js";
+} from "./pack";
+export { isPack, isPackToolDefinition } from "./pack";
 
 // Commands
 export type {
@@ -156,8 +156,8 @@ export type {
   Command,
   Resume,
   SuspendOptions,
-} from "./commands.js";
-export { isCommandValueResult, commandResult, commandResume, isCommand, isResume, isResumeResult } from "./commands.js";
+} from "./commands";
+export { isCommandValueResult, commandResult, commandResume, isCommand, isResume, isResumeResult } from "./commands";
 
 // Client
 export type {
@@ -169,7 +169,7 @@ export type {
   ClientInstance,
   DryClientPack,
   ClientPack,
-} from "./client.js";
+} from "./client";
 
 // Display
 export type {
@@ -177,4 +177,13 @@ export type {
   DisplayInstance,
   DisplayNode,
   DisplayPack,
-} from "./display.js";
+} from "./display";
+
+// Contract
+export type {
+  CommandHandle,
+  ContractCommandEntry,
+  MachineContract,
+  MachineContractConfig,
+  BuildCommands,
+} from "./contract";

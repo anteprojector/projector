@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useCallback, useImperativeHandle, forwardRef } from "react";
-import { useAtom, useSetAtom } from "jotai";
+import { useSetAtom } from "jotai";
 import { useAction } from "convex/react";
 import { Room, RoomEvent, Track, ConnectionState, ParticipantKind } from "livekit-client";
 import { api } from "@/convex/_generated/api";
@@ -9,8 +9,6 @@ import type { Id } from "@/convex/_generated/dataModel";
 import type { CommandExecutionResult } from "markov-machines/client";
 import {
   ingestStreamPacketAtom,
-  isLiveModeAtom,
-  isCameraEnabledAtom,
   liveKitRoomAtom,
   voiceConnectionStatusAtom,
   voiceAgentConnectedAtom,
@@ -20,6 +18,8 @@ const STREAM_TOPIC = "mm.stream.v1";
 
 interface LiveVoiceClientProps {
   sessionId: Id<"sessions">;
+  voiceEnabled: boolean;
+  cameraEnabled: boolean;
 }
 
 export interface LiveVoiceClientHandle {
@@ -45,9 +45,7 @@ export interface LiveVoiceClientHandle {
  * Transcripts are persisted by the voice agent directly to Convex.
  */
   export const LiveVoiceClient = forwardRef<LiveVoiceClientHandle, LiveVoiceClientProps>(
-  function LiveVoiceClient({ sessionId }, ref) {
-    const [isLiveMode] = useAtom(isLiveModeAtom);
-    const [isCameraEnabled] = useAtom(isCameraEnabledAtom);
+  function LiveVoiceClient({ sessionId, voiceEnabled, cameraEnabled }, ref) {
     const setConnectionStatus = useSetAtom(voiceConnectionStatusAtom);
     const setAgentConnected = useSetAtom(voiceAgentConnectedAtom);
     const ingestStreamPacket = useSetAtom(ingestStreamPacketAtom);
@@ -58,11 +56,11 @@ export interface LiveVoiceClientHandle {
     const getTokenRef = useRef(getToken);
     getTokenRef.current = getToken;
 
-    const isLiveModeRef = useRef(isLiveMode);
-    isLiveModeRef.current = isLiveMode;
+    const voiceEnabledRef = useRef(voiceEnabled);
+    voiceEnabledRef.current = voiceEnabled;
 
-    const isCameraEnabledRef = useRef(isCameraEnabled);
-    isCameraEnabledRef.current = isCameraEnabled;
+    const cameraEnabledRef = useRef(cameraEnabled);
+    cameraEnabledRef.current = cameraEnabled;
 
     const roomRef = useRef<Room | null>(null);
     const audioElementRef = useRef<HTMLAudioElement | null>(null);
@@ -111,25 +109,25 @@ export interface LiveVoiceClientHandle {
           console.log(`[LiveVoiceClient] ConnectionStateChanged: ${state}`);
           if (state === ConnectionState.Connected) {
             setConnectionStatus("connected");
-            // Apply current mic/camera state (in case user toggled before connect finished)
+            // Apply current mic/camera state (in case props changed before connect finished)
             room.localParticipant
-              .setMicrophoneEnabled(isLiveModeRef.current)
+              .setMicrophoneEnabled(voiceEnabledRef.current)
               .then(() => {
                 console.log(
-                  `[LiveVoiceClient] setMicrophoneEnabled(${isLiveModeRef.current}) ok`
+                  `[LiveVoiceClient] setMicrophoneEnabled(${voiceEnabledRef.current}) ok`
                 );
               })
               .catch((error) => {
                 console.error("Failed to toggle microphone:", error);
               });
             room.localParticipant
-              .setCameraEnabled(isCameraEnabledRef.current, {
+              .setCameraEnabled(cameraEnabledRef.current, {
                 resolution: { width: 1280, height: 720 },
                 frameRate: 30,
               })
               .then(() => {
                 console.log(
-                  `[LiveVoiceClient] setCameraEnabled(${isCameraEnabledRef.current}) ok`
+                  `[LiveVoiceClient] setCameraEnabled(${cameraEnabledRef.current}) ok`
                 );
               })
               .catch((error) => {
@@ -241,75 +239,38 @@ export interface LiveVoiceClientHandle {
       };
     }, [connect, cleanup]);
 
-    // Toggle microphone based on live mode
+    // Toggle microphone based on voiceEnabled prop (driven by pack state)
     useEffect(() => {
       const room = roomRef.current;
       if (!room || room.state !== ConnectionState.Connected) return;
 
-      // Enable/disable microphone based on live mode
       room.localParticipant
-        .setMicrophoneEnabled(isLiveMode)
+        .setMicrophoneEnabled(voiceEnabled)
         .then(() => {
-          console.log(`[LiveVoiceClient] setMicrophoneEnabled(${isLiveMode}) ok`);
+          console.log(`[LiveVoiceClient] setMicrophoneEnabled(${voiceEnabled}) ok`);
         })
         .catch((error) => {
           console.error("Failed to toggle microphone:", error);
         });
+    }, [voiceEnabled]);
 
-      // Also notify agent of mode change via RPC
-      const agentParticipant = Array.from(room.remoteParticipants.values()).find(
-        (p) => p.kind === ParticipantKind.AGENT
-      );
-
-      if (agentParticipant) {
-        room.localParticipant
-          .performRpc({
-            destinationIdentity: agentParticipant.identity,
-            method: "setLiveMode",
-            payload: isLiveMode ? "true" : "false",
-            responseTimeout: 5000,
-          })
-          .catch((error) => {
-            console.error("Failed to notify agent of mode change:", error);
-          });
-      }
-    }, [isLiveMode]);
-
-    // Toggle camera independently of live mode
+    // Toggle camera based on cameraEnabled prop (driven by pack state)
     useEffect(() => {
       const room = roomRef.current;
       if (!room || room.state !== ConnectionState.Connected) return;
 
       room.localParticipant
-        .setCameraEnabled(isCameraEnabled, {
+        .setCameraEnabled(cameraEnabled, {
           resolution: { width: 1280, height: 720 },
           frameRate: 30,
         })
         .then(() => {
-          console.log(`[LiveVoiceClient] setCameraEnabled(${isCameraEnabled}) ok`);
+          console.log(`[LiveVoiceClient] setCameraEnabled(${cameraEnabled}) ok`);
         })
         .catch((error) => {
           console.error("Failed to toggle camera:", error);
         });
-
-      // Also notify agent of camera intent via RPC (pack state updates)
-      const agentParticipant = Array.from(room.remoteParticipants.values()).find(
-        (p) => p.kind === ParticipantKind.AGENT
-      );
-
-      if (agentParticipant) {
-        room.localParticipant
-          .performRpc({
-            destinationIdentity: agentParticipant.identity,
-            method: "setCameraEnabled",
-            payload: isCameraEnabled ? "true" : "false",
-            responseTimeout: 5000,
-          })
-          .catch((error) => {
-            console.error("Failed to notify agent of camera change:", error);
-          });
-      }
-    }, [isCameraEnabled]);
+    }, [cameraEnabled]);
 
     // Cleanup audio element on unmount
     useEffect(() => {

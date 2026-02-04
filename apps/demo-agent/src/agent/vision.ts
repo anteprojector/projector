@@ -17,7 +17,7 @@ import {
 import sharp from "sharp";
 import type { ImageDetail, Machine } from "markov-machines";
 import { ephemeralMessage, instanceMessage } from "markov-machines";
-import { liveModePack } from "./packs/live-mode.js";
+import { agentControlsPack } from "./packs/agent-controls.js";
 
 export interface VisionSamplerConfig {
   /** Frames per second while user is speaking */
@@ -107,7 +107,7 @@ export function attachVisionSampler({
     machine.enqueue([
       instanceMessage({
         kind: "packState",
-        packName: liveModePack.name,
+        packName: agentControlsPack.name,
         patch: { cameraEnabled: enabled },
       }),
     ]);

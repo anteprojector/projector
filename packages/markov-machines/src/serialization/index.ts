@@ -4,12 +4,12 @@ export {
   serializeMachine,
   type SerializeNodeOptions,
   type SerializeInstanceOptions,
-} from "./serialize.js";
-export { deserializeMachine, deserializeInstance, deserializeNode } from "./deserialize.js";
-export { serializeInstanceForDisplay } from "./serialize-display.js";
+} from "./serialize";
+export { deserializeMachine, deserializeInstance, deserializeNode } from "./deserialize";
+export { serializeInstanceForDisplay } from "./serialize-display";
 export type {
   DisplayCommand,
   DisplayInstance,
   DisplayNode,
   DisplayPack,
-} from "../types/display.js";
+} from "../types/display";

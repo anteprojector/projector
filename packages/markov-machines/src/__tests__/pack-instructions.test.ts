@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
-import { createCharter } from "../core/charter.js";
-import { createNode } from "../core/node.js";
-import { createPack } from "../core/pack.js";
-import { buildSystemPrompt } from "../runtime/system-prompt.js";
-import { StandardExecutor } from "../executor/standard.js";
+import { createCharter } from "../core/charter";
+import { createNode } from "../core/node";
+import { createPack } from "../core/pack";
+import { buildSystemPrompt } from "../runtime/system-prompt";
+import { StandardExecutor } from "../executor/standard";
 
 describe("pack instructions", () => {
   it("includes string instructions for active packs", () => {

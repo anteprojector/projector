@@ -1,8 +1,8 @@
-import type { Charter } from "./charter.js";
-import type { Instance, SuspendInfo } from "./instance.js";
-import type { MachineMessage } from "./messages.js";
-import type { Ref, SerialNode } from "./refs.js";
-import type { StandardNodeConfig } from "../executor/types.js";
+import type { Charter } from "./charter";
+import type { Instance, SuspendInfo } from "./instance";
+import type { MachineMessage } from "./messages";
+import type { Ref, SerialNode } from "./refs";
+import type { StandardNodeConfig } from "../executor/types";
 
 /**
  * Callback invoked when a message is enqueued.
