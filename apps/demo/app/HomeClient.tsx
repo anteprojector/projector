@@ -17,6 +17,7 @@ import {
   liveClientAtom,
   voiceAgentConnectedAtom,
   streamBuffersAtom,
+  streamPresenceAtom,
   pruneStreamBuffersAtom,
   type AgentTab,
 } from "@/src/atoms";
@@ -45,8 +46,9 @@ export function HomeClient({
   const isLiveMode = useAtomValue(isLiveModeAtom);
   const setLiveClient = useSetAtom(liveClientAtom);
   const voiceAgentConnected = useAtomValue(voiceAgentConnectedAtom);
-  const streamBuffers = useAtomValue(streamBuffersAtom);
+  const streamPresence = useAtomValue(streamPresenceAtom);
   const setStreamBuffers = useSetAtom(streamBuffersAtom);
+  const setStreamPresence = useSetAtom(streamPresenceAtom);
   const pruneStreamBuffers = useSetAtom(pruneStreamBuffersAtom);
 
   const terminalInputRef = useRef<HTMLTextAreaElement>(null);
@@ -95,19 +97,22 @@ export function HomeClient({
     }
   }, [serverMessages, pendingMessage]);
 
-  // Best-effort: once Convex has the final message content, drop the local stream buffer
+  // Best-effort: once Convex has the final message, drop the local stream buffer
   // so Convex remains the only source of truth.
   useEffect(() => {
     if (!serverMessages) return;
     const finalizedIds = serverMessages
-      .filter((m) => m.role === "assistant" && m.idempotencyKey && m.content.length > 0)
+      .filter((m) => m.role === "assistant" && m.idempotencyKey &&
+        (m.streamState === "complete" || (!m.streamState && m.content.length > 0)))
       .map((m) => m.idempotencyKey!) as string[];
     if (finalizedIds.length > 0) {
       pruneStreamBuffers(finalizedIds);
     }
   }, [serverMessages, pruneStreamBuffers]);
 
-  // Combine server messages with pending optimistic message
+  // Combine server messages with pending optimistic message.
+  // Stream content overlay is handled per-message in TerminalMessage via selectAtom,
+  // so this useMemo only depends on streamPresence (changes on start/end) not on every delta.
   const messages = useMemo(() => {
     const base = serverMessages ?? [];
 
@@ -118,30 +123,17 @@ export function HomeClient({
       ? new Set(base.map((m) => m.idempotencyKey).filter(Boolean) as string[])
       : new Set<string>();
 
-    const withStreamOverlay = shouldOverlayStreaming
-      ? base.map((msg) => {
-        if (msg.role !== "assistant") return msg;
-        const messageId = msg.idempotencyKey;
-        if (!messageId) return msg;
-
-        // Convex is source of truth: once content is non-empty, never overlay.
-        if (msg.content.length > 0) return msg;
-
-        const buf = streamBuffers[messageId];
-        if (!buf) return msg;
-        return { ...msg, content: buf.content };
-      })
-      : base;
-
+    // Ephemeral entries for streams not yet persisted in Convex.
+    // Content is empty here — TerminalMessage fills it from the stream buffer.
     const ephemeralStreamingMessages = shouldOverlayStreaming
-      ? Object.values(streamBuffers)
-        .filter((b) => !messageIdsInBase.has(b.messageId) && (b.content.length > 0 || b.error))
-        .map((b) => ({
-          _id: `stream-${b.messageId}`,
+      ? Object.entries(streamPresence)
+        .filter(([id]) => !messageIdsInBase.has(id))
+        .map(([id, meta]) => ({
+          _id: `stream-${id}`,
           role: "assistant" as const,
-          content: b.content,
-          createdAt: b.startedAt,
-          idempotencyKey: b.messageId,
+          content: "",
+          createdAt: meta.startedAt,
+          idempotencyKey: id,
         }))
       : [];
 
@@ -156,10 +148,10 @@ export function HomeClient({
       ]
       : [];
 
-    return [...withStreamOverlay, ...ephemeralStreamingMessages, ...pending].sort(
+    return [...base, ...ephemeralStreamingMessages, ...pending].sort(
       (a, b) => a.createdAt - b.createdAt
     );
-  }, [serverMessages, pendingMessage, streamBuffers, isPreviewing]);
+  }, [serverMessages, pendingMessage, streamPresence, isPreviewing]);
 
   // Create session on mount if none exists or if stale
   useEffect(() => {
@@ -181,7 +173,8 @@ export function HomeClient({
   // Clear any in-flight streaming state when switching sessions.
   useEffect(() => {
     setStreamBuffers({});
-  }, [sessionId, setStreamBuffers]);
+    setStreamPresence({});
+  }, [sessionId, setStreamBuffers, setStreamPresence]);
 
   // Global keyboard shortcuts
   useEffect(() => {

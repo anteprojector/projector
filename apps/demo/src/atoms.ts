@@ -88,6 +88,10 @@ export type StreamBuffer = {
 
 export const streamBuffersAtom = atom<Record<string, StreamBuffer>>({});
 
+// Lightweight presence metadata — only updates on stream start/end/error, NOT on every delta.
+// HomeClient subscribes to this instead of streamBuffersAtom to avoid re-rendering on every delta.
+export const streamPresenceAtom = atom<Record<string, { startedAt: number; error?: string }>>({});
+
 export const ingestStreamPacketAtom = atom(null, (get, set, packet: StreamPacket) => {
   if (packet.v !== 1 || packet.t !== "mm.stream") return;
 
@@ -165,20 +169,47 @@ export const ingestStreamPacketAtom = atom(null, (get, set, packet: StreamPacket
       },
     };
   });
+
+  // Update presence atom only on start/end/error — NOT on deltas.
+  if (event.type === "message_start") {
+    set(streamPresenceAtom, (prev) => ({
+      ...prev,
+      [messageId]: { startedAt: Date.now() },
+    }));
+  } else if (event.type === "message_error") {
+    set(streamPresenceAtom, (prev) => ({
+      ...prev,
+      [messageId]: { ...prev[messageId], error: event.error.message },
+    }));
+  }
 });
 
 export const pruneStreamBuffersAtom = atom(null, (get, set, messageIds: string[]) => {
   if (messageIds.length === 0) return;
-  const current = get(streamBuffersAtom);
-  let changed = false;
-  const next: Record<string, StreamBuffer> = { ...current };
+
+  const currentBuffers = get(streamBuffersAtom);
+  let buffersChanged = false;
+  const nextBuffers: Record<string, StreamBuffer> = { ...currentBuffers };
   for (const id of messageIds) {
-    if (id in next) {
-      delete next[id];
-      changed = true;
+    if (id in nextBuffers) {
+      delete nextBuffers[id];
+      buffersChanged = true;
     }
   }
-  if (changed) {
-    set(streamBuffersAtom, next);
+  if (buffersChanged) {
+    set(streamBuffersAtom, nextBuffers);
+  }
+
+  const currentPresence = get(streamPresenceAtom);
+  let presenceChanged = false;
+  const nextPresence: Record<string, { startedAt: number; error?: string }> = { ...currentPresence };
+  for (const id of messageIds) {
+    if (id in nextPresence) {
+      delete nextPresence[id];
+      presenceChanged = true;
+    }
+  }
+  if (presenceChanged) {
+    set(streamPresenceAtom, nextPresence);
   }
 });

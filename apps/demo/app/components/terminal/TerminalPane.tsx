@@ -15,6 +15,7 @@ interface Message {
   content: string;
   createdAt: number;
   mode?: "text" | "voice";
+  idempotencyKey?: string;
 }
 
 interface TerminalPaneProps {
@@ -41,11 +42,44 @@ export const TerminalPane = forwardRef<HTMLTextAreaElement, TerminalPaneProps>(
       setIsLiveMode((prev) => !prev);
     };
 
+    // Auto-scroll on any DOM content change (new messages AND streaming deltas),
+    // but only if the user was near the bottom before the content changed.
+    // We track lastScrollHeight so we can compare against the pre-mutation scroll
+    // position — this avoids races between scroll events and MutationObserver.
     useEffect(() => {
-      if (containerRef.current) {
-        containerRef.current.scrollTop = containerRef.current.scrollHeight;
-      }
-    }, [messages]);
+      const container = containerRef.current;
+      if (!container) return;
+
+      let lastScrollHeight = container.scrollHeight;
+      let userNearBottom = true;
+
+      const handleScroll = () => {
+        const { scrollTop, scrollHeight, clientHeight } = container;
+        userNearBottom = scrollHeight - scrollTop - clientHeight <= 50;
+        lastScrollHeight = scrollHeight;
+      };
+
+      const observer = new MutationObserver(() => {
+        const { scrollTop, scrollHeight, clientHeight } = container;
+        // If content grew, check whether we were near the bottom BEFORE the growth.
+        const wasNearBottom = scrollHeight > lastScrollHeight
+          ? lastScrollHeight - scrollTop - clientHeight <= 50
+          : userNearBottom;
+        lastScrollHeight = scrollHeight;
+
+        if (wasNearBottom) {
+          container.scrollTop = scrollHeight;
+          userNearBottom = true;
+        }
+      });
+
+      container.addEventListener("scroll", handleScroll, { passive: true });
+      observer.observe(container, { childList: true, subtree: true, characterData: true });
+      return () => {
+        container.removeEventListener("scroll", handleScroll);
+        observer.disconnect();
+      };
+    }, []);
 
     return (
       <div
@@ -77,6 +111,7 @@ export const TerminalPane = forwardRef<HTMLTextAreaElement, TerminalPaneProps>(
                   key={msg._id}
                   role={msg.role}
                   content={msg.content}
+                  idempotencyKey={msg.idempotencyKey}
                 />
               ))
             )}

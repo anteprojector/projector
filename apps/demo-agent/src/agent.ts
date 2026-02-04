@@ -20,6 +20,7 @@ import * as openai from "@livekit/agents-plugin-openai";
 import * as silero from "@livekit/agents-plugin-silero";
 import { ConvexClient } from "convex/browser";
 import { api } from "demo/convex/_generated/api.js";
+import type { Id } from "demo/convex/_generated/dataModel.js";
 import { fileURLToPath } from "node:url";
 import {
   createMachine,
@@ -226,15 +227,15 @@ export default defineAgent({
       const idempotencyKey =
         message.role === "assistant"
           ? message.metadata?.messageId
-          : undefined;
+          : (isExternal ? pendingUserMessageKeys.shift() : undefined);
       const streamState =
         message.role === "assistant"
           ? message.metadata?.stream?.state
-          : undefined;
+          : (idempotencyKey ? "complete" : undefined);
       const streamSeq =
         message.role === "assistant"
           ? message.metadata?.stream?.seq
-          : undefined;
+          : (idempotencyKey ? 1 : undefined);
 
       // Persist streaming assistant envelopes even when content is empty.
       if (!content && !idempotencyKey) {
@@ -385,6 +386,198 @@ export default defineAgent({
       throw err;
     }
 
+    // Stream realtime audio transcript deltas over LiveKit to the UI.
+    // Convex remains the durable source of truth: we upsert an envelope (empty content)
+    // and later patch it when the final assistant message is enqueued via LiveKitExecutor.
+    const transcriptTextEncoder = new TextEncoder();
+    let transcriptPublishChain: Promise<void> = Promise.resolve();
+    const publishTranscriptPacket = (packet: unknown) => {
+      const lp = ctx.room.localParticipant;
+      if (!lp) return;
+      const bytes = transcriptTextEncoder.encode(JSON.stringify(packet));
+      transcriptPublishChain = transcriptPublishChain
+        .then(() => lp.publishData(bytes, { reliable: true, topic: STREAM_TOPIC }))
+        .catch((err) => {
+          console.warn("[DemoAgent] Failed to publish transcript stream packet:", err);
+        });
+    };
+
+    const activeTranscriptStreams = new Map<
+      string,
+      { turnId: string; seq: number; source: "audio_transcript" | "text" }
+    >();
+    const envelopePersistTasks = new Map<string, Promise<void>>();
+    const persistTranscriptEnvelopeOnce = (messageId: string, turnId: Id<"machineTurns"> | null | undefined) => {
+      const existing = envelopePersistTasks.get(messageId);
+      if (existing) return existing;
+      const task = (async () => {
+        try {
+          await convex.mutation(api.messages.add, {
+            sessionId,
+            role: "assistant",
+            content: "",
+            ...(turnId ? { turnId } : {}),
+            mode: "voice",
+            idempotencyKey: messageId,
+            streamState: "streaming",
+            streamSeq: 0,
+          });
+        } catch (err) {
+          console.warn("[DemoAgent] Failed to persist transcript envelope:", err);
+        }
+      })();
+      envelopePersistTasks.set(messageId, task);
+      return task;
+    };
+
+    // User message envelopes: reserve ordering position in Convex before the transcript is known.
+    // We listen for input_audio_buffer.speech_started (fires when user BEGINS speaking) which
+    // is seconds before any response, eliminating the race between user and assistant envelopes.
+    const pendingUserMessageKeys: string[] = [];
+    const userEnvelopePersistTasks = new Map<string, Promise<void>>();
+    const persistUserEnvelopeOnce = (envelopeId: string, turnId: Id<"machineTurns"> | null | undefined) => {
+      const existing = userEnvelopePersistTasks.get(envelopeId);
+      if (existing) return existing;
+      const task = (async () => {
+        try {
+          await convex.mutation(api.messages.add, {
+            sessionId,
+            role: "user",
+            content: "",
+            ...(turnId ? { turnId } : {}),
+            mode: "voice",
+            idempotencyKey: envelopeId,
+            streamState: "streaming",
+            streamSeq: 0,
+          });
+        } catch (err) {
+          console.warn("[DemoAgent] Failed to persist user envelope:", err);
+        }
+      })();
+      userEnvelopePersistTasks.set(envelopeId, task);
+      return task;
+    };
+
+    const realtimeSession = agent._agentActivity?.realtimeLLMSession as any;
+    const onOpenAIServerEvent = (event: any) => {
+      if (!event || typeof event !== "object") return;
+
+      const type = event.type as string | undefined;
+      if (!type) return;
+
+      // User message envelope: speech_started fires when user BEGINS speaking,
+      // well before any response events — gives the Convex mutation plenty of time.
+      // Push to queue immediately so onMessageEnqueue can match it to the transcript.
+      if (type === "input_audio_buffer.speech_started") {
+        const envelopeId = crypto.randomUUID();
+        pendingUserMessageKeys.push(envelopeId);
+        persistUserEnvelopeOnce(envelopeId, context.currentTurnId);
+        return;
+      }
+
+      const isAudioTranscriptDelta =
+        type === "response.output_audio_transcript.delta" || type === "response.audio_transcript.delta";
+      const isTextDelta =
+        type === "response.output_text.delta" || type === "response.text.delta";
+
+      if (isAudioTranscriptDelta || isTextDelta) {
+        const messageId = event.item_id as unknown;
+        const delta = event.delta as unknown;
+        const contentIndex = event.content_index as unknown;
+
+        if (typeof messageId !== "string" || typeof delta !== "string") return;
+
+        let stream = activeTranscriptStreams.get(messageId);
+        if (!stream) {
+          const turnId = context.currentTurnId ? String(context.currentTurnId) : "";
+          stream = { turnId, seq: 0, source: isAudioTranscriptDelta ? "audio_transcript" : "text" };
+          activeTranscriptStreams.set(messageId, stream);
+
+          // Best-effort: insert envelope so Convex/UI has a stable message row immediately.
+          persistTranscriptEnvelopeOnce(messageId, context.currentTurnId);
+
+          publishTranscriptPacket({
+            v: 1,
+            t: "mm.stream",
+            turnId,
+            event: { type: "message_start", messageId, seq: 0 },
+          });
+        }
+
+        // Avoid double-streaming if the server emits both text deltas and audio transcript deltas.
+        if (stream.source === "audio_transcript" && isTextDelta) return;
+        if (stream.source === "text" && isAudioTranscriptDelta) return;
+
+        const nextSeq = stream.seq + 1;
+        stream.seq = nextSeq;
+
+        publishTranscriptPacket({
+          v: 1,
+          t: "mm.stream",
+          turnId: stream.turnId,
+          event: {
+            type: "message_update",
+            messageId,
+            seq: nextSeq,
+            delta: {
+              kind: "text",
+              contentIndex: typeof contentIndex === "number" ? contentIndex : 0,
+              delta,
+            },
+          },
+        });
+        return;
+      }
+
+      if (type === "response.output_item.done") {
+        const item = event.item as any;
+        if (!item || item.type !== "message" || item.role !== "assistant" || typeof item.id !== "string") {
+          return;
+        }
+
+        const messageId = item.id;
+        const stream = activeTranscriptStreams.get(messageId);
+        if (!stream) return;
+
+        const nextSeq = stream.seq + 1;
+        stream.seq = nextSeq;
+        activeTranscriptStreams.delete(messageId);
+
+        publishTranscriptPacket({
+          v: 1,
+          t: "mm.stream",
+          turnId: stream.turnId,
+          event: { type: "message_end", messageId, seq: nextSeq },
+        });
+        return;
+      }
+
+      if (type === "error") {
+        // Fail closed: mark all active transcript streams as errored.
+        const message = (event.error && typeof event.error.message === "string")
+          ? event.error.message
+          : "Realtime error";
+        for (const [messageId, stream] of activeTranscriptStreams) {
+          const nextSeq = stream.seq + 1;
+          stream.seq = nextSeq;
+          publishTranscriptPacket({
+            v: 1,
+            t: "mm.stream",
+            turnId: stream.turnId,
+            event: { type: "message_error", messageId, seq: nextSeq, error: { message } },
+          });
+        }
+        activeTranscriptStreams.clear();
+      }
+    };
+
+    if (ENABLE_REALTIME && realtimeSession && typeof realtimeSession.on === "function") {
+      realtimeSession.on("openai_server_event_received", onOpenAIServerEvent);
+      console.log("[DemoAgent] Attached realtime transcript streaming handler");
+    } else if (ENABLE_REALTIME) {
+      console.warn("[DemoAgent] Realtime session not available for transcript streaming");
+    }
+
     // Graceful shutdown handling
     let isShuttingDown = false;
 
@@ -392,6 +585,14 @@ export default defineAgent({
       if (isShuttingDown) return;
       isShuttingDown = true;
       console.log("[DemoAgent] Shutting down...");
+
+      if (ENABLE_REALTIME && realtimeSession && typeof realtimeSession.off === "function") {
+        try {
+          realtimeSession.off("openai_server_event_received", onOpenAIServerEvent);
+        } catch (e) {
+          console.warn("[DemoAgent] Failed to detach realtime transcript streaming handler:", e);
+        }
+      }
 
       // Remove voice session event listeners
       try {

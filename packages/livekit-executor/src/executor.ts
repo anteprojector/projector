@@ -268,7 +268,15 @@ export class LiveKitExecutor implements Executor {
         if (content) {
           console.log(`[LiveKitExecutor] Enqueuing assistant message: "${content.slice(0, 50)}..."`);
           // Mark as external (from LiveKit TTS)
-          machine.enqueue([assistantMessage(content, { source: { external: true } })]);
+          // Include a stable messageId for streaming/envelope upserts.
+          // For OpenAI Realtime mode, this matches the server item_id used in transcript delta events.
+          machine.enqueue([
+            assistantMessage(content, {
+              source: { external: true },
+              messageId: item.id,
+              stream: { state: "complete", seq: 1 },
+            }),
+          ]);
         }
       }
     };
