@@ -13,15 +13,49 @@ import type {
 } from "../types/messages";
 import type { YieldReason } from "../executor/types";
 import type { Charter } from "../types/charter";
+import type { Pack } from "../types/pack";
 import { getActiveLeaves, isWorkerInstance, getSuspendedInstances, findInstanceById, clearSuspension, createInstance } from "../types/instance";
 import { userMessage, isInstanceMessage, isEphemeralMessage } from "../types/messages";
 import { isResume } from "../types/commands";
 import { serializeNode } from "../serialization/serialize";
+import { getOrInitPackState } from "./machine";
 
 
 /** Check if packStates has any entries */
 const hasPackStates = (ps?: Record<string, unknown>): boolean =>
   ps !== undefined && Object.keys(ps).length > 0;
+
+/**
+ * Hoist packs from a node to the root instance.
+ * Adds any new packs to instance.packs and initializes their states in packStates.
+ * This is called lazily when nodes with packs are discovered via transition or spawn.
+ */
+function hoistPacksToRoot<AppMessage>(
+  machine: Machine<AppMessage>,
+  newPacks: Pack[] | undefined,
+): void {
+  if (!newPacks || newPacks.length === 0) return;
+
+  const existingPacks = machine.instance.packs ?? [];
+  const existingPackNames = new Set(existingPacks.map(p => p.name));
+
+  const packsToAdd = newPacks.filter(p => !existingPackNames.has(p.name));
+  if (packsToAdd.length === 0) return;
+
+  // Ensure packStates exists
+  const packStates = machine.instance.packStates ?? {};
+
+  // Initialize state for new packs
+  for (const pack of packsToAdd) {
+    getOrInitPackState(packStates, pack);
+  }
+
+  machine.instance = {
+    ...machine.instance,
+    packs: [...existingPacks, ...packsToAdd],
+    packStates,
+  };
+}
 
 // ============================================================================
 // Parallel Execution Helpers
@@ -415,6 +449,9 @@ export function applyInstanceMessages<AppMessage = unknown>(
       }
 
       case "transition": {
+        // Hoist packs from new node to root
+        hoistPacksToRoot(machine, payload.node.packs);
+
         // Replace node/state, clear children
         machine.instance = updateInstanceById(
           machine.instance,
@@ -431,6 +468,11 @@ export function applyInstanceMessages<AppMessage = unknown>(
       }
 
       case "spawn": {
+        // Hoist packs from all spawned nodes to root
+        for (const { node } of payload.children) {
+          hoistPacksToRoot(machine, node.packs);
+        }
+
         // Add children to parent instance
         const newChildren = payload.children.map(({ node, state, executorConfig }) =>
           createInstance(
