@@ -20,6 +20,7 @@ export interface ClientInstance {
   node: DisplayNode | SerialNode | Ref;
   state: unknown;
   children?: ClientInstance[];
+  packs?: DisplayPack[];
   packStates?: Record<string, unknown>;
 }
 
@@ -112,10 +113,10 @@ function ClientNodeSection({ node }: { node: DisplayNode }) {
 }
 
 function ClientInstanceContent({ instance, rootPackStates }: { instance: ClientInstance; rootPackStates: Record<string, unknown> }) {
-  // Get packs from node if it's a DisplayNode
-  const nodePacks = isDisplayNode(instance.node) ? (instance.node.packs || []) : [];
+  // Get packs from instance (packs are stored at root instance level only)
+  const instancePacks = instance.packs || [];
   const packStates = rootPackStates;
-  const hasPacks = nodePacks.length > 0;
+  const hasPacks = instancePacks.length > 0;
 
   return (
     <>
@@ -126,11 +127,11 @@ function ClientInstanceContent({ instance, rootPackStates }: { instance: ClientI
       {hasPacks && (
         <Expander
           label="packs"
-          badge={nodePacks.length}
-          preview={nodePacks}
+          badge={instancePacks.length}
+          preview={instancePacks}
         >
           <div className="space-y-1">
-            {nodePacks.map((pack) => {
+            {instancePacks.map((pack) => {
               const packState = packStates[pack.name];
               return (
                 <Expander key={pack.name} label={pack.name} preview={packState}>

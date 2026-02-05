@@ -38,7 +38,6 @@ export interface DisplayInstance {
   children?: DisplayInstance[];
   packs?: DisplayPack[];
   packStates?: Record<string, unknown>;
-  packInstructionOverrides?: Record<string, string>;
   executorConfig?: StandardNodeConfig;
   suspended?: SerializedSuspendInfo;
 }

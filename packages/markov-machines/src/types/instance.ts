@@ -1,5 +1,6 @@
 import { v4 as uuid } from "uuid";
 import type { Node } from "./node";
+import type { Pack } from "./pack";
 import type { StandardNodeConfig } from "../executor/types";
 import type { SuspendResult } from "./transitions";
 
@@ -40,8 +41,8 @@ export interface Instance<N extends Node<any, any> = Node<any, any>> {
   children?: Instance[];
   /** Pack states (only on root instance, shared across all nodes) */
   packStates?: Record<string, unknown>;
-  /** Pack instruction overrides (only on root instance, keyed by pack name) */
-  packInstructionOverrides?: Record<string, string>;
+  /** Deserialized packs with their actual instructions (may differ from charter packs if edited) */
+  packs?: Pack[];
   /** Effective executor config for this instance (override or from node) */
   executorConfig?: StandardNodeConfig;
   /** Suspension info - if present, instance is suspended */

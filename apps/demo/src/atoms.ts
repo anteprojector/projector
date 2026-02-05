@@ -19,7 +19,7 @@ export type AgentTab = "tree" | "state" | "history" | "commands" | "dev";
 export const activeAgentTabAtom = atomWithStorage<AgentTab>("demo-agent-tab", "tree");
 
 // Tree subtabs (persisted)
-export type TreeSubtab = "server" | "client";
+export type TreeSubtab = "server" | "client" | "prompt" | "restore";
 export const activeTreeSubtabAtom = atomWithStorage<TreeSubtab>("demo-tree-subtab", "server");
 
 // History subtabs (persisted)

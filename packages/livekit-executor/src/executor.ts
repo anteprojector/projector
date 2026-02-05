@@ -347,6 +347,8 @@ export class LiveKitExecutor implements Executor {
     const ancestors = instancePath.slice(0, -1); // All except the last (active) instance
     // Pack states are stored on the root instance
     const packStates = rootInstance.packStates ?? {};
+    // Use deserialized packs from root instance (with correct instructions) or fall back to node.packs
+    const packs = rootInstance.packs ?? activeInstance.node.packs;
 
     // Build system prompt
     let instructions = buildSystemPrompt(
@@ -356,6 +358,7 @@ export class LiveKitExecutor implements Executor {
       ancestors,
       packStates,
       {},
+      packs,
     );
 
     // Bootstrap history context when entering live mode

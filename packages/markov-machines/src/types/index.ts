@@ -1,6 +1,6 @@
 // Refs
-export type { Ref, SerialNode, SerialTransition, JSONSchema } from "./refs";
-export { isRef, isSerialNode, isSerialTransition } from "./refs";
+export type { Ref, SerialNode, SerialTransition, SerialPack, JSONSchema } from "./refs";
+export { isRef, isSerialNode, isSerialTransition, isSerialPack } from "./refs";
 
 // Tools
 export type {
@@ -127,6 +127,7 @@ export type {
   SerializedMachine,
   SerializedInstance,
   SerializedSuspendInfo,
+  SerialPackInstance,
 } from "./machine";
 
 // Pack

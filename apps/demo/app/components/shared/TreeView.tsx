@@ -162,6 +162,7 @@ type NodeType = DisplayNode | SerialNode | Ref;
 export type ServerInstance = Omit<SerializedInstance, "node" | "children"> & {
   node: NodeType;
   children?: ServerInstance[];
+  packs?: DisplayPack[];
   packStates?: Record<string, unknown>;
 };
 
@@ -738,6 +739,7 @@ function NodeSection({
             <JsonBlock data={node.initialState} />
           </Expander>
         )}
+
       </div>
     );
   }
@@ -813,10 +815,10 @@ function ServerInstanceContent({
   onEditPackInstructions?: (packName: string, instructions: string | undefined, isDynamic: boolean) => void;
   onEditPackState?: (packName: string, state: unknown) => void;
 }) {
-  // Get packs from node if it's a DisplayNode
-  const nodePacks = isDisplayNode(instance.node) ? (instance.node.packs || []) : [];
+  // Get packs from instance (packs are stored at root instance level only)
+  const instancePacks = instance.packs || [];
   const packStates = rootPackStates;
-  const hasPacks = nodePacks.length > 0;
+  const hasPacks = instancePacks.length > 0;
   const isSuspended = !!instance.suspended;
 
   const handleStateClick = (e: React.MouseEvent) => {
@@ -841,11 +843,11 @@ function ServerInstanceContent({
       {hasPacks && (
         <Expander
           label="packs"
-          badge={nodePacks.length}
-          preview={nodePacks}
+          badge={instancePacks.length}
+          preview={instancePacks}
         >
           <div className="space-y-1">
-            {nodePacks.map((pack) => {
+            {instancePacks.map((pack) => {
               const packState = packStates[pack.name];
               const handlePackStateClick = (e: React.MouseEvent) => {
                 if (e.metaKey && onEditPackState) {

@@ -66,6 +66,7 @@ export function HomeClient({
   }, [setLiveClient]);
 
   const createSession = useAction(api.sessionActions.createSession);
+  const createSessionAtFoo = useAction(api.sessionActions.createSessionAtFoo);
 
   // Query the previewed step to get its turnId for filtering messages
   const previewedStep = useQuery(
@@ -294,6 +295,11 @@ export function HomeClient({
     setSessionId(null);
   }, [setSessionId]);
 
+  const handleResetToFoo = useCallback(() => {
+    // Create a new session starting at fooNode with { name: "Foo" }
+    createSessionAtFoo().then(setSessionId);
+  }, [createSessionAtFoo, setSessionId]);
+
   // Extract theme from session instance packs (supports array or keyed map)
   const theme = (() => {
     type ThemeState = { hue: number; saturation: number; animated: boolean; gradient: boolean };
@@ -371,7 +377,9 @@ export function HomeClient({
             sessionId={sessionId}
             instance={session?.instance}
             displayInstance={effectiveDisplayInstance}
+            systemPrompt={session?.systemPrompt}
             onResetSession={handleResetSession}
+            onResetToFoo={handleResetToFoo}
           />
         </div>
       </div>

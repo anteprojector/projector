@@ -179,6 +179,8 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
     );
 
     // Build system prompt (delegated)
+    // Use deserialized packs from root instance (with correct instructions) or fall back to node.packs
+    const packs = rootInstance.packs ?? currentNode.packs;
     const systemPrompt = buildSystemPrompt(
       charter,
       currentNode,
@@ -186,6 +188,7 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
       ancestors,
       packStates,
       options,
+      packs,
     );
 
     // Prepare Anthropic tools

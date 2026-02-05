@@ -1,5 +1,6 @@
 export {
   serializeNode,
+  serializePack,
   serializeInstance,
   serializeMachine,
   type SerializeNodeOptions,

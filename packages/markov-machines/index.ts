@@ -47,7 +47,11 @@ export { generateToolDefinitions } from "./src/tools/index";
 export { serializeNode, serializeInstance, serializeMachine } from "./src/serialization/serialize";
 export type { SerializeNodeOptions } from "./src/serialization/serialize";
 export { deserializeMachine, deserializeInstance, deserializeNode } from "./src/serialization/deserialize";
-export { serializeInstanceForDisplay } from "./src/serialization/serialize-display";
+export {
+  serializeInstanceForDisplay,
+  serializeNodeForDisplay,
+  serializePackForDisplay,
+} from "./src/serialization/serialize-display";
 
 // JSON Schema helpers
 export { escapeSchemaKeys, restoreSchemaKeys, toSafeJsonSchema, fromSafeJsonSchema } from "./src/helpers/json-schema";

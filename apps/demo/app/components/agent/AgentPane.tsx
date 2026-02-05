@@ -30,7 +30,9 @@ interface AgentPaneProps {
   sessionId: Id<"sessions">;
   instance: SerializedInstance | undefined;
   displayInstance: DisplayInstance | undefined;
+  systemPrompt?: string;
   onResetSession: () => void;
+  onResetToFoo: () => void;
 }
 
 // Helper to get active instance (follows children to deepest)
@@ -74,7 +76,7 @@ function getCommandsFromInstance(instance: DisplayInstance | undefined): {
 }
 
 export const AgentPane = forwardRef<HTMLDivElement, AgentPaneProps>(
-  function AgentPane({ sessionId, instance, displayInstance, onResetSession }, ref) {
+  function AgentPane({ sessionId, instance, displayInstance, systemPrompt, onResetSession, onResetToFoo }, ref) {
     const activeTab = useAtomValue(activeAgentTabAtom);
     const shiftHeld = useAtomValue(shiftHeldAtom);
     const { nodeCommands, packCommands } = getCommandsFromInstance(displayInstance);
@@ -98,14 +100,19 @@ export const AgentPane = forwardRef<HTMLDivElement, AgentPaneProps>(
         {/* Tab content */}
         <div className="flex-1 overflow-hidden p-4">
           {activeTab === "tree" && (
-            <InstanceTreeTab sessionId={sessionId} instance={instance ?? null} displayInstance={displayInstance ?? null} />
+            <InstanceTreeTab
+              sessionId={sessionId}
+              instance={instance ?? null}
+              displayInstance={displayInstance ?? null}
+              systemPrompt={systemPrompt}
+            />
           )}
           {activeTab === "state" && <StateTab instance={displayInstance ?? null} />}
           {activeTab === "history" && <HistoryTab sessionId={sessionId} />}
           {activeTab === "commands" && (
             <CommandsTab nodeCommands={nodeCommands} packCommands={packCommands} />
           )}
-          {activeTab === "dev" && <DevTab onResetSession={onResetSession} />}
+          {activeTab === "dev" && <DevTab onResetSession={onResetSession} onResetToFoo={onResetToFoo} />}
         </div>
       </div>
     );

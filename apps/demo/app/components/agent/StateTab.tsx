@@ -19,18 +19,9 @@ function flattenInstances(instance: DisplayInstance): DisplayInstance[] {
   return result;
 }
 
-// Collect all unique packs from the full instance tree (packs are defined on
-// individual nodes, not necessarily on the root).
-function collectPacks(instance: DisplayInstance) {
-  const seen = new Map<string, NonNullable<DisplayInstance["node"]["packs"]>[number]>();
-  function visit(inst: DisplayInstance) {
-    for (const p of inst.node.packs || []) {
-      if (!seen.has(p.name)) seen.set(p.name, p);
-    }
-    for (const c of inst.children || []) visit(c);
-  }
-  visit(instance);
-  return Array.from(seen.values());
+// Get packs from root instance (packs are stored at root level only)
+function getPacks(instance: DisplayInstance) {
+  return instance.packs || [];
 }
 
 function getActiveInstance(instance: DisplayInstance): DisplayInstance {
@@ -58,7 +49,7 @@ export function StateTab({ instance }: StateTabProps) {
   const allInstances = flattenInstances(displayInstance);
   const activeInstance = getActiveInstance(displayInstance);
   const packStates = displayInstance.packStates || {};
-  const packs = collectPacks(displayInstance);
+  const packs = getPacks(displayInstance);
 
   return (
     <div className="space-y-4">

@@ -1,7 +1,7 @@
 import type { Charter } from "./charter";
 import type { Instance, SuspendInfo } from "./instance";
 import type { MachineMessage } from "./messages";
-import type { Ref, SerialNode } from "./refs";
+import type { Ref, SerialNode, SerialPack } from "./refs";
 import type { StandardNodeConfig } from "../executor/types";
 
 /**
@@ -60,6 +60,15 @@ export interface SerializedSuspendInfo {
 }
 
 /**
+ * Serialized pack instance with state.
+ * Pack can be a Ref (unmodified) or inline SerialPack (edited).
+ */
+export interface SerialPackInstance {
+  state: unknown;
+  pack: Ref | SerialPack;
+}
+
+/**
  * Serialized node instance for persistence.
  */
 export interface SerializedInstance {
@@ -71,8 +80,8 @@ export interface SerializedInstance {
   state: unknown;
   /** Optional child instances - always an array when present */
   children?: SerializedInstance[];
-  /** Pack states (only on root instance) */
-  packStates?: Record<string, unknown>;
+  /** Pack instances with state (only on root instance) */
+  packInstances?: SerialPackInstance[];
   /** Per-instance executor configuration override */
   executorConfig?: StandardNodeConfig;
   /** Suspension info if suspended */

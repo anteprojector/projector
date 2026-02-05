@@ -84,7 +84,7 @@ function serializeCommandsForDisplay(
   return result;
 }
 
-function serializeNodeForDisplay(node: Instance["node"], charter?: Charter): DisplayNode {
+export function serializeNodeForDisplay(node: Instance["node"], charter?: Charter): DisplayNode {
   const name = getNodeName(node, charter);
 
   let validator: Record<string, unknown> = {};
@@ -117,7 +117,7 @@ function serializeNodeForDisplay(node: Instance["node"], charter?: Charter): Dis
   };
 }
 
-function serializePackForDisplay(
+export function serializePackForDisplay(
   pack: {
     name: string;
     description: string;
@@ -126,7 +126,6 @@ function serializePackForDisplay(
     commands?: Record<string, { name: string; description: string; inputSchema: { _def?: unknown } }>;
   },
   state: unknown,
-  instructionOverride?: string,
 ): DisplayPack {
   let validator: Record<string, unknown> = {};
   try {
@@ -137,14 +136,12 @@ function serializePackForDisplay(
 
   const commands = serializeCommandsForDisplay(pack.commands as any);
 
-  // Resolve instructions (may be static string, function of state, or an override)
+  // Resolve instructions (may be static string or function of state)
+  // The pack already has the correct instructions (from charter or edited by user)
   let instructions: string | undefined;
   let instructionsDynamic = false;
 
-  if (instructionOverride !== undefined) {
-    // User has edited this pack's instructions - use the override
-    instructions = instructionOverride;
-  } else if (typeof pack.instructions === "function") {
+  if (typeof pack.instructions === "function") {
     instructionsDynamic = true;
     try {
       instructions = pack.instructions(state);
@@ -178,20 +175,16 @@ export function serializeInstanceForDisplay(
   }
 
   // Build packs array with full info including current state
+  // Use instance.packs (deserialized with correct instructions) or fall back to node.packs
   let packs: DisplayPack[] | undefined;
-  const nodePacks = instance.node.packs ?? [];
+  const instancePacks = instance.packs ?? instance.node.packs ?? [];
   const packStates = instance.packStates ?? {};
-  const packInstructionOverrides = instance.packInstructionOverrides ?? {};
-  if (nodePacks.length > 0) {
-    packs = nodePacks.map((pack) => {
+  // Only serialize full packs at root instance (where packStates is stored)
+  if (instancePacks.length > 0 && instance.packStates) {
+    packs = instancePacks.map((pack) => {
       const state = packStates[pack.name] ?? pack.initialState ?? {};
-      const instructionOverride = packInstructionOverrides[pack.name];
-      return serializePackForDisplay(pack as any, state, instructionOverride);
+      return serializePackForDisplay(pack as any, state);
     });
-  }
-
-  if (packs) {
-    node.packs = packs;
   }
 
   return {
