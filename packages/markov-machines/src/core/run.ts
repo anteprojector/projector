@@ -557,9 +557,9 @@ export async function* runMachine<AppMessage = unknown>(
   options?: RunOptions<AppMessage>,
 ): AsyncGenerator<MachineStep<AppMessage>> {
   const tracer = options?.tracer;
-  const rootSpan = tracer?.startSpan("machine.run", {
+  const rootSpan = tracer?.startSpan("machine", {
     input: { charterName: machine.charter.name },
-    attributes: { maxSteps: options?.maxSteps ?? 50 },
+    attributes: { maxSteps: options?.maxSteps ?? 50, type: 'function' },
   });
 
   try {
@@ -688,8 +688,8 @@ async function* runMachineInner<AppMessage = unknown>(
       throw new Error("No active instances found");
     }
 
-    const stepSpan = rootTracer?.startSpan(`machine.step.${steps}`, {
-      attributes: { step: steps, activeLeafCount: activeLeaves.length },
+    const stepSpan = rootTracer?.startSpan('step', {
+      attributes: { step: steps, activeLeafCount: activeLeaves.length, type: 'task' },
     });
     const stepTracer = stepSpan?.child();
 

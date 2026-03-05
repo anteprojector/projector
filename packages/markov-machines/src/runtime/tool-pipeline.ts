@@ -80,7 +80,7 @@ export async function runToolPipeline<AppMessage = unknown>(
   }
 
   if (tracer) {
-    return tracer.withSpan("tool_pipeline", async (span) => {
+    return tracer.withSpan("tool pipeline", async (span) => {
       span.log({
         input: {
           toolNames: toolCalls.map(tc => tc.name),
@@ -93,7 +93,7 @@ export async function runToolPipeline<AppMessage = unknown>(
         output: { yieldReason: result.yieldReason },
       });
       return result;
-    });
+    }, { attributes: { type: 'task' }});
   }
 
   return runToolPipelineInner<AppMessage>(ctx, toolCalls, undefined);
