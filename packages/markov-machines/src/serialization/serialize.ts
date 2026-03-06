@@ -97,11 +97,29 @@ export function serializeNode<S>(
     }
   }
 
+  // Serialize command refs (node commands only — not packs)
+  const commandRefs: Record<string, Ref> = {};
+  if (charter && node.commands) {
+    for (const [name, command] of Object.entries(node.commands)) {
+      // Check charter.nodes for matching command by reference identity
+      let found = false;
+      for (const [nodeName, regNode] of Object.entries(charter.nodes)) {
+        if (regNode.commands?.[name] === command) {
+          commandRefs[name] = { ref: `${nodeName}.${name}` };
+          found = true;
+          break;
+        }
+      }
+      // Unregistered inline commands are skipped (can't be serialized)
+    }
+  }
+
   return {
     instructions: node.instructions,
     validator,
     transitions,
     ...(Object.keys(toolRefs).length > 0 ? { tools: toolRefs } : {}),
+    ...(Object.keys(commandRefs).length > 0 ? { commands: commandRefs } : {}),
     initialState: node.initialState,
   };
 }

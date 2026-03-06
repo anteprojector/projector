@@ -21,6 +21,8 @@ export interface SerialNode<S = unknown> {
   transitions: Record<string, Ref | SerialTransition>;
   /** Tools as refs only - resolved from charter at deserialization */
   tools?: Record<string, Ref>;
+  /** Commands as refs only - resolved from charter at deserialization */
+  commands?: Record<string, Ref>;
   /** Optional initial state for this node */
   initialState?: S;
 }
