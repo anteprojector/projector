@@ -1,3 +1,5 @@
+import type { StandardNodeConfig } from "../executor/types";
+
 /**
  * JSON Schema type for serialized Zod schemas.
  */
@@ -16,6 +18,8 @@ export interface Ref {
  * Note: Inline node tools (which have execute functions) cannot be serialized.
  */
 export interface SerialNode<S = unknown> {
+  /** Original charter node name (preserved when inlined) */
+  name?: string;
   instructions: string;
   validator: JSONSchema;
   transitions: Record<string, Ref | SerialTransition>;
@@ -25,6 +29,8 @@ export interface SerialNode<S = unknown> {
   commands?: Record<string, Ref>;
   /** Optional initial state for this node */
   initialState?: S;
+  /** Executor configuration for this node */
+  executorConfig?: StandardNodeConfig;
 }
 
 /**

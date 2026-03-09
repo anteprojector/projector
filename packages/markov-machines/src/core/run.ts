@@ -477,7 +477,6 @@ export function applyInstanceMessages<AppMessage = unknown>(
             node: payload.node,
             state: payload.state ?? payload.node.initialState,
             children: undefined,
-            executorConfig: payload.executorConfig ?? payload.node.executorConfig,
           }),
         );
         break;
@@ -490,13 +489,10 @@ export function applyInstanceMessages<AppMessage = unknown>(
         }
 
         // Add children to parent instance
-        const newChildren = payload.children.map(({ node, state, executorConfig }) =>
+        const newChildren = payload.children.map(({ node, state }) =>
           createInstance(
             node,
             state ?? node.initialState,
-            undefined,
-            undefined,
-            executorConfig ?? node.executorConfig,
           ),
         );
 

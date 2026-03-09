@@ -1,7 +1,6 @@
 import type { Command, Resume } from "./commands";
 import type { Node } from "./node";
 import type { SuspendInfo } from "./instance";
-import type { StandardNodeConfig } from "../executor/types";
 
 /**
  * Text content block (simplified for storage).
@@ -106,7 +105,6 @@ export interface TransitionPayload {
   instanceId: string;
   node: Node<unknown, unknown>;
   state?: unknown;
-  executorConfig?: StandardNodeConfig;
 }
 
 /**
@@ -118,7 +116,6 @@ export interface SpawnPayload {
   children: Array<{
     node: Node<unknown, unknown>;
     state?: unknown;
-    executorConfig?: StandardNodeConfig;
   }>;
 }
 

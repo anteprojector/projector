@@ -189,6 +189,8 @@ export function deserializeNode<S>(
     transitions,
     ...(Object.keys(commands).length > 0 ? { commands } : {}),
     initialState: serialNode.initialState,
+    ...(serialNode.executorConfig ? { executorConfig: serialNode.executorConfig } : {}),
+    ...(serialNode.name ? { name: serialNode.name } : {}),
   };
 }
 

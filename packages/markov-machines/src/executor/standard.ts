@@ -207,7 +207,7 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
     });
 
     // Resolve effective executor config (instance > node > executor defaults)
-    const execConfig = instance.executorConfig ?? instance.node.executorConfig ?? {};
+    const execConfig = instance.node.executorConfig ?? {};
 
     // Runtime validation of known executorConfig fields
     if (execConfig.model !== undefined && typeof execConfig.model !== "string") {
