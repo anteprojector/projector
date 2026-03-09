@@ -493,6 +493,13 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
           },
         };
       }
+      if (block.type === "file") {
+        const label = block.filename ? `${block.filename} (${block.mediaType})` : block.mediaType;
+        return {
+          type: "text" as const,
+          text: `[file: ${label}] ${block.url}`,
+        };
+      }
       if (block.type === "tool_use") {
         return {
           type: "tool_use" as const,
