@@ -119,10 +119,10 @@ export function serializeNode<S>(
     }
   }
 
-  const name = charterName ?? (node as Record<string, unknown>).name;
+  const name = charterName ?? (node as unknown as Record<string, unknown>).name;
 
   return {
-    ...(name ? { name } : {}),
+    ...(name ? { name: name as string } : {}),
     instructions: node.instructions,
     validator,
     transitions,
