@@ -25,7 +25,7 @@ import {
 import { generateToolDefinitions } from "../tools/tool-generator";
 import { buildSystemPrompt } from "../runtime/system-prompt";
 import { runToolPipeline } from "../runtime/tool-pipeline";
-import { getOrInitPackState } from "../core/machine";
+import { initPackContexts } from "../runtime/context-resolver";
 import { ZOD_JSON_SCHEMA_TARGET_OPENAPI_3 } from "../helpers/json-schema";
 import type {
   Executor,
@@ -129,15 +129,13 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
       isPrimary: !isWorker,
     };
 
-    // Get pack states from root instance (first ancestor or current instance)
+    // Get context state from root instance (first ancestor or current instance)
     const rootInstance = ancestors[0] ?? instance;
-    const packStates: Record<string, unknown> = { ...(rootInstance.packStates ?? {}) };
+    const context: Record<string, unknown> = { ...(rootInstance.context ?? {}) };
 
-    // Lazy init packs from current node (for node-level packs not in charter)
+    // Lazy init contexts from current node packs
     if (!currentNode.worker && currentNode.packs) {
-      for (const pack of currentNode.packs) {
-        getOrInitPackState(packStates, pack);
-      }
+      initPackContexts(charter, context, currentNode.packs);
     }
 
     // Build conversation history for API, including previous history
@@ -179,16 +177,13 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
     );
 
     // Build system prompt (delegated)
-    // Use deserialized packs from root instance (with correct instructions) or fall back to node.packs
-    const packs = rootInstance.packs ?? currentNode.packs;
     const systemPrompt = buildSystemPrompt(
       charter,
       currentNode,
       currentState,
       ancestors,
-      packStates,
+      context,
       options,
-      packs,
     );
 
     // Prepare Anthropic tools
@@ -415,7 +410,7 @@ export class StandardExecutor<AppMessage = unknown> implements Executor<AppMessa
           charter,
           instance,
           ancestors,
-          packStates,
+          context,
           history: options?.history,
           enqueue,
           source,

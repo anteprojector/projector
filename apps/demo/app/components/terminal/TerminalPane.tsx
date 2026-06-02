@@ -71,9 +71,9 @@ export const TerminalPane = forwardRef<HTMLTextAreaElement, TerminalPaneProps>(
     })();
     const liveModeAllowed = liveModePackEnabled === true;
 
-    // Derive voice/camera from pack state (single source of truth)
-    const packStates = displayInstance?.packStates as Record<string, any> | undefined;
-    const agentControls = packStates?.agentControls;
+    // Derive voice/camera from context (single source of truth)
+    const context = displayInstance?.context as Record<string, any> | undefined;
+    const agentControls = context?.agentControls;
     const voiceEnabled = (agentControls?.voiceEnabled as boolean) ?? false;
     const cameraEnabled = (agentControls?.cameraEnabled as boolean) ?? false;
 
@@ -168,14 +168,14 @@ export const TerminalPane = forwardRef<HTMLTextAreaElement, TerminalPaneProps>(
     const handleToggleLiveMode = () => {
       const next = !voiceEnabled;
       executeCommand("setVoiceEnabled", { enabled: next }, {
-        packState: { agentControls: { voiceEnabled: next } },
+        context: { agentControls: { voiceEnabled: next } },
       });
     };
 
     const handleToggleCamera = () => {
       const next = !cameraEnabled;
       executeCommand("setCameraEnabled", { enabled: next }, {
-        packState: { agentControls: { cameraEnabled: next } },
+        context: { agentControls: { cameraEnabled: next } },
       });
     };
 

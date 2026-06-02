@@ -3,6 +3,7 @@ import type { Transition } from "./transitions";
 import type { Node } from "./node";
 import type { Executor } from "../executor/types";
 import type { Pack } from "./pack";
+import type { Context } from "./context";
 import type { Instance } from "./instance";
 import type { SystemPromptOptions } from "../runtime/system-prompt";
 
@@ -16,7 +17,7 @@ export type SystemPromptBuilder<AppMessage = unknown> = <S>(
   node: Node<AppMessage, S>,
   state: S,
   ancestors: Instance[],
-  packStates: Record<string, unknown>,
+  context: Record<string, unknown>,
   options?: SystemPromptOptions
 ) => string;
 
@@ -43,6 +44,8 @@ export interface CharterConfig<AppMessage = unknown> {
   nodes?: Record<string, Node<AppMessage, any> | Node<never, any>>;
   /** Registered packs (reusable modules with state and tools) */
   packs?: Pack<any>[];
+  /** Registered contexts (root-hoisted state definitions for packs) */
+  contexts?: Context<any>[];
   /**
    * Optional custom system prompt builder.
    * If provided, this function will be used instead of the default system prompt builder.
@@ -75,6 +78,8 @@ export interface Charter<AppMessage = unknown> {
   nodes: Record<string, Node<any, any>>;
   /** Registered packs */
   packs: Pack<any>[];
+  /** Registered contexts */
+  contexts: Context<any>[];
   /**
    * Optional custom system prompt builder.
    * Uses `any` to break contravariance - the node parameter is contravariant.

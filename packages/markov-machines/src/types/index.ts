@@ -1,5 +1,5 @@
 // Refs
-export type { Ref, SerialNode, SerialTransition, SerialPack, JSONSchema } from "./refs";
+export type { Ref, SerialNode, SerialTransition, SerialContext, SerialPack, JSONSchema } from "./refs";
 export { isRef, isSerialNode, isSerialTransition, isSerialPack } from "./refs";
 
 // Tools
@@ -95,7 +95,7 @@ export type {
   // Instance payloads
   InstancePayload,
   StateUpdatePayload,
-  PackStateUpdatePayload,
+  ContextUpdatePayload,
   TransitionPayload,
   SpawnPayload,
   CedePayload,
@@ -128,8 +128,15 @@ export type {
   SerializedMachine,
   SerializedInstance,
   SerializedSuspendInfo,
-  SerialPackInstance,
 } from "./machine";
+
+// Context
+export type {
+  Context,
+  ContextConfig,
+  ContextRef,
+} from "./context";
+export { isContext } from "./context";
 
 // Pack
 export type {

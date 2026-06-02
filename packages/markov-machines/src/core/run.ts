@@ -14,48 +14,29 @@ import type {
 import type { ExternalStateMutationEvent } from "../types/externalize";
 import type { YieldReason } from "../executor/types";
 import type { Charter } from "../types/charter";
-import type { Pack } from "../types/pack";
 import type { Tracer, Span } from "../types/tracer";
 import { getActiveLeaves, isWorkerInstance, getSuspendedInstances, findInstanceById, clearSuspension, createInstance } from "../types/instance";
 import { userMessage, isInstanceMessage, isEphemeralMessage } from "../types/messages";
 import { isResume } from "../types/commands";
 import { serializeNode } from "../serialization/serialize";
-import { getOrInitPackState } from "./machine";
+import { initPackContexts } from "../runtime/context-resolver";
 
-
-/** Check if packStates has any entries */
-const hasPackStates = (ps?: Record<string, unknown>): boolean =>
-  ps !== undefined && Object.keys(ps).length > 0;
 
 /**
- * Hoist packs from a node to the root instance.
- * Adds any new packs to instance.packs and initializes their states in packStates.
+ * Initialize contexts from a node's packs on the root instance.
  * This is called lazily when nodes with packs are discovered via transition or spawn.
  */
-function hoistPacksToRoot<AppMessage>(
+function initPackContextsOnRoot<AppMessage>(
   machine: Machine<AppMessage>,
-  newPacks: Pack[] | undefined,
+  packs: NonNullable<Instance["node"]["packs"]> | undefined,
 ): void {
-  if (!newPacks || newPacks.length === 0) return;
+  if (!packs || packs.length === 0) return;
 
-  const existingPacks = machine.instance.packs ?? [];
-  const existingPackNames = new Set(existingPacks.map(p => p.name));
-
-  const packsToAdd = newPacks.filter(p => !existingPackNames.has(p.name));
-  if (packsToAdd.length === 0) return;
-
-  // Ensure packStates exists
-  const packStates = machine.instance.packStates ?? {};
-
-  // Initialize state for new packs
-  for (const pack of packsToAdd) {
-    getOrInitPackState(packStates, pack);
-  }
-
+  const context = { ...(machine.instance.context ?? {}) };
+  initPackContexts(machine.charter, context, packs);
   machine.instance = {
     ...machine.instance,
-    packs: [...existingPacks, ...packsToAdd],
-    packStates,
+    context,
   };
 }
 
@@ -397,7 +378,7 @@ export function applyInstanceMessages<AppMessage = unknown>(
 } {
   // Track writes for duplicate detection
   const stateWrites = new Map<string, number>(); // instanceId -> write count
-  const packStateWrites = new Map<string, number>(); // packName -> write count
+  const contextWrites = new Map<string, number>(); // contextName -> write count
 
   const cedeContents: Array<{ instanceId: string; content: string | MachineMessage<AppMessage>[] | undefined }> = [];
   const stateMutations: ExternalStateMutationEvent<unknown, AppMessage>[] = [];
@@ -435,13 +416,13 @@ export function applyInstanceMessages<AppMessage = unknown>(
         break;
       }
 
-      case "packState": {
+      case "context": {
         // Track duplicate writes
-        const count = (packStateWrites.get(payload.packName) ?? 0) + 1;
-        packStateWrites.set(payload.packName, count);
+        const count = (contextWrites.get(payload.contextName) ?? 0) + 1;
+        contextWrites.set(payload.contextName, count);
         if (count > 1) {
           console.warn(
-            `[runMachine] Step ${stepNumber}: packState ${payload.packName} updated ${count} times, last write wins`
+            `[runMachine] Step ${stepNumber}: context ${payload.contextName} updated ${count} times, last write wins`
           );
         }
 
@@ -451,22 +432,22 @@ export function applyInstanceMessages<AppMessage = unknown>(
           break;
         }
 
-        // Shallow merge into pack state on root
-        const currentPackStates = machine.instance.packStates ?? {};
-        const currentPackState = currentPackStates[payload.packName] as Record<string, unknown> | undefined;
+        // Shallow merge into context state on root
+        const currentContext = machine.instance.context ?? {};
+        const currentContextState = currentContext[payload.contextName] as Record<string, unknown> | undefined;
         machine.instance = {
           ...machine.instance,
-          packStates: {
-            ...currentPackStates,
-            [payload.packName]: { ...currentPackState, ...payload.patch },
+          context: {
+            ...currentContext,
+            [payload.contextName]: { ...currentContextState, ...payload.patch },
           },
         };
         break;
       }
 
       case "transition": {
-        // Hoist packs from new node to root
-        hoistPacksToRoot(machine, payload.node.packs);
+        // Initialize contexts from new node packs on root
+        initPackContextsOnRoot(machine, payload.node.packs);
 
         // Replace node/state, clear children
         machine.instance = updateInstanceById(
@@ -483,9 +464,9 @@ export function applyInstanceMessages<AppMessage = unknown>(
       }
 
       case "spawn": {
-        // Hoist packs from all spawned nodes to root
+        // Initialize contexts from all spawned node packs on root
         for (const { node } of payload.children) {
-          hoistPacksToRoot(machine, node.packs);
+          initPackContextsOnRoot(machine, node.packs);
         }
 
         // Add children to parent instance

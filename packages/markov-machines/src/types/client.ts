@@ -15,24 +15,26 @@ export interface CommandMeta {
 
 /**
  * Wire format pack (JSON-serializable).
- * Contains pack name, validator schema, and command metadata.
- * State is stored separately in instance.packStates.
+ * Contains pack name, context schema, and command metadata.
+ * State is stored separately in instance.context.
  */
 export interface DryClientPack {
   name: string;
   description: string;
-  validator: JSONSchema;
+  contextName: string;
+  contextSchema: JSONSchema;
   commands: Record<string, CommandMeta>;
 }
 
 /**
  * Hydrated pack with callable command functions.
- * State is stored separately in instance.packStates.
+ * State is stored separately in instance.context.
  */
 export interface ClientPack {
   name: string;
   description: string;
-  validator: JSONSchema;
+  contextName: string;
+  contextSchema: JSONSchema;
   commands: Record<string, (input: unknown) => Command>;
 }
 
@@ -78,13 +80,13 @@ export interface ClientNode<N extends Node<any, any> = Node<any, any>> {
 
 /**
  * Wire format instance (JSON-serializable).
- * Contains id, state, packStates, and a DryClientNode (which includes pack definitions).
+ * Contains id, state, context, and a DryClientNode (which includes pack definitions).
  * Sent over the wire to clients.
  */
 export interface DryClientInstance<N extends Node<any, any> = Node<any, any>> {
   id: string;
   state: NodeState<N>;
-  packStates?: Record<string, unknown>;
+  context?: Record<string, unknown>;
   node: DryClientNode<N>;
 }
 
@@ -95,6 +97,6 @@ export interface DryClientInstance<N extends Node<any, any> = Node<any, any>> {
 export interface ClientInstance<N extends Node<any, any> = Node<any, any>> {
   id: string;
   state: NodeState<N>;
-  packStates?: Record<string, unknown>;
+  context?: Record<string, unknown>;
   node: ClientNode<N>;
 }

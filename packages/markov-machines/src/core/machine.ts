@@ -1,11 +1,11 @@
 import { v4 as uuid } from "uuid";
 import type { Charter } from "../types/charter";
 import type { Machine, MachineConfig } from "../types/machine";
-import { type Instance, getAllInstances } from "../types/instance";
-import type { Pack } from "../types/pack";
+import { type Instance } from "../types/instance";
 import type { MachineMessage } from "../types/messages";
 import { isEphemeralMessage } from "../types/messages";
 import { createExternalizeRuntime } from "../runtime/externalize-manager";
+import { getAllNodePacks, initPackContexts } from "../runtime/context-resolver";
 
 /**
  * Validate a node instance tree recursively.
@@ -39,56 +39,25 @@ function validateInstance(instance: Instance): Instance {
 
 /**
  * Walk all instances in the tree, collect node-level packs,
- * and hoist them to the root instance (deduplicating by name).
- * Initializes packStates for any newly hoisted packs.
+ * and initialize their contexts on the root instance.
  */
-function hoistAllNodePacksToRoot(root: Instance): Instance {
-  const allInstances = getAllInstances(root);
-  const existingPacks = root.packs ?? [];
-  const existingNames = new Set(existingPacks.map(p => p.name));
+function initAllNodePackContextsOnRoot(charter: Charter, root: Instance): Instance {
+  const packs = getAllNodePacks(root);
+  if (packs.length === 0) return root;
 
-  const newPacks: Pack[] = [];
-  for (const inst of allInstances) {
-    for (const pack of inst.node.packs ?? []) {
-      if (!existingNames.has(pack.name)) {
-        existingNames.add(pack.name);
-        newPacks.push(pack);
-      }
-    }
-  }
-
-  if (newPacks.length === 0) return root;
-
-  const packStates = root.packStates ?? {};
-  for (const pack of newPacks) {
-    getOrInitPackState(packStates, pack);
-  }
+  const context = { ...(root.context ?? {}) };
+  initPackContexts(charter, context, packs);
 
   return {
     ...root,
-    packs: [...existingPacks, ...newPacks],
-    packStates,
+    context,
   };
-}
-
-/**
- * Get pack state, lazily initializing if not present.
- * Mutates packStates by adding the initialized state.
- */
-export function getOrInitPackState(
-  packStates: Record<string, unknown>,
-  pack: Pack<any>,
-): unknown {
-  if (!(pack.name in packStates)) {
-    packStates[pack.name] = pack.initialState;
-  }
-  return packStates[pack.name];
 }
 
 /**
  * Create a new machine instance.
  * Validates all states in the instance tree.
- * Initializes pack states on root instance if not present.
+ * Initializes pack contexts on root instance if not present.
  */
 export function createMachine<AppMessage = unknown>(
   charter: Charter<AppMessage>,
@@ -96,7 +65,7 @@ export function createMachine<AppMessage = unknown>(
 ): Machine<AppMessage> {
   const { instance: inputInstance, history = [], onMessageEnqueue } = config;
 
-  const instance = hoistAllNodePacksToRoot(inputInstance);
+  const instance = initAllNodePackContextsOnRoot(charter, inputInstance);
 
   // Validate the entire instance tree (may return new instance with generated IDs)
   const validatedInstance = validateInstance(instance);

@@ -163,7 +163,7 @@ export type ServerInstance = Omit<SerializedInstance, "node" | "children"> & {
   node: NodeType;
   children?: ServerInstance[];
   packs?: DisplayPack[];
-  packStates?: Record<string, unknown>;
+  context?: Record<string, unknown>;
 };
 
 function isDisplayNode(node: NodeType): node is DisplayNode {
@@ -186,7 +186,7 @@ function getServerNodeName(instance: ServerInstance): string {
 type EditingNode = { instanceId: string; instructions: string } | null;
 type EditingState = { instanceId: string; state: unknown } | null;
 type EditingPackInstructions = { packName: string; instructions: string | undefined; isDynamic: boolean } | null;
-type EditingPackState = { packName: string; state: unknown } | null;
+type EditingContextState = { contextName: string; state: unknown } | null;
 
 function InstructionsEditModal({
   editing,
@@ -412,12 +412,12 @@ function PackInstructionsEditModal({
   }, []);
 
   const handleSave = useCallback(async () => {
-    await editCurrentInstance({
-      sessionId,
-      instanceId: "", // Pack edits are stored at root level
-      patch: { pack: { name: editing.packName, instructions: value } },
-    });
-    onClose();
+      await editCurrentInstance({
+        sessionId,
+        instanceId: "", // Pack edits are stored at root level
+        patch: { pack: { name: editing.packName, instructions: value } },
+      });
+      onClose();
   }, [editCurrentInstance, sessionId, editing.packName, value, onClose]);
 
   return (
@@ -471,12 +471,12 @@ function PackInstructionsEditModal({
   );
 }
 
-function PackStateEditModal({
+function ContextStateEditModal({
   editing,
   sessionId,
   onClose,
 }: {
-  editing: NonNullable<EditingPackState>;
+  editing: NonNullable<EditingContextState>;
   sessionId: Id<"sessions">;
   onClose: () => void;
 }) {
@@ -496,14 +496,14 @@ function PackStateEditModal({
     try {
       await editCurrentInstance({
         sessionId,
-        instanceId: "", // Pack edits are stored at root level
-        patch: { pack: { name: editing.packName, state: parsed } },
+        instanceId: "", // Context edits are stored at root level
+        patch: { context: { name: editing.contextName, state: parsed } },
       });
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save");
     }
-  }, [editCurrentInstance, sessionId, editing.packName, value, onClose]);
+  }, [editCurrentInstance, sessionId, editing.contextName, value, onClose]);
 
   return (
     <div
@@ -522,7 +522,7 @@ function PackStateEditModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="text-terminal-green text-sm font-bold">
-          Edit Pack State: {editing.packName}
+          Edit Context State: {editing.contextName}
         </div>
         <div className="bg-black border border-terminal-green-dimmer min-h-[200px] max-h-[50vh] overflow-auto focus-within:border-terminal-green terminal-scrollbar">
           <Editor
@@ -802,22 +802,21 @@ function NodeSection({
 
 function ServerInstanceContent({
   instance,
-  rootPackStates,
+  rootContext,
   onEditInstructions,
   onEditState,
   onEditPackInstructions,
-  onEditPackState,
+  onEditContextState,
 }: {
   instance: ServerInstance;
-  rootPackStates: Record<string, unknown>;
+  rootContext: Record<string, unknown>;
   onEditInstructions?: (instanceId: string, instructions: string) => void;
   onEditState?: (instanceId: string, state: unknown) => void;
   onEditPackInstructions?: (packName: string, instructions: string | undefined, isDynamic: boolean) => void;
-  onEditPackState?: (packName: string, state: unknown) => void;
+  onEditContextState?: (contextName: string, state: unknown) => void;
 }) {
-  // Get packs from instance (packs are stored at root instance level only)
   const instancePacks = instance.packs || [];
-  const packStates = rootPackStates;
+  const rootContextState = rootContext;
   const hasPacks = instancePacks.length > 0;
   const isSuspended = !!instance.suspended;
 
@@ -848,16 +847,16 @@ function ServerInstanceContent({
         >
           <div className="space-y-1">
             {instancePacks.map((pack) => {
-              const packState = packStates[pack.name];
-              const handlePackStateClick = (e: React.MouseEvent) => {
-                if (e.metaKey && onEditPackState) {
+              const contextState = rootContextState[pack.contextName];
+              const handleContextStateClick = (e: React.MouseEvent) => {
+                if (e.metaKey && onEditContextState) {
                   e.preventDefault();
                   e.stopPropagation();
-                  onEditPackState(pack.name, packState);
+                  onEditContextState(pack.contextName, contextState);
                 }
               };
               return (
-                <Expander key={pack.name} label={pack.name} preview={packState}>
+                <Expander key={pack.name} label={pack.name} preview={contextState}>
                   <div className="space-y-1">
                     <PackInstructionsField
                       instructions={pack.instructions}
@@ -866,15 +865,15 @@ function ServerInstanceContent({
                       onEditPackInstructions={onEditPackInstructions}
                     />
                     <div
-                      onClick={handlePackStateClick}
-                      className={onEditPackState ? "cursor-pointer hover:bg-terminal-green/10 -mx-1 px-1 rounded" : ""}
+                      onClick={handleContextStateClick}
+                      className={onEditContextState ? "cursor-pointer hover:bg-terminal-green/10 -mx-1 px-1 rounded" : ""}
                     >
-                      <Expander label="state" preview={packState}>
-                        <JsonBlock data={packState} />
+                      <Expander label="state" preview={contextState}>
+                        <JsonBlock data={contextState} />
                       </Expander>
                     </div>
-                    <Expander label="validator" preview={pack.validator}>
-                      <JsonBlock data={pack.validator} />
+                    <Expander label="schema" preview={pack.schema}>
+                      <JsonBlock data={pack.schema} />
                     </Expander>
                     {Object.keys(pack.commands).length > 0 && (
                       <Expander label="commands" badge={Object.keys(pack.commands).length} preview={pack.commands}>
@@ -938,7 +937,7 @@ export function TreeView({ sessionId, instance }: { sessionId: Id<"sessions">; i
   const [editing, setEditing] = useState<EditingNode>(null);
   const [editingState, setEditingState] = useState<EditingState>(null);
   const [editingPackInstructions, setEditingPackInstructions] = useState<EditingPackInstructions>(null);
-  const [editingPackState, setEditingPackState] = useState<EditingPackState>(null);
+  const [editingContextState, setEditingContextState] = useState<EditingContextState>(null);
 
   const handleEditInstructions = useCallback((instanceId: string, instructions: string) => {
     setEditing({ instanceId, instructions });
@@ -952,8 +951,8 @@ export function TreeView({ sessionId, instance }: { sessionId: Id<"sessions">; i
     setEditingPackInstructions({ packName, instructions, isDynamic });
   }, []);
 
-  const handleEditPackState = useCallback((packName: string, state: unknown) => {
-    setEditingPackState({ packName, state });
+  const handleEditContextState = useCallback((contextName: string, state: unknown) => {
+    setEditingContextState({ contextName, state });
   }, []);
 
   return (
@@ -964,11 +963,11 @@ export function TreeView({ sessionId, instance }: { sessionId: Id<"sessions">; i
         renderContent={(inst) => (
           <ServerInstanceContent
             instance={inst}
-            rootPackStates={instance.packStates || {}}
+            rootContext={instance.context || {}}
             onEditInstructions={handleEditInstructions}
             onEditState={handleEditState}
             onEditPackInstructions={handleEditPackInstructions}
-            onEditPackState={handleEditPackState}
+            onEditContextState={handleEditContextState}
           />
         )}
         getBadge={getServerBadge}
@@ -994,11 +993,11 @@ export function TreeView({ sessionId, instance }: { sessionId: Id<"sessions">; i
           onClose={() => setEditingPackInstructions(null)}
         />
       )}
-      {editingPackState && (
-        <PackStateEditModal
-          editing={editingPackState}
+      {editingContextState && (
+        <ContextStateEditModal
+          editing={editingContextState}
           sessionId={sessionId}
-          onClose={() => setEditingPackState(null)}
+          onClose={() => setEditingContextState(null)}
         />
       )}
     </>

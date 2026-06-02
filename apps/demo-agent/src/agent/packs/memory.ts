@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createPack } from "markov-machines";
+import { createContext, createPack, type PackToolContext } from "markov-machines";
 
 export const memoryStateValidator = z.object({
   memories: z.record(z.string(), z.string()),
@@ -7,10 +7,15 @@ export const memoryStateValidator = z.object({
 
 export type MemoryState = z.infer<typeof memoryStateValidator>;
 
-export const memoryPack = createPack({
+export const memoryContext = createContext({
+  name: "memory",
+  schema: memoryStateValidator,
+  initialState: { memories: {} },
+});
+
+export const memoryPack = createPack(memoryContext, {
   name: "memory",
   description: "Simple key-value memory store for persisting information across conversations",
-  validator: memoryStateValidator,
   tools: {
     setMemory: {
       name: "setMemory",
@@ -19,7 +24,7 @@ export const memoryPack = createPack({
         key: z.string().describe("A short identifier for this memory"),
         value: z.string().describe("The content to remember"),
       }),
-      execute: (input, ctx) => {
+      execute: (input: { key: string; value: string }, ctx: PackToolContext<MemoryState>) => {
         ctx.updateState({
           memories: { ...ctx.state.memories, [input.key]: input.value },
         });
@@ -32,7 +37,7 @@ export const memoryPack = createPack({
       inputSchema: z.object({
         key: z.string().describe("The key of the memory to retrieve"),
       }),
-      execute: (input, ctx) => {
+      execute: (input: { key: string }, ctx: PackToolContext<MemoryState>) => {
         const value = ctx.state.memories[input.key];
         if (value === undefined) {
           return `No memory found for key: "${input.key}"`;
@@ -44,7 +49,7 @@ export const memoryPack = createPack({
       name: "listMemories",
       description: "List all stored memories",
       inputSchema: z.object({}),
-      execute: (_input, ctx) => {
+      execute: (_input: {}, ctx: PackToolContext<MemoryState>) => {
         const entries = Object.entries(ctx.state.memories);
         if (entries.length === 0) {
           return "No memories stored yet.";
@@ -53,5 +58,4 @@ export const memoryPack = createPack({
       },
     },
   },
-  initialState: { memories: {} },
 });

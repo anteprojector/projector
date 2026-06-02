@@ -10,6 +10,7 @@ import {
 } from "../core/client";
 import { isCommand, commandResult } from "../types/commands";
 import { createPack } from "../core/pack";
+import { createContext } from "../core/context";
 
 // Simple state schema for testing
 const todoStateValidator = z.object({
@@ -101,12 +102,15 @@ describe("createDryClientInstance", () => {
     expect(dryInstance.node.instructions).toBe("Test node");
   });
 
-  it("should include packs on node and packStates on instance when node has packs", () => {
-    const testPack = createPack({
+  it("should include packs on node and context on instance when node has packs", () => {
+    const testContext = createContext({
+      name: "test",
+      schema: z.object({ counter: z.number() }),
+      initialState: { counter: 0 },
+    });
+    const testPack = createPack(testContext, {
       name: "testPack",
       description: "Test pack with commands",
-      validator: z.object({ counter: z.number() }),
-      initialState: { counter: 0 },
       commands: {
         incrementCounter: {
           name: "incrementCounter",
@@ -138,7 +142,7 @@ describe("createDryClientInstance", () => {
       node,
       { todos: [] },
       undefined,
-      { testPack: { counter: 42 } },
+      { test: { counter: 42 } },
     );
 
     const dryInstance = createDryClientInstance(instance);
@@ -150,7 +154,8 @@ describe("createDryClientInstance", () => {
     const pack = dryInstance.node.packs![0]!;
     expect(pack.name).toBe("testPack");
     expect(pack.description).toBe("Test pack with commands");
-    expect(pack.validator).toBeDefined();
+    expect(pack.contextName).toBe("test");
+    expect(pack.contextSchema).toBeDefined();
 
     // Pack commands
     expect(Object.keys(pack.commands)).toHaveLength(2);
@@ -160,17 +165,20 @@ describe("createDryClientInstance", () => {
     expect(pack.commands.resetCounter).toBeDefined();
     expect(pack.commands.resetCounter!.name).toBe("resetCounter");
 
-    // Pack state should be on instance.packStates
-    expect(dryInstance.packStates).toBeDefined();
-    expect(dryInstance.packStates!.testPack).toEqual({ counter: 42 });
+    // Pack context state should be on instance.context
+    expect(dryInstance.context).toBeDefined();
+    expect(dryInstance.context!.test).toEqual({ counter: 42 });
   });
 
-  it("should not include packStates when none provided", () => {
-    const testPack = createPack({
+  it("should not include context when none provided", () => {
+    const testContext = createContext({
+      name: "test",
+      schema: z.object({ counter: z.number() }),
+      initialState: { counter: 100 },
+    });
+    const testPack = createPack(testContext, {
       name: "testPack",
       description: "Test pack",
-      validator: z.object({ counter: z.number() }),
-      initialState: { counter: 100 },
     });
 
     const node = createNode<TodoState>({
@@ -185,8 +193,8 @@ describe("createDryClientInstance", () => {
 
     // Pack metadata should still be on node
     expect(dryInstance.node.packs).toHaveLength(1);
-    // But packStates should be undefined since none were provided
-    expect(dryInstance.packStates).toBeUndefined();
+    // But context should be undefined since none was provided
+    expect(dryInstance.context).toBeUndefined();
   });
 });
 
@@ -266,11 +274,14 @@ describe("hydrateClientInstance", () => {
   });
 
   it("should hydrate packs on node with callable command functions", () => {
-    const testPack = createPack({
+    const testContext = createContext({
+      name: "test",
+      schema: z.object({ counter: z.number() }),
+      initialState: { counter: 0 },
+    });
+    const testPack = createPack(testContext, {
       name: "testPack",
       description: "Test pack with commands",
-      validator: z.object({ counter: z.number() }),
-      initialState: { counter: 0 },
       commands: {
         incrementCounter: {
           name: "incrementCounter",
@@ -294,7 +305,7 @@ describe("hydrateClientInstance", () => {
       node,
       { todos: [] },
       undefined,
-      { testPack: { counter: 42 } },
+      { test: { counter: 42 } },
     );
 
     const dryInstance = createDryClientInstance(instance);
@@ -306,7 +317,8 @@ describe("hydrateClientInstance", () => {
 
     const pack = clientInstance.node.packs![0]!;
     expect(pack.name).toBe("testPack");
-    expect(pack.validator).toBeDefined();
+    expect(pack.contextName).toBe("test");
+    expect(pack.contextSchema).toBeDefined();
 
     // Pack command should be callable
     expect(typeof pack.commands.incrementCounter).toBe("function");
@@ -315,9 +327,9 @@ describe("hydrateClientInstance", () => {
     expect(command.name).toBe("incrementCounter");
     expect(command.input).toEqual({ amount: 5 });
 
-    // Pack state should be on instance.packStates
-    expect(clientInstance.packStates).toBeDefined();
-    expect(clientInstance.packStates!.testPack).toEqual({ counter: 42 });
+    // Pack context state should be on instance.context
+    expect(clientInstance.context).toBeDefined();
+    expect(clientInstance.context!.test).toEqual({ counter: 42 });
   });
 });
 

@@ -59,10 +59,8 @@ function getCommandsFromInstance(instance: DisplayInstance | undefined): {
     inputSchema: cmd.inputSchema as CommandSchema,
   }));
 
-  // Get pack commands from root instance packs (that's where full pack data is stored)
   const packCommands: SerializedCommandInfo[] = [];
-  const rootPacks = instance.packs || [];
-  for (const pack of rootPacks) {
+  for (const pack of active.packs || []) {
     for (const cmd of Object.values(pack.commands)) {
       packCommands.push({
         name: cmd.name,

@@ -27,6 +27,8 @@ export interface SerialNode<S = unknown> {
   tools?: Record<string, Ref>;
   /** Commands as refs only - resolved from charter at deserialization */
   commands?: Record<string, Ref>;
+  /** Packs as refs or inline serial packs */
+  packs?: Array<Ref | SerialPack>;
   /** Optional initial state for this node */
   initialState?: S;
   /** Executor configuration for this node */
@@ -45,6 +47,17 @@ export interface SerialTransition {
 }
 
 /**
+ * Serializable context definition.
+ * Used for inline context definitions inside inline packs.
+ */
+export interface SerialContext {
+  name: string;
+  schema: JSONSchema;
+  /** Optional initial state */
+  initialState?: unknown;
+}
+
+/**
  * Serializable pack definition.
  * Used for inline pack definitions when a pack has been edited.
  * Tools/commands are stored as refs and resolved from charter at deserialization.
@@ -52,9 +65,9 @@ export interface SerialTransition {
 export interface SerialPack {
   name: string;
   description: string;
+  context: Ref | SerialContext;
   /** Static instructions string (dynamic functions are resolved at serialization time) */
   instructions?: string;
-  validator: JSONSchema;
   /** Tools as refs - resolved from charter at deserialization */
   tools?: Record<string, Ref>;
   /** Commands as refs - resolved from charter at deserialization */
@@ -109,7 +122,7 @@ export function isSerialPack(value: unknown): value is SerialPack {
     value !== null &&
     "name" in value &&
     "description" in value &&
-    "validator" in value &&
+    "context" in value &&
     !("ref" in value) // Distinguish from Ref
   );
 }

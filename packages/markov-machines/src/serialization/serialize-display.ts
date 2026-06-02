@@ -7,6 +7,7 @@ import type {
   DisplayPack,
 } from "../types/display";
 import { toSafeJsonSchema } from "../helpers/json-schema";
+import { resolvePackContext } from "../runtime/context-resolver";
 
 /**
  * Custom serialization for display purposes.
@@ -123,20 +124,22 @@ export function serializeNodeForDisplay(node: Instance["node"], charter?: Charte
 }
 
 export function serializePackForDisplay(
+  charter: Charter,
   pack: {
     name: string;
     description: string;
     instructions?: string | ((state: unknown) => string);
-    validator: { _def?: unknown };
+    context: unknown;
     commands?: Record<string, { name: string; description: string; inputSchema: { _def?: unknown } }>;
   },
   state: unknown,
 ): DisplayPack {
-  let validator: Record<string, unknown> = {};
+  const context = resolvePackContext(charter, pack as any);
+  let schema: Record<string, unknown> = {};
   try {
-    validator = toSafeJsonSchema(pack.validator as any);
+    schema = toSafeJsonSchema(context.schema as any);
   } catch {
-    validator = { error: "Could not serialize validator" };
+    schema = { error: "Could not serialize schema" };
   }
 
   const commands = serializeCommandsForDisplay(pack.commands as any);
@@ -160,10 +163,11 @@ export function serializePackForDisplay(
   return {
     name: pack.name,
     description: pack.description,
+    contextName: context.name,
     ...(instructions !== undefined ? { instructions } : {}),
     ...(instructionsDynamic ? { instructionsDynamic } : {}),
     state,
-    validator,
+    schema,
     commands,
   };
 }
@@ -179,16 +183,15 @@ export function serializeInstanceForDisplay(
     children = instance.children.map((c) => serializeInstanceForDisplay(c, charter));
   }
 
-  // Build packs array with full info including current state
-  // Use instance.packs (deserialized with correct instructions) or fall back to node.packs
+  // Build packs array with full info including current context state
   let packs: DisplayPack[] | undefined;
-  const instancePacks = instance.packs ?? instance.node.packs ?? [];
-  const packStates = instance.packStates ?? {};
-  // Only serialize full packs at root instance (where packStates is stored)
-  if (instancePacks.length > 0 && instance.packStates) {
+  const instancePacks = instance.node.packs ?? [];
+  const contextStates = instance.context ?? {};
+  if (instancePacks.length > 0) {
     packs = instancePacks.map((pack) => {
-      const state = packStates[pack.name] ?? pack.initialState ?? {};
-      return serializePackForDisplay(pack as any, state);
+      const context = resolvePackContext(charter!, pack);
+      const state = contextStates[context.name] ?? context.initialState ?? {};
+      return serializePackForDisplay(charter!, pack as any, state);
     });
   }
 
@@ -198,7 +201,7 @@ export function serializeInstanceForDisplay(
     state: instance.state,
     ...(children ? { children } : {}),
     ...(packs ? { packs } : {}),
-    ...(instance.packStates ? { packStates: instance.packStates } : {}),
+    ...(instance.context ? { context: instance.context } : {}),
     ...(instance.suspended
       ? {
           suspended: {

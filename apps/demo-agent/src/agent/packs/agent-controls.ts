@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { commandResult, createPack } from "markov-machines";
+import { commandResult, createContext, createPack, type PackCommandContext, type PackToolContext } from "markov-machines";
 
 export const agentControlsStateValidator = z.object({
   voiceEnabled: z.boolean().default(false),
@@ -9,10 +9,15 @@ export const agentControlsStateValidator = z.object({
 
 export type AgentControlsState = z.infer<typeof agentControlsStateValidator>;
 
-export const agentControlsPack = createPack({
+export const agentControlsContext = createContext({
+  name: "agentControls",
+  schema: agentControlsStateValidator,
+  initialState: { voiceEnabled: false, cameraEnabled: false, enableStreaming: false },
+});
+
+export const agentControlsPack = createPack(agentControlsContext, {
   name: "agentControls",
   description: "Agent controls: voice, camera, streaming preferences",
-  validator: agentControlsStateValidator,
   instructions: (state: AgentControlsState) => {
     const parsed = agentControlsStateValidator.safeParse(state ?? {});
     const safeState: AgentControlsState = parsed.success
@@ -48,7 +53,7 @@ export const agentControlsPack = createPack({
       name: "setVoiceEnabled",
       description: "Enable or disable voice mode",
       inputSchema: z.object({ enabled: z.boolean() }),
-      execute: (input, ctx) => {
+      execute: (input: { enabled: boolean }, ctx: PackToolContext<AgentControlsState>) => {
         ctx.updateState({ voiceEnabled: input.enabled });
         return `voiceEnabled set to ${input.enabled}`;
       },
@@ -57,7 +62,7 @@ export const agentControlsPack = createPack({
       name: "setCameraEnabled",
       description: "Enable or disable camera mode",
       inputSchema: z.object({ enabled: z.boolean() }),
-      execute: (input, ctx) => {
+      execute: (input: { enabled: boolean }, ctx: PackToolContext<AgentControlsState>) => {
         ctx.updateState({ cameraEnabled: input.enabled });
         return `cameraEnabled set to ${input.enabled}`;
       },
@@ -66,7 +71,7 @@ export const agentControlsPack = createPack({
       name: "setStreamingEnabled",
       description: "Enable or disable streaming mode",
       inputSchema: z.object({ enabled: z.boolean() }),
-      execute: (input, ctx) => {
+      execute: (input: { enabled: boolean }, ctx: PackToolContext<AgentControlsState>) => {
         ctx.updateState({ enableStreaming: input.enabled });
         return `enableStreaming set to ${input.enabled}`;
       },
@@ -77,7 +82,7 @@ export const agentControlsPack = createPack({
       name: "setVoiceEnabled",
       description: "Enable or disable voice mode",
       inputSchema: z.object({ enabled: z.boolean() }),
-      execute: (input, ctx) => {
+      execute: (input: { enabled: boolean }, ctx: PackCommandContext<AgentControlsState>) => {
         ctx.updateState({ voiceEnabled: input.enabled });
         return commandResult({ ...ctx.state, voiceEnabled: input.enabled });
       },
@@ -86,7 +91,7 @@ export const agentControlsPack = createPack({
       name: "setCameraEnabled",
       description: "Enable or disable camera mode",
       inputSchema: z.object({ enabled: z.boolean() }),
-      execute: (input, ctx) => {
+      execute: (input: { enabled: boolean }, ctx: PackCommandContext<AgentControlsState>) => {
         ctx.updateState({ cameraEnabled: input.enabled });
         return commandResult({ ...ctx.state, cameraEnabled: input.enabled });
       },
@@ -95,11 +100,10 @@ export const agentControlsPack = createPack({
       name: "setStreamingEnabled",
       description: "Enable or disable streaming mode",
       inputSchema: z.object({ enabled: z.boolean() }),
-      execute: (input, ctx) => {
+      execute: (input: { enabled: boolean }, ctx: PackCommandContext<AgentControlsState>) => {
         ctx.updateState({ enableStreaming: input.enabled });
         return commandResult({ ...ctx.state, enableStreaming: input.enabled });
       },
     },
   },
-  initialState: { voiceEnabled: false, cameraEnabled: false, enableStreaming: false },
 });

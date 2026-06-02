@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createCharter } from "../core/charter";
 import { createNode } from "../core/node";
 import { createPack } from "../core/pack";
+import { createContext } from "../core/context";
 import { createInstance } from "../types/instance";
 import { runToolPipeline } from "../runtime/tool-pipeline";
 import { isInstanceMessage, type MachineMessage } from "../types/messages";
@@ -83,7 +84,7 @@ describe("tool pipeline patch emission", () => {
       charter,
       instance,
       ancestors: [],
-      packStates: {},
+      context: {},
       enqueue: (messages) => emitted.push(...messages),
     }, [{ id: "tool-1", name: "increment", input: {} }]);
 
@@ -98,17 +99,20 @@ describe("tool pipeline patch emission", () => {
     expect(stateMessage.items.patch).toEqual({ count: 1 });
   });
 
-  it("emits partial pack-state patch from pack tools", async () => {
-    const settingsPack = createPack({
+  it("emits partial context patch from pack tools", async () => {
+    const settingsContext = createContext({
       name: "settings",
-      description: "Settings",
-      validator: createSchema((input) => {
+      schema: createSchema((input) => {
         const obj = parseObject(input);
         if (typeof obj.voiceEnabled !== "boolean") throw new Error("voiceEnabled must be boolean");
         if (typeof obj.cameraEnabled !== "boolean") throw new Error("cameraEnabled must be boolean");
         return { voiceEnabled: obj.voiceEnabled, cameraEnabled: obj.cameraEnabled };
       }),
       initialState: { voiceEnabled: false, cameraEnabled: true },
+    });
+    const settingsPack = createPack(settingsContext, {
+      name: "settings",
+      description: "Settings",
       tools: {
         setVoiceEnabled: {
           name: "setVoiceEnabled",
@@ -141,6 +145,7 @@ describe("tool pipeline patch emission", () => {
       executor: createMockExecutor(),
       nodes: { node },
       packs: [settingsPack],
+      contexts: [settingsContext],
     });
 
     const instance = createInstance(node, {}, undefined, {
@@ -152,18 +157,18 @@ describe("tool pipeline patch emission", () => {
       charter,
       instance,
       ancestors: [],
-      packStates: { settings: { voiceEnabled: false, cameraEnabled: true } },
+      context: { settings: { voiceEnabled: false, cameraEnabled: true } },
       enqueue: (messages) => emitted.push(...messages),
     }, [{ id: "tool-2", name: "setVoiceEnabled", input: { enabled: true } }]);
 
-    const packStateMessage = emitted.find((msg) => {
+    const contextMessage = emitted.find((msg) => {
       if (!isInstanceMessage(msg)) return false;
-      return msg.items.kind === "packState" && msg.items.packName === "settings";
+      return msg.items.kind === "context" && msg.items.contextName === "settings";
     });
-    expect(packStateMessage).toBeDefined();
-    if (!packStateMessage || !isInstanceMessage(packStateMessage) || packStateMessage.items.kind !== "packState") {
-      throw new Error("Expected packState instance message");
+    expect(contextMessage).toBeDefined();
+    if (!contextMessage || !isInstanceMessage(contextMessage) || contextMessage.items.kind !== "context") {
+      throw new Error("Expected context instance message");
     }
-    expect(packStateMessage.items.patch).toEqual({ voiceEnabled: true });
+    expect(contextMessage.items.patch).toEqual({ voiceEnabled: true });
   });
 });

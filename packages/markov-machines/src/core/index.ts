@@ -1,5 +1,6 @@
 export { createCharter } from "./charter";
 export { createNode, createWorkerNode } from "./node";
+export { createContext } from "./context";
 export { createMachine } from "./machine";
 export { createTransition } from "./transition";
 export type { TransitionConfig } from "./transition";

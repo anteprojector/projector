@@ -1,14 +1,14 @@
 import type { MachineStep } from "../executor/types";
-import type { InstanceMessage, PackStateUpdatePayload, StateUpdatePayload } from "./messages";
+import type { ContextUpdatePayload, InstanceMessage, StateUpdatePayload } from "./messages";
 
 /**
  * Scope identity for externalized state handlers.
  */
 export type ExternalScope =
   | {
-      kind: "pack";
+      kind: "context";
       id: string;
-      packName: string;
+      contextName: string;
       rootInstanceId: string;
     }
   | {
@@ -31,7 +31,7 @@ export interface ExternalStateMutationEvent<S = unknown, AppMessage = unknown> {
   /** Partial patch requested by the runtime */
   patch: Record<string, unknown>;
   /** Original instance message payload */
-  payload: StateUpdatePayload | PackStateUpdatePayload;
+  payload: StateUpdatePayload | ContextUpdatePayload;
   /** Full instance message */
   message: InstanceMessage<AppMessage>;
   /** Step number where this mutation was observed */
@@ -54,7 +54,7 @@ export interface ExternalSetStateOptions {
 
 /**
  * Context passed to externalized state handlers.
- * Works identically for pack and node scopes.
+ * Works identically for context and node scopes.
  */
 export interface ExternalStateHandlerContext<S = unknown, AppMessage = unknown> {
   scope: ExternalScope;
@@ -103,4 +103,3 @@ export interface ExternalizeRuntime<AppMessage = unknown> {
   ) => void;
   dispose: () => void;
 }
-

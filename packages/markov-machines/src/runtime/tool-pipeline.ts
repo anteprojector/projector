@@ -27,8 +27,8 @@ export interface ToolPipelineContext<AppMessage = unknown> {
   instance: Instance;
   /** Parent instances for ref resolution (from root to parent) */
   ancestors: Instance[];
-  /** Current pack states (from root instance) */
-  packStates: Record<string, unknown>;
+  /** Current context state (from root instance) */
+  context: Record<string, unknown>;
   /** Conversation history (for getInstanceMessages in tools) */
   history?: MachineMessage<AppMessage>[];
   /**
@@ -112,14 +112,12 @@ async function runToolPipelineInner<AppMessage = unknown>(
 
   let currentState = instance.state;
   let currentNode: Node<any, unknown> = instance.node;
-  let packStates = { ...ctx.packStates };
-
   // Process tool calls
   const toolCallCtx: ToolCallContext = {
     charter,
     instance,
     ancestors,
-    packStates,
+    context: ctx.context,
     currentState,
     currentNode,
     history,
@@ -141,19 +139,18 @@ async function runToolPipelineInner<AppMessage = unknown>(
     currentState = toolResult.currentState;
   }
 
-  // Emit pack state updates
-  for (const [packName, packState] of Object.entries(toolResult.packStates)) {
-    if (packState !== ctx.packStates[packName]) {
-      const packStatePatch =
-        toolResult.packStatePatches[packName] ??
-        (packState as Record<string, unknown>);
+  // Emit context updates
+  for (const [contextName, contextState] of Object.entries(toolResult.context)) {
+    if (contextState !== ctx.context[contextName]) {
+      const contextPatch =
+        toolResult.contextPatches[contextName] ??
+        (contextState as Record<string, unknown>);
       enqueue([instanceMessage<AppMessage>(
-        { kind: "packState", packName, patch: packStatePatch },
+        { kind: "context", contextName, patch: contextPatch },
         source,
       )]);
     }
   }
-  packStates = toolResult.packStates;
 
   // Enqueue tool results (role: user)
   if (toolResult.toolResults.length > 0) {

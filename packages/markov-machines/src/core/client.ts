@@ -14,6 +14,7 @@ import type {
 import type { Command, AnyCommandDefinition } from "../types/commands";
 import type { JSONSchema } from "../types/refs";
 import type { Pack } from "../types/pack";
+import { isRef } from "../types/refs";
 import { ZOD_JSON_SCHEMA_TARGET_DRAFT_2020_12 } from "../helpers/json-schema";
 
 /**
@@ -60,13 +61,15 @@ export function createDryClientNode<N extends Node<any, any>>(
 
 /**
  * Create a DryClientPack from a Pack.
- * State is stored separately in instance.packStates.
+ * State is stored separately in instance.context.
  */
 export function createDryClientPack(pack: Pack): DryClientPack {
-  // Convert validator to JSON Schema
-  const validator = z.toJSONSchema(pack.validator, {
-    target: ZOD_JSON_SCHEMA_TARGET_DRAFT_2020_12,
-  }) as JSONSchema;
+  const contextName = isRef(pack.context) ? pack.context.ref : pack.context.name;
+  const contextSchema = isRef(pack.context)
+    ? {}
+    : z.toJSONSchema(pack.context.schema, {
+        target: ZOD_JSON_SCHEMA_TARGET_DRAFT_2020_12,
+      }) as JSONSchema;
 
   // Extract command metadata from pack commands
   const commands: Record<string, CommandMeta> = {};
@@ -84,14 +87,15 @@ export function createDryClientPack(pack: Pack): DryClientPack {
   return {
     name: pack.name,
     description: pack.description,
-    validator,
+    contextName,
+    contextSchema,
     commands,
   };
 }
 
 /**
  * Create a DryClientInstance from a full Instance.
- * Extracts id, state, packStates, and converts node to DryClientNode (which includes pack definitions).
+ * Extracts id, state, context, and converts node to DryClientNode (which includes pack definitions).
  */
 export function createDryClientInstance<N extends Node<any, any>>(
   instance: Instance<N>,
@@ -99,7 +103,7 @@ export function createDryClientInstance<N extends Node<any, any>>(
   return {
     id: instance.id,
     state: instance.state as NodeState<N>,
-    ...(instance.packStates ? { packStates: instance.packStates } : {}),
+    ...(instance.context ? { context: instance.context } : {}),
     node: createDryClientNode(instance.node),
   };
 }
@@ -152,7 +156,8 @@ export function hydrateClientPack(dry: DryClientPack): ClientPack {
   return {
     name: dry.name,
     description: dry.description,
-    validator: dry.validator,
+    contextName: dry.contextName,
+    contextSchema: dry.contextSchema,
     commands,
   };
 }
@@ -167,7 +172,7 @@ export function hydrateClientInstance<N extends Node<any, any>>(
   return {
     id: dry.id,
     state: dry.state,
-    ...(dry.packStates ? { packStates: dry.packStates } : {}),
+    ...(dry.context ? { context: dry.context } : {}),
     node: hydrateClientNode(dry.node),
   };
 }

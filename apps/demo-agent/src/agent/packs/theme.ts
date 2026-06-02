@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { commandResult, createPack } from "markov-machines";
+import { commandResult, createContext, createPack, type PackCommandContext, type PackToolContext } from "markov-machines";
 
 export const themeStateValidator = z.object({
   hue: z.number().min(0).max(360).default(120), // 120 = green (current default)
@@ -9,6 +9,11 @@ export const themeStateValidator = z.object({
 });
 
 export type ThemeState = z.infer<typeof themeStateValidator>;
+export const themeContext = createContext({
+  name: "theme",
+  schema: themeStateValidator,
+  initialState: { hue: 120, saturation: 100, animated: false, gradient: false },
+});
 
 // Named colors mapped to HSL hue values
 const namedColors: Record<string, { hue: number; saturation?: number }> = {
@@ -290,10 +295,9 @@ function parseColorInput(input: string): ParsedTheme {
   return { hue, saturation, animated: hasFlux, gradient: hasGradient };
 }
 
-export const themePack = createPack({
+export const themePack = createPack(themeContext, {
   name: "theme",
   description: "Visual theme control for the terminal interface",
-  validator: themeStateValidator,
   tools: {
     setTheme: {
       name: "setTheme",
@@ -306,7 +310,7 @@ export const themePack = createPack({
             "Color specification with optional modifiers. Named: red, orange, coral, gold, lime, green, emerald, teal, cyan, blue, indigo, purple, violet, magenta, pink, etc. Formats: '#ff00ff', 'rgb(255,0,128)', 'hsl(180,100,50)', or hue number. Modifiers: 'flux', 'gradient'. Examples: 'teal', 'coral gradient', '#ff6b6b flux', 'indigo'"
           ),
       }),
-      execute: (input, ctx) => {
+      execute: (input: { color: string }, ctx: PackToolContext<ThemeState>) => {
         const { hue, saturation, animated, gradient } = parseColorInput(
           input.color
         );
@@ -330,7 +334,7 @@ export const themePack = createPack({
       name: "toggleThemeMode",
       description: "Cycle through theme modes: static → gradient → flux → static",
       inputSchema: z.object({}),
-      execute: (_input, ctx) => {
+      execute: (_input: {}, ctx: PackCommandContext<ThemeState>) => {
         const { animated, gradient } = ctx.state;
 
         if (!animated && !gradient) {
@@ -349,5 +353,4 @@ export const themePack = createPack({
       },
     },
   },
-  initialState: { hue: 120, saturation: 100, animated: false, gradient: false },
 });

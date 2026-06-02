@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createCharter } from "../core/charter";
 import { createNode } from "../core/node";
 import { createPack } from "../core/pack";
+import { createContext } from "../core/context";
 import { createInstance } from "../types/instance";
 import { createMachine } from "../core/machine";
 import { runCommand } from "../core/commands";
@@ -49,16 +50,19 @@ function createMockExecutor(): Executor {
 
 describe("pack command patch emission", () => {
   it("emits one merged partial patch for multiple updateState calls", async () => {
-    const settingsPack = createPack({
+    const settingsContext = createContext({
       name: "settings",
-      description: "Settings pack",
-      validator: createSchema((input) => {
+      schema: createSchema((input) => {
         const obj = parseObject(input);
         if (typeof obj.voiceEnabled !== "boolean") throw new Error("voiceEnabled must be boolean");
         if (typeof obj.cameraEnabled !== "boolean") throw new Error("cameraEnabled must be boolean");
         return { voiceEnabled: obj.voiceEnabled, cameraEnabled: obj.cameraEnabled };
       }),
       initialState: { voiceEnabled: false, cameraEnabled: true },
+    });
+    const settingsPack = createPack(settingsContext, {
+      name: "settings",
+      description: "Settings pack",
       commands: {
         updateSettings: {
           name: "updateSettings",
@@ -84,6 +88,7 @@ describe("pack command patch emission", () => {
       executor: createMockExecutor(),
       nodes: { node },
       packs: [settingsPack],
+      contexts: [settingsContext],
     });
 
     const machine = createMachine(charter, {
@@ -95,16 +100,16 @@ describe("pack command patch emission", () => {
     const { result } = await runCommand(machine, "updateSettings", {});
     expect(result.success).toBe(true);
 
-    const packStateMessages = machine.queue.filter((msg) => {
+    const contextMessages = machine.queue.filter((msg) => {
       if (!isInstanceMessage(msg)) return false;
-      return msg.items.kind === "packState" && msg.items.packName === "settings";
+      return msg.items.kind === "context" && msg.items.contextName === "settings";
     });
-    expect(packStateMessages).toHaveLength(1);
-    const packStateMessage = packStateMessages[0]!;
-    if (!isInstanceMessage(packStateMessage) || packStateMessage.items.kind !== "packState") {
-      throw new Error("Expected packState instance message");
+    expect(contextMessages).toHaveLength(1);
+    const contextMessage = contextMessages[0]!;
+    if (!isInstanceMessage(contextMessage) || contextMessage.items.kind !== "context") {
+      throw new Error("Expected context instance message");
     }
-    expect(packStateMessage.items.patch).toEqual({
+    expect(contextMessage.items.patch).toEqual({
       voiceEnabled: true,
       cameraEnabled: false,
     });

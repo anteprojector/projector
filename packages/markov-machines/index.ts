@@ -3,6 +3,7 @@ export { z } from 'zod'
 
 // Core functions
 export { createCharter } from "./src/core/charter";
+export { createContext } from "./src/core/context";
 export { createNode, createWorkerNode } from "./src/core/node";
 export { createMachine } from "./src/core/machine";
 export { createTransition } from "./src/core/transition";
@@ -64,6 +65,10 @@ export type {
   // Charter
   Charter,
   CharterConfig,
+  // Context
+  Context,
+  ContextConfig,
+  ContextRef,
   // Node
   Node,
   NodeConfig,
@@ -86,6 +91,8 @@ export type {
   Ref,
   SerialNode,
   SerialTransition,
+  SerialContext,
+  SerialPack,
   JSONSchema,
   // Transitions
   Transition,
@@ -130,7 +137,7 @@ export type {
   // Instance payloads
   InstancePayload,
   StateUpdatePayload,
-  PackStateUpdatePayload,
+  ContextUpdatePayload,
   TransitionPayload,
   SpawnPayload,
   CedePayload,
@@ -141,6 +148,10 @@ export type {
   PackToolDefinition,
   PackToolContext,
   AnyPackToolDefinition,
+  PackCommandContext,
+  PackCommandDefinition,
+  PackCommandResult,
+  AnyPackCommandDefinition,
   // Commands
   CommandContext,
   CommandDefinition,
@@ -190,6 +201,7 @@ export type {
 // Type guards and helpers
 export {
   isRef,
+  isContext,
   isSerialNode,
   isSerialTransition,
   isNode,

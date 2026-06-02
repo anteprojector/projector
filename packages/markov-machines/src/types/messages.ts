@@ -89,11 +89,11 @@ export interface StateUpdatePayload {
 }
 
 /**
- * Pack state update payload - shallow merges patch into pack state.
+ * Context update payload - shallow merges patch into root context state.
  */
-export interface PackStateUpdatePayload {
-  kind: "packState";
-  packName: string;
+export interface ContextUpdatePayload {
+  kind: "context";
+  contextName: string;
   patch: Record<string, unknown>;
 }
 
@@ -142,7 +142,7 @@ export interface SuspendPayload {
  */
 export type InstancePayload<M = unknown> =
   | StateUpdatePayload
-  | PackStateUpdatePayload
+  | ContextUpdatePayload
   | TransitionPayload
   | SpawnPayload
   | CedePayload<M>

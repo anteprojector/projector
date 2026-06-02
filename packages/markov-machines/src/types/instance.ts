@@ -1,6 +1,5 @@
 import { v4 as uuid } from "uuid";
 import type { Node } from "./node";
-import type { Pack } from "./pack";
 import type { SuspendResult } from "./transitions";
 
 /**
@@ -38,10 +37,8 @@ export interface Instance<N extends Node<any, any> = Node<any, any>> {
   state: NodeState<N>;
   /** Optional child instances - always an array when present */
   children?: Instance[];
-  /** Pack states (only on root instance, shared across all nodes) */
-  packStates?: Record<string, unknown>;
-  /** Deserialized packs with their actual instructions (may differ from charter packs if edited) */
-  packs?: Pack[];
+  /** Root-hoisted shared context state (only on root instance) */
+  context?: Record<string, unknown>;
   /** Suspension info - if present, instance is suspended */
   suspended?: SuspendInfo;
 }
@@ -54,7 +51,7 @@ export function createInstance<N extends Node<any, any>>(
   node: N,
   state: NodeState<N>,
   children?: Instance | Instance[],
-  packStates?: Record<string, unknown>,
+  context?: Record<string, unknown>,
 ): Instance<N> {
   // Normalize children to array
   let normalizedChildren: Instance[] | undefined;
@@ -67,7 +64,7 @@ export function createInstance<N extends Node<any, any>>(
     node,
     state,
     children: normalizedChildren,
-    packStates,
+    context,
   };
 }
 

@@ -3,6 +3,7 @@ import type { Node } from "../types/node";
 import type { Pack } from "../types/pack";
 import type { Transition } from "../types/transitions";
 import type { Charter } from "../types/charter";
+import { resolvePackContext } from "./context-resolver";
 
 export interface SystemPromptOptions {
   currentStep?: number;
@@ -13,26 +14,22 @@ export interface SystemPromptOptions {
  * Build the complete system prompt for a node execution.
  * If the charter has a custom buildSystemPrompt function, it will be used.
  * Otherwise, the default system prompt builder is used.
- *
- * @param packs - Optional deserialized packs with their actual instructions.
- *                If not provided, falls back to node.packs.
  */
 export function buildSystemPrompt<S>(
   charter: Charter<any>,
   node: Node<any, S>,
   state: S,
   ancestors: Instance[],
-  packStates: Record<string, unknown>,
+  context: Record<string, unknown>,
   options?: SystemPromptOptions,
-  packs?: Pack[],
 ): string {
   // Use custom builder if provided by charter
   if (charter.buildSystemPrompt) {
-    return charter.buildSystemPrompt(charter, node, state, ancestors, packStates, options)
+    return charter.buildSystemPrompt(charter, node, state, ancestors, context, options)
   }
 
   // Fall back to default system prompt builder
-  let prompt = buildDefaultSystemPrompt(node, state, ancestors, packStates, options, packs);
+  let prompt = buildDefaultSystemPrompt(charter, node, state, ancestors, context, options);
 
   // Prepend charter instructions if present
   if (charter.instructions) {
@@ -45,19 +42,16 @@ export function buildSystemPrompt<S>(
 /**
  * Default system prompt builder.
  * Includes node instructions, current state, available transitions,
- * ancestor context, pack states, and step warnings.
+ * ancestor context, pack context, and step warnings.
  * For worker nodes, pack context is omitted.
- *
- * @param packs - Optional deserialized packs with their actual instructions.
- *                If not provided, falls back to node.packs.
  */
 export function buildDefaultSystemPrompt<S>(
+  charter: Charter<any>,
   node: Node<any, S>,
   state: S,
   ancestors: Instance[],
-  packStates: Record<string, unknown>,
+  context: Record<string, unknown>,
   options?: SystemPromptOptions,
-  packs?: Pack[],
 ): string {
   let prompt = `${node.instructions}
 
@@ -73,9 +67,8 @@ ${buildTransitionsSection(node.transitions)}`;
   // Add active packs section (only for non-worker nodes)
   // Worker nodes don't have packs and shouldn't see pack context
   if (!node.worker) {
-    // Use provided packs (deserialized with correct instructions) or fall back to node.packs
-    const activePacks = packs ?? node.packs ?? [];
-    const packsSection = buildPacksSection(activePacks, packStates);
+    const activePacks = node.packs ?? [];
+    const packsSection = buildPacksSection(charter, activePacks, context);
     if (packsSection) {
       prompt += `\n\n${packsSection}`;
     }
@@ -141,13 +134,15 @@ ${sections.join("\n\n")}`;
  * Takes packs directly (may be deserialized with custom instructions).
  */
 export function buildPacksSection(
+  charter: Charter<any>,
   packs: Pack[],
-  packStates: Record<string, unknown>,
+  contextStates: Record<string, unknown>,
 ): string {
   if (packs.length === 0) return "";
 
   const sections = packs.map((pack) => {
-    const state = packStates[pack.name] ?? pack.initialState ?? {};
+    const context = resolvePackContext(charter, pack);
+    const state = contextStates[context.name] ?? context.initialState ?? {};
     const instructions =
       typeof pack.instructions === "function"
         ? pack.instructions(state as any)

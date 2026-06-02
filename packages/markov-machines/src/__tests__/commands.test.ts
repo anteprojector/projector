@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createCharter } from "../core/charter";
 import { createNode } from "../core/node";
 import { createPack } from "../core/pack";
+import { createContext } from "../core/context";
 import { createInstance } from "../types/instance";
 import { createMachine } from "../core/machine";
 import { getAvailableCommands, runCommand } from "../core/commands";
@@ -322,14 +323,17 @@ describe("runCommand", () => {
     expect(result.error).toBe("Something went wrong!");
   });
 
-  it("should validate pack command updates against the pack validator", async () => {
-    const settingsPack = createPack({
+  it("should validate pack command updates against the context schema", async () => {
+    const settingsContext = createContext({
       name: "settings",
-      description: "Settings pack",
-      validator: z.object({
+      schema: z.object({
         voiceEnabled: z.boolean(),
       }),
       initialState: { voiceEnabled: false },
+    });
+    const settingsPack = createPack(settingsContext, {
+      name: "settings",
+      description: "Settings pack",
       commands: {
         setInvalid: {
           name: "setInvalid",
@@ -355,6 +359,7 @@ describe("runCommand", () => {
       executor: createMockExecutor(),
       nodes: { node },
       packs: [settingsPack],
+      contexts: [settingsContext],
     });
 
     const machine = createMachine(charter, {
@@ -365,24 +370,27 @@ describe("runCommand", () => {
 
     const { result } = await runCommand(machine, "setInvalid", {});
     expect(result.success).toBe(false);
-    expect(result.error).toContain("Pack state update validation failed");
+    expect(result.error).toContain("Context state update validation failed");
 
-    const packStateMessages = machine.queue.filter((msg) => {
+    const contextMessages = machine.queue.filter((msg) => {
       if (!isInstanceMessage(msg)) return false;
-      return msg.items.kind === "packState" && msg.items.packName === "settings";
+      return msg.items.kind === "context" && msg.items.contextName === "settings";
     });
-    expect(packStateMessages).toHaveLength(0);
+    expect(contextMessages).toHaveLength(0);
   });
 
-  it("should enqueue accumulated partial pack-state patch for pack commands", async () => {
-    const settingsPack = createPack({
+  it("should enqueue accumulated partial context patch for pack commands", async () => {
+    const settingsContext = createContext({
       name: "settings",
-      description: "Settings pack",
-      validator: z.object({
+      schema: z.object({
         voiceEnabled: z.boolean(),
         cameraEnabled: z.boolean(),
       }),
       initialState: { voiceEnabled: false, cameraEnabled: false },
+    });
+    const settingsPack = createPack(settingsContext, {
+      name: "settings",
+      description: "Settings pack",
       commands: {
         setVoiceEnabled: {
           name: "setVoiceEnabled",
@@ -408,6 +416,7 @@ describe("runCommand", () => {
       executor: createMockExecutor(),
       nodes: { node },
       packs: [settingsPack],
+      contexts: [settingsContext],
     });
 
     const machine = createMachine(charter, {
@@ -419,28 +428,31 @@ describe("runCommand", () => {
     const { result } = await runCommand(machine, "setVoiceEnabled", { enabled: true });
     expect(result.success).toBe(true);
 
-    const packStateMessage = machine.queue.find((msg) => {
+    const contextMessage = machine.queue.find((msg) => {
       if (!isInstanceMessage(msg)) return false;
-      return msg.items.kind === "packState" && msg.items.packName === "settings";
+      return msg.items.kind === "context" && msg.items.contextName === "settings";
     });
-    expect(packStateMessage).toBeDefined();
-    if (!packStateMessage || !isInstanceMessage(packStateMessage) || packStateMessage.items.kind !== "packState") {
-      throw new Error("Expected packState instance message");
+    expect(contextMessage).toBeDefined();
+    if (!contextMessage || !isInstanceMessage(contextMessage) || contextMessage.items.kind !== "context") {
+      throw new Error("Expected context instance message");
     }
-    expect(packStateMessage.items.patch).toEqual({
+    expect(contextMessage.items.patch).toEqual({
       voiceEnabled: true,
     });
   });
 
   it("should merge multiple pack command updates into a single patch", async () => {
-    const settingsPack = createPack({
+    const settingsContext = createContext({
       name: "settings",
-      description: "Settings pack",
-      validator: z.object({
+      schema: z.object({
         voiceEnabled: z.boolean(),
         cameraEnabled: z.boolean(),
       }),
       initialState: { voiceEnabled: false, cameraEnabled: false },
+    });
+    const settingsPack = createPack(settingsContext, {
+      name: "settings",
+      description: "Settings pack",
       commands: {
         updateBoth: {
           name: "updateBoth",
@@ -467,6 +479,7 @@ describe("runCommand", () => {
       executor: createMockExecutor(),
       nodes: { node },
       packs: [settingsPack],
+      contexts: [settingsContext],
     });
 
     const machine = createMachine(charter, {
@@ -478,16 +491,16 @@ describe("runCommand", () => {
     const { result } = await runCommand(machine, "updateBoth", {});
     expect(result.success).toBe(true);
 
-    const packStateMessages = machine.queue.filter((msg) => {
+    const contextMessages = machine.queue.filter((msg) => {
       if (!isInstanceMessage(msg)) return false;
-      return msg.items.kind === "packState" && msg.items.packName === "settings";
+      return msg.items.kind === "context" && msg.items.contextName === "settings";
     });
-    expect(packStateMessages).toHaveLength(1);
-    const packStateMessage = packStateMessages[0]!;
-    if (!isInstanceMessage(packStateMessage) || packStateMessage.items.kind !== "packState") {
-      throw new Error("Expected packState instance message");
+    expect(contextMessages).toHaveLength(1);
+    const contextMessage = contextMessages[0]!;
+    if (!isInstanceMessage(contextMessage) || contextMessage.items.kind !== "context") {
+      throw new Error("Expected context instance message");
     }
-    expect(packStateMessage.items.patch).toEqual({
+    expect(contextMessage.items.patch).toEqual({
       voiceEnabled: true,
       cameraEnabled: false,
     });

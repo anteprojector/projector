@@ -19,9 +19,8 @@ function flattenInstances(instance: DisplayInstance): DisplayInstance[] {
   return result;
 }
 
-// Get packs from root instance (packs are stored at root level only)
 function getPacks(instance: DisplayInstance) {
-  return instance.packs || [];
+  return flattenInstances(instance).flatMap((inst) => inst.packs || []);
 }
 
 function getActiveInstance(instance: DisplayInstance): DisplayInstance {
@@ -48,7 +47,7 @@ export function StateTab({ instance }: StateTabProps) {
 
   const allInstances = flattenInstances(displayInstance);
   const activeInstance = getActiveInstance(displayInstance);
-  const packStates = displayInstance.packStates || {};
+  const rootContext = displayInstance.context || {};
   const packs = getPacks(displayInstance);
 
   return (
@@ -75,17 +74,17 @@ export function StateTab({ instance }: StateTabProps) {
         );
       })}
 
-      {/* Pack States */}
+      {/* Context */}
       {packs.map((pack) => {
         const isActive = activeInstance.node.packNames?.includes(pack.name) ?? false;
-        const packState = packStates[pack.name];
+        const contextState = rootContext[pack.contextName];
         return (
           <div key={pack.name}>
             <h3 className={`text-sm mb-2 ${isActive ? "text-terminal-green terminal-glow" : "text-terminal-green-dim"}`}>
-              {pack.name} pack state {isActive && "[active]"}
+              {pack.name} context {isActive && "[active]"}
             </h3>
             <div className={`p-3 rounded border ${isActive ? "border-terminal-green bg-terminal-bg-lighter" : "border-terminal-green-dimmer"}`}>
-              <JsonViewer data={packState} />
+              <JsonViewer data={contextState} />
             </div>
           </div>
         );

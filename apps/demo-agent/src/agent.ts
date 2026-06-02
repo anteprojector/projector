@@ -389,10 +389,10 @@ export default defineAgent({
       throw err;
     }
 
-    // Sync executor live mode from initial pack state
-    const initialControls = context.machine!.instance.packStates?.agentControls as AgentControlsState | undefined;
+    // Sync executor live mode from initial context
+    const initialControls = context.machine!.instance.context?.agentControls as AgentControlsState | undefined;
     liveKitExecutor.setLive(initialControls?.voiceEnabled ?? false);
-    console.log(`[DemoAgent] Executor set from pack state (isLive=${initialControls?.voiceEnabled ?? false})`);
+    console.log(`[DemoAgent] Executor set from context (isLive=${initialControls?.voiceEnabled ?? false})`);
 
     // Helper: attach event handlers to a voice session (used at startup and on reconnect)
     const attachVoiceSessionHandlers = (session: voice.AgentSession) => {
@@ -525,7 +525,7 @@ export default defineAgent({
         type === "response.output_text.delta" || type === "response.text.delta";
 
       // Check streaming preference on each event so mid-session toggles take effect.
-      const streamingControls = context.machine?.instance?.packStates?.agentControls as AgentControlsState | undefined;
+      const streamingControls = context.machine?.instance?.context?.agentControls as AgentControlsState | undefined;
       const isStreamingEnabled = streamingControls?.enableStreaming ?? false;
 
       if (isAudioTranscriptDelta || isTextDelta) {
@@ -739,8 +739,8 @@ export default defineAgent({
       voiceSession = newSession;
       attachRealtimeHandler();
 
-      // Sync live mode from current pack state
-      const controls = context.machine?.instance?.packStates?.agentControls as AgentControlsState | undefined;
+      // Sync live mode from current context
+      const controls = context.machine?.instance?.context?.agentControls as AgentControlsState | undefined;
       liveKitExecutor.setLive(controls?.voiceEnabled ?? false);
 
       console.log("[DemoAgent] Voice session restarted successfully");
@@ -975,7 +975,7 @@ export default defineAgent({
           });
         };
 
-        const agentControls = context.machine.instance.packStates?.agentControls as AgentControlsState | undefined;
+        const agentControls = context.machine.instance.context?.agentControls as AgentControlsState | undefined;
         const streamWhenAvailable = agentControls?.enableStreaming ?? true;
         for await (const step of runMachine(context.machine, { streamWhenAvailable, onMessageStream })) {
           stepNumber++;
@@ -1013,12 +1013,12 @@ export default defineAgent({
           allMessages.push(...step.history);
           lastStep = step;
 
-          // Sync live mode from pack state after each step
-          const stepControls = step.instance.packStates?.agentControls as AgentControlsState | undefined;
+          // Sync live mode from context after each step
+          const stepControls = step.instance.context?.agentControls as AgentControlsState | undefined;
           const stepVoiceEnabled = stepControls?.voiceEnabled ?? false;
           if (liveKitExecutor.isLive !== stepVoiceEnabled) {
             liveKitExecutor.setLive(stepVoiceEnabled);
-            console.log(`[DemoAgent] Synced live mode from pack state: ${stepVoiceEnabled}`);
+            console.log(`[DemoAgent] Synced live mode from context: ${stepVoiceEnabled}`);
           }
 
           // Sync LiveKit config after each step in case instance changed
@@ -1073,8 +1073,8 @@ export default defineAgent({
         room: ctx.room,
       });
 
-      // Sync live mode from new machine's pack state
-      const ttControls = newMachine.instance.packStates?.agentControls as AgentControlsState | undefined;
+      // Sync live mode from new machine's context
+      const ttControls = newMachine.instance.context?.agentControls as AgentControlsState | undefined;
       liveKitExecutor.setLive(ttControls?.voiceEnabled ?? false);
 
       console.log(`[DemoAgent] Time travel complete, starting new loop (generation ${newGeneration})`);

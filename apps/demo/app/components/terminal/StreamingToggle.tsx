@@ -23,15 +23,15 @@ export function StreamingToggle({ displayInstance, executeCommand }: StreamingTo
   const cmd = findCommand(displayInstance, setStreamingEnabled);
   if (!cmd) return null;
 
-  // Read current streaming state from root pack states
-  const packStates = displayInstance.packStates as Record<string, any> | undefined;
-  const agentControls = packStates?.agentControls;
+  // Read current streaming state from root context
+  const context = displayInstance.context as Record<string, any> | undefined;
+  const agentControls = context?.agentControls;
   const enabled = agentControls?.enableStreaming ?? true;
 
   const handleToggle = () => {
     const next = !enabled;
     executeCommand(cmd.name, { enabled: next }, {
-      packState: { agentControls: { enableStreaming: next } },
+      context: { agentControls: { enableStreaming: next } },
     });
   };
 

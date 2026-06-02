@@ -111,8 +111,6 @@ export async function executeCommand(
       const newInstance = createInstance(
         newNode,
         newState,
-        undefined,
-        instance.packStates,
       );
       return {
         result: { success: true },

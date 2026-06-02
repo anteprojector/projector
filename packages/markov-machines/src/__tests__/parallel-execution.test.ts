@@ -42,7 +42,6 @@ interface LegacyBehaviorResult {
   history?: MachineMessage<unknown>[];
   yieldReason?: YieldReason;
   cedeContent?: string | MachineMessage<unknown>[];
-  packStates?: Record<string, unknown>;
 }
 
 /**

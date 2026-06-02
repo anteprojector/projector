@@ -9,7 +9,6 @@ import {
   buildSystemPrompt,
   getInstancePath,
   serializeNodeForDisplay,
-  serializePackForDisplay,
 } from "markov-machines";
 import { isRef } from "markov-machines/client";
 import { createDemoCharter } from "../../../apps/demo-agent/src/agent/charter.js";
@@ -77,18 +76,12 @@ export const get = query({
       const path = getInstancePath(runtimeInstance);
       const ancestors = path.slice(0, -1);
       const activeInstance = path[path.length - 1];
-      const packStates = runtimeInstance.packStates ?? {};
-      // Use deserialized packs (with correct instructions) or fall back to node.packs
-      const packs = runtimeInstance.packs ?? activeInstance.node.packs;
-
       systemPrompt = buildSystemPrompt(
         charter,
         activeInstance.node,
         activeInstance.state,
         ancestors,
-        packStates,
-        undefined,  // options
-        packs,
+        runtimeInstance.context ?? {},
       );
     } catch {
       // Silently skip if deserialization fails
@@ -232,7 +225,10 @@ export const editCurrentInstance = mutation({
       pack: v.optional(v.object({
         name: v.string(),
         instructions: v.optional(v.string()),
-        state: v.optional(v.any()),
+      })),
+      context: v.optional(v.object({
+        name: v.string(),
+        state: v.any(),
       })),
     }),
   },
@@ -314,65 +310,68 @@ export const editCurrentInstance = mutation({
       return false;
     }
 
-    // Handle pack edits (always applied to root instance)
+    // Handle context edits (always applied to root instance)
+    if (patch.context) {
+      const { name, state } = patch.context;
+      modifiedInstance.context = {
+        ...(modifiedInstance.context ?? {}),
+        [name]: state,
+      };
+
+      if (modifiedDisplayInstance) {
+        modifiedDisplayInstance.context = {
+          ...(modifiedDisplayInstance.context ?? {}),
+          [name]: state,
+        };
+      }
+    }
+
+    // Handle pack instruction edits
     if (patch.pack) {
-      const { name, instructions, state } = patch.pack;
+      const { name, instructions } = patch.pack;
 
-      // Initialize packInstances if needed
-      if (!modifiedInstance.packInstances) {
-        modifiedInstance.packInstances = [];
-      }
-
-      // Find or create the pack instance entry
-      let packInstance = modifiedInstance.packInstances.find(
-        (pi: any) => (isRef(pi.pack) ? pi.pack.ref === name : pi.pack.name === name)
-      );
-
-      if (!packInstance) {
-        // Create new pack instance as Ref
-        packInstance = { state: state ?? {}, pack: { ref: name } };
-        modifiedInstance.packInstances.push(packInstance);
-      }
-
-      // Update state if provided
-      if (state !== undefined) {
-        packInstance.state = state;
-      }
-
-      // Update instructions if provided - convert Ref to inline SerialPack
       if (instructions !== undefined) {
-        if (isRef(packInstance.pack)) {
-          // Convert Ref to inline SerialPack
-          // Look up the charter pack to get description and other fields
-          const charterPack = charter.packs?.find((p: any) => p.name === name);
-          packInstance.pack = {
-            name,
-            description: charterPack?.description ?? "",
-            instructions,
-            validator: {}, // Will be filled by serialization at runtime
-          };
-        } else {
-          // Already inline - just update instructions
-          packInstance.pack.instructions = instructions;
+        function updatePacksInSerializedNode(inst: any) {
+          if (isRef(inst.node)) {
+            const runtimeNode = resolveNodeRef(charter, inst.node);
+            if (runtimeNode.packs?.some((pack: any) => pack.name === name)) {
+              inst.node = serializeNode(runtimeNode, charter, { noNodeRef: true });
+            }
+          }
+          if (!isRef(inst.node) && inst.node?.packs) {
+            for (let i = 0; i < inst.node.packs.length; i++) {
+              const pack = inst.node.packs[i];
+              const packName = isRef(pack) ? pack.ref : pack.name;
+              if (packName !== name) continue;
+              if (isRef(pack)) {
+                const charterPack = charter.packs?.find((p: any) => p.name === name);
+                if (charterPack) {
+                  inst.node.packs[i] = {
+                    name,
+                    description: charterPack.description ?? "",
+                    context: isRef(charterPack.context) ? charterPack.context : { ref: charterPack.context.name },
+                    instructions,
+                  };
+                }
+              } else {
+                pack.instructions = instructions;
+              }
+            }
+          }
+          for (const child of inst.children || []) {
+            updatePacksInSerializedNode(child);
+          }
         }
+        updatePacksInSerializedNode(modifiedInstance);
       }
 
       // Update display instance
       if (modifiedDisplayInstance) {
-        // Update packStates
-        if (!modifiedDisplayInstance.packStates) {
-          modifiedDisplayInstance.packStates = {};
-        }
-        if (state !== undefined) {
-          modifiedDisplayInstance.packStates[name] = state;
-        }
-
         // Update the packs array in display nodes
         function updatePacksInDisplay(inst: any) {
           if (inst.node?.packs) {
             for (const pack of inst.node.packs) {
               if (pack.name === name) {
-                if (state !== undefined) pack.state = state;
                 if (instructions !== undefined) {
                   pack.instructions = instructions;
                   pack.instructionsDynamic = false;
@@ -383,7 +382,6 @@ export const editCurrentInstance = mutation({
           if (inst.packs) {
             for (const pack of inst.packs) {
               if (pack.name === name) {
-                if (state !== undefined) pack.state = state;
                 if (instructions !== undefined) {
                   pack.instructions = instructions;
                   pack.instructionsDynamic = false;
@@ -484,30 +482,32 @@ export const restoreToCharter = mutation({
         updateDisplayNode(modifiedDisplayInstance);
       }
     } else {
-      // Restore pack to ref
-      const packInstances = modifiedInstance.packInstances || [];
-      const packInstance = packInstances.find(
-        (pi: any) => (isRef(pi.pack) ? pi.pack.ref === name : pi.pack.name === name)
-      );
-
-      if (packInstance) {
-        packInstance.pack = { ref: name };
+      function restoreSerializedPack(inst: any) {
+        if (!isRef(inst.node) && inst.node?.packs) {
+          inst.node.packs = inst.node.packs.map((pack: any) => {
+            const packName = isRef(pack) ? pack.ref : pack.name;
+            return packName === name ? { ref: name } : pack;
+          });
+        }
+        for (const child of inst.children || []) {
+          restoreSerializedPack(child);
+        }
       }
+      restoreSerializedPack(modifiedInstance);
 
-      // Update display instance - refresh pack display from charter defaults
       if (modifiedDisplayInstance) {
-        // Find charter pack and refresh display packs
-        const charterPack = charter.packs?.find((p: any) => p.name === name);
-        if (charterPack && modifiedDisplayInstance.packs) {
-          const packState = modifiedDisplayInstance.packStates?.[name] ?? charterPack.initialState ?? {};
-          const updatedDisplayPack = serializePackForDisplay(charterPack, packState);
-
-          // Update the pack in packs array
-          const packIndex = modifiedDisplayInstance.packs.findIndex((p: any) => p.name === name);
-          if (packIndex >= 0) {
-            modifiedDisplayInstance.packs[packIndex] = updatedDisplayPack;
+        function restoreDisplayPack(inst: any) {
+          for (const pack of inst.packs || []) {
+            if (pack.name === name) {
+              delete pack.instructions;
+              delete pack.instructionsDynamic;
+            }
+          }
+          for (const child of inst.children || []) {
+            restoreDisplayPack(child);
           }
         }
+        restoreDisplayPack(modifiedDisplayInstance);
       }
     }
 

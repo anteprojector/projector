@@ -8,7 +8,7 @@ import type {
   TransitionResult,
 } from "../types/transitions";
 import { transitionTo } from "../types/transitions";
-import type { SerialNode, Ref } from "../types/refs";
+import type { SerialContext, SerialNode, Ref, SerialPack } from "../types/refs";
 import {
   isCodeTransition,
   isGeneralTransition,
@@ -16,8 +16,10 @@ import {
 import { isRef, isSerialTransition } from "../types/refs";
 import { resolveTransitionRef } from "./ref-resolver";
 import type { AnyToolDefinition } from "../types/tools";
-import type { AnyPackToolDefinition } from "../types/pack";
+import type { AnyPackCommandDefinition, AnyPackToolDefinition } from "../types/pack";
+import type { Pack } from "../types/pack";
 import type { AnyCommandDefinition } from "../types/commands";
+import type { ContextRef } from "../types/context";
 
 /**
  * Resolve a node command ref (dotted: charter.nodes[source].commands[name]).
@@ -79,6 +81,69 @@ function resolvePackToolRef(
   const tool = pack.tools[name];
   if (!tool) throw new Error(`Unknown tool on pack ${source}: ${name}`);
   return tool;
+}
+
+function resolvePackCommandRef(charter: Charter<any>, ref: string): AnyPackCommandDefinition<unknown> {
+  const dotIdx = ref.indexOf(".");
+  if (dotIdx === -1) {
+    throw new Error(`Pack command ref must be dotted (pack.command): ${ref}`);
+  }
+  const source = ref.slice(0, dotIdx);
+  const name = ref.slice(dotIdx + 1);
+  const pack = charter.packs.find((p) => p.name === source);
+  if (!pack) throw new Error(`Unknown pack in command ref: ${ref}`);
+  const command = pack.commands?.[name];
+  if (!command) throw new Error(`Unknown command on pack ${source}: ${name}`);
+  return command as AnyPackCommandDefinition<unknown>;
+}
+
+function deserializeContextRef(context: Ref | SerialContext): ContextRef {
+  if (isRef(context)) return context;
+
+  return {
+    name: context.name,
+    schema: fromSafeJsonSchema(context.schema),
+    initialState: context.initialState,
+  };
+}
+
+function deserializePack(charter: Charter<any>, serialPack: Ref | SerialPack): Pack {
+  if (isRef(serialPack)) {
+    const pack = charter.packs.find((p) => p.name === serialPack.ref);
+    if (!pack) {
+      throw new Error(`Pack not found in charter: ${serialPack.ref}`);
+    }
+    return pack;
+  }
+
+  const charterPack = charter.packs.find((p) => p.name === serialPack.name);
+
+  const tools: Record<string, AnyPackToolDefinition> = {};
+  if (serialPack.tools) {
+    for (const [name, toolRef] of Object.entries(serialPack.tools)) {
+      tools[name] = resolvePackToolRef(charter, toolRef.ref) as AnyPackToolDefinition;
+    }
+  } else if (charterPack) {
+    Object.assign(tools, charterPack.tools);
+  }
+
+  const commands: Record<string, AnyPackCommandDefinition> = {};
+  if (serialPack.commands) {
+    for (const [name, commandRef] of Object.entries(serialPack.commands)) {
+      commands[name] = resolvePackCommandRef(charter, commandRef.ref);
+    }
+  } else if (charterPack?.commands) {
+    Object.assign(commands, charterPack.commands);
+  }
+
+  return {
+    name: serialPack.name,
+    description: serialPack.description,
+    context: deserializeContextRef(serialPack.context),
+    instructions: serialPack.instructions,
+    tools,
+    ...(Object.keys(commands).length > 0 ? { commands } : {}),
+  };
 }
 
 /**
@@ -181,6 +246,8 @@ export function deserializeNode<S>(
     }
   }
 
+  const packs = serialNode.packs?.map((pack) => deserializePack(charter, pack));
+
   return {
     id: uuid(),
     instructions: serialNode.instructions,
@@ -188,6 +255,7 @@ export function deserializeNode<S>(
     validator,
     transitions,
     ...(Object.keys(commands).length > 0 ? { commands } : {}),
+    ...(packs && packs.length > 0 ? { packs } : {}),
     initialState: serialNode.initialState,
     ...(serialNode.executorConfig ? { executorConfig: serialNode.executorConfig } : {}),
     ...(serialNode.name ? { name: serialNode.name } : {}),

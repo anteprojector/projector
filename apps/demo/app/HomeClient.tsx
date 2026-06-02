@@ -95,9 +95,9 @@ export function HomeClient({
   const effectiveDisplayInstance = optimistic.instance;
 
   // Derive voice/camera state from effective (optimistic) display instance
-  const effectivePackStates = effectiveDisplayInstance?.packStates as Record<string, any> | undefined;
-  const voiceEnabled = (effectivePackStates?.agentControls?.voiceEnabled as boolean) ?? false;
-  const cameraEnabled = (effectivePackStates?.agentControls?.cameraEnabled as boolean) ?? false;
+  const effectiveContext = effectiveDisplayInstance?.context as Record<string, any> | undefined;
+  const voiceEnabled = (effectiveContext?.agentControls?.voiceEnabled as boolean) ?? false;
+  const cameraEnabled = (effectiveContext?.agentControls?.cameraEnabled as boolean) ?? false;
 
   // Clear pending message when we see it in the server messages
   useEffect(() => {
@@ -327,7 +327,7 @@ export function HomeClient({
     return (
       getThemeFromInstance(session?.instance) ??
       getThemeFromInstance(session?.displayInstance) ??
-      ((session as { instance?: { packStates?: Record<string, unknown> } })?.instance?.packStates
+      ((session as { instance?: { context?: Record<string, unknown> } })?.instance?.context
         ?.theme as ThemeState | undefined)
     );
   })();

@@ -17,6 +17,7 @@ export function createCharter<AppMessage = unknown>(
     transitions = {},
     nodes = {},
     packs = [],
+    contexts = [],
     buildSystemPrompt,
   } = config;
 
@@ -37,6 +38,7 @@ export function createCharter<AppMessage = unknown>(
     transitions,
     nodes,
     packs,
+    contexts,
     ...(buildSystemPrompt && { buildSystemPrompt }),
   };
 }

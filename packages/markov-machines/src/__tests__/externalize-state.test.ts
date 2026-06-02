@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createCharter } from "../core/charter";
 import { createNode } from "../core/node";
 import { createPack } from "../core/pack";
+import { createContext } from "../core/context";
 import { createMachine } from "../core/machine";
 import { runCommand } from "../core/commands";
 import { applyInstanceMessages, runMachineToCompletion } from "../core/run";
@@ -90,12 +91,11 @@ describe("externalized state ownership", () => {
     expect(state.count).toBe(7);
   });
 
-  it("does not apply externalized pack state unless handler sets state", () => {
+  it("does not apply externalized context state unless handler sets state", () => {
     const seenPatches: Record<string, unknown>[] = [];
-    const settingsPack = createPack({
+    const settingsContext = createContext({
       name: "settings",
-      description: "Settings",
-      validator: createSchema((input) => {
+      schema: createSchema((input) => {
         const obj = parseObject(input);
         if (typeof obj.voiceEnabled !== "boolean") throw new Error("voiceEnabled must be boolean");
         return { voiceEnabled: obj.voiceEnabled };
@@ -108,6 +108,10 @@ describe("externalized state ownership", () => {
           });
         },
       },
+    });
+    const settingsPack = createPack(settingsContext, {
+      name: "settings",
+      description: "Settings",
     });
 
     const node = createNode({
@@ -123,6 +127,7 @@ describe("externalized state ownership", () => {
         executor: createMockExecutor(),
         nodes: { node },
         packs: [settingsPack],
+        contexts: [settingsContext],
       }),
       {
         instance: createInstance(node, {}, undefined, {
@@ -133,13 +138,13 @@ describe("externalized state ownership", () => {
 
     applyInstanceMessages(
       machine,
-      [instanceMessage({ kind: "packState", packName: "settings", patch: { voiceEnabled: true } })],
+      [instanceMessage({ kind: "context", contextName: "settings", patch: { voiceEnabled: true } })],
       1,
     );
 
     expect(seenPatches).toEqual([{ voiceEnabled: true }]);
-    const packState = machine.instance.packStates?.settings as { voiceEnabled: boolean };
-    expect(packState.voiceEnabled).toBe(false);
+    const contextState = machine.instance.context?.settings as { voiceEnabled: boolean };
+    expect(contextState.voiceEnabled).toBe(false);
   });
 
   it("does not immediately overwrite externalized node state in runCommand", async () => {

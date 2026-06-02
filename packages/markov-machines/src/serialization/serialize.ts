@@ -5,12 +5,12 @@ import type {
   Machine,
   SerializedMachine,
   SerializedInstance,
-  SerialPackInstance,
 } from "../types/machine";
-import type { Ref, SerialNode, SerialTransition, SerialPack } from "../types/refs";
+import type { Ref, SerialContext, SerialNode, SerialTransition, SerialPack } from "../types/refs";
 import type { Charter } from "../types/charter";
 import type { Transition } from "../types/transitions";
 import type { Pack } from "../types/pack";
+import type { Context, ContextRef } from "../types/context";
 import { isRef, isSerialTransition } from "../types/refs";
 import { isCodeTransition, isGeneralTransition } from "../types/transitions";
 import { toSafeJsonSchema } from "../helpers/json-schema";
@@ -120,6 +120,7 @@ export function serializeNode<S>(
   }
 
   const name = charterName ?? (node as unknown as Record<string, unknown>).name;
+  const packs = node.packs?.map((pack) => serializePack(pack, {}, charter));
 
   return {
     ...(name ? { name: name as string } : {}),
@@ -128,8 +129,32 @@ export function serializeNode<S>(
     transitions,
     ...(Object.keys(toolRefs).length > 0 ? { tools: toolRefs } : {}),
     ...(Object.keys(commandRefs).length > 0 ? { commands: commandRefs } : {}),
+    ...(packs && packs.length > 0 ? { packs } : {}),
     initialState: node.initialState,
     ...(node.executorConfig ? { executorConfig: node.executorConfig } : {}),
+  };
+}
+
+function serializeContextRef(
+  context: ContextRef,
+  charter?: Charter,
+): Ref | SerialContext {
+  if (isRef(context)) {
+    return context;
+  }
+
+  if (charter?.contexts.some((registered) => registered.name === context.name)) {
+    return { ref: context.name };
+  }
+
+  const schema: Record<string, unknown> = isZodSchema(context.schema)
+    ? toSafeJsonSchema(context.schema)
+    : (context.schema as Record<string, unknown>);
+
+  return {
+    name: context.name,
+    schema,
+    ...(context.initialState !== undefined ? { initialState: context.initialState } : {}),
   };
 }
 
@@ -210,11 +235,6 @@ export function serializePack(
     }
   }
 
-  // Serialize the validator to JSON Schema
-  const validator: Record<string, unknown> = isZodSchema(pack.validator)
-    ? toSafeJsonSchema(pack.validator)
-    : (pack.validator as Record<string, unknown>);
-
   // Resolve instructions from pack
   let instructions: string | undefined;
   if (typeof pack.instructions === "function") {
@@ -256,11 +276,10 @@ export function serializePack(
   return {
     name: pack.name,
     description: pack.description,
+    context: serializeContextRef(pack.context, charter),
     ...(instructions !== undefined ? { instructions } : {}),
-    validator,
     ...(Object.keys(toolRefs).length > 0 ? { tools: toolRefs } : {}),
     ...(Object.keys(commandRefs).length > 0 ? { commands: commandRefs } : {}),
-    ...(pack.initialState !== undefined ? { initialState: pack.initialState } : {}),
   };
 }
 
@@ -282,26 +301,12 @@ export function serializeInstance(
     children = instance.children.map((c) => serializeInstance(c, charter, options));
   }
 
-  // Serialize pack instances (only on root - when packStates exists)
-  // Use instance.packs (deserialized with correct instructions) or fall back to node.packs
-  let packInstances: SerialPackInstance[] | undefined;
-  const packsToSerialize = instance.packs ?? instance.node.packs ?? [];
-  if (instance.packStates && packsToSerialize.length > 0) {
-    packInstances = packsToSerialize.map((pack) => {
-      const state = instance.packStates![pack.name] ?? pack.initialState ?? {};
-      return {
-        state,
-        pack: serializePack(pack, state, charter),
-      };
-    });
-  }
-
   return {
     id: instance.id,
     node: serializedNode,
     state: instance.state,
     children,
-    ...(packInstances && packInstances.length > 0 ? { packInstances } : {}),
+    ...(instance.context ? { context: instance.context } : {}),
     ...(instance.suspended ? {
       suspended: {
         suspendId: instance.suspended.suspendId,

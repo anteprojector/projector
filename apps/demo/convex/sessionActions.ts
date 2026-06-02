@@ -5,6 +5,7 @@ import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import {
   createInstance,
+  createMachine,
   serializeInstance,
   type Instance,
   type Node,
@@ -16,21 +17,12 @@ import { serializeInstanceForDisplay } from "markov-machines";
 // Charter for serialization only — executor is unused
 const demoCharter = createDemoCharter({ executor: { run: async () => ({ response: [] }) } as any });
 
-function initPackStates(node: Node<unknown>): Record<string, unknown> {
-  const packStates: Record<string, unknown> = {};
-  for (const pack of node.packs ?? []) {
-    if (pack.initialState !== undefined) {
-      packStates[pack.name] = pack.initialState;
-    }
-  }
-  return packStates;
-}
-
 export const createSession = action({
   args: {},
   handler: async (ctx): Promise<Id<"sessions">> => {
-    const packStates = initPackStates(nameGateNode as Node<unknown>);
-    const instance: Instance = createInstance(nameGateNode as Node<unknown>, {}, undefined, packStates);
+    const instance: Instance = createMachine(demoCharter, {
+      instance: createInstance(nameGateNode as Node<unknown>, {}),
+    }).instance;
 
     const serializedInstance = serializeInstance(instance, demoCharter);
     const displayInstance = serializeInstanceForDisplay(instance, demoCharter);
@@ -48,13 +40,9 @@ export const createSession = action({
 export const createSessionAtFoo = action({
   args: {},
   handler: async (ctx): Promise<Id<"sessions">> => {
-    const packStates = initPackStates(fooNode as Node<unknown>);
-    const instance: Instance = createInstance(
-      fooNode as Node<unknown>,
-      { name: "Foo" },
-      undefined,
-      packStates
-    );
+    const instance: Instance = createMachine(demoCharter, {
+      instance: createInstance(fooNode as Node<unknown>, { name: "Foo" }),
+    }).instance;
 
     const serializedInstance = serializeInstance(instance, demoCharter);
     const displayInstance = serializeInstanceForDisplay(instance, demoCharter);

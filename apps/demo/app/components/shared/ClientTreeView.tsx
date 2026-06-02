@@ -21,7 +21,7 @@ export interface ClientInstance {
   state: unknown;
   children?: ClientInstance[];
   packs?: DisplayPack[];
-  packStates?: Record<string, unknown>;
+  context?: Record<string, unknown>;
 }
 
 function isDisplayNode(node: unknown): node is DisplayNode {
@@ -112,10 +112,9 @@ function ClientNodeSection({ node }: { node: DisplayNode }) {
   );
 }
 
-function ClientInstanceContent({ instance, rootPackStates }: { instance: ClientInstance; rootPackStates: Record<string, unknown> }) {
-  // Get packs from instance (packs are stored at root instance level only)
+function ClientInstanceContent({ instance, rootContext }: { instance: ClientInstance; rootContext: Record<string, unknown> }) {
   const instancePacks = instance.packs || [];
-  const packStates = rootPackStates;
+  const rootContextState = rootContext;
   const hasPacks = instancePacks.length > 0;
 
   return (
@@ -132,19 +131,19 @@ function ClientInstanceContent({ instance, rootPackStates }: { instance: ClientI
         >
           <div className="space-y-1">
             {instancePacks.map((pack) => {
-              const packState = packStates[pack.name];
+              const contextState = rootContextState[pack.contextName];
               return (
-                <Expander key={pack.name} label={pack.name} preview={packState}>
+                <Expander key={pack.name} label={pack.name} preview={contextState}>
                   <div className="space-y-1">
                     <ClientPackInstructionsField
                       instructions={pack.instructions}
                       isDynamic={pack.instructionsDynamic}
                     />
-                    <Expander label="state" preview={packState}>
-                      <JsonBlock data={packState} />
+                    <Expander label="state" preview={contextState}>
+                      <JsonBlock data={contextState} />
                     </Expander>
-                    <Expander label="validator" preview={pack.validator}>
-                      <JsonBlock data={pack.validator} />
+                    <Expander label="schema" preview={pack.schema}>
+                      <JsonBlock data={pack.schema} />
                     </Expander>
                     {Object.keys(pack.commands).length > 0 && (
                       <Expander label="commands" badge={Object.keys(pack.commands).length} preview={pack.commands}>
@@ -183,7 +182,7 @@ export function ClientTreeView({ instance }: { instance: ClientInstance }) {
       <TreeNode
         item={instance}
         getName={getClientNodeName}
-        renderContent={(inst) => <ClientInstanceContent instance={inst} rootPackStates={instance.packStates || {}} />}
+        renderContent={(inst) => <ClientInstanceContent instance={inst} rootContext={instance.context || {}} />}
       />
     </div>
   );

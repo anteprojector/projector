@@ -1,6 +1,6 @@
 import type { z } from "zod";
 import type { CommandValueResult } from "./commands";
-import type { ExternalizeStateConfig } from "./externalize";
+import type { ContextRef } from "./context";
 
 /**
  * Context provided to pack tool and command execute functions.
@@ -78,21 +78,17 @@ export interface Pack<S = unknown> {
   name: string;
   /** Description shown in system prompt */
   description: string;
+  /** Context that owns this pack's state */
+  context: ContextRef<S>;
   /**
    * Optional instructions that are included in the system prompt when this pack is active.
    * Can be static text or derived from the current pack state.
    */
   instructions?: string | ((state: S) => string);
-  /** Zod schema for pack state validation */
-  validator: z.ZodType<S>;
   /** Pack tools (called by LLM) */
   tools: Record<string, AnyPackToolDefinition<S>>;
   /** Pack commands (called by user, bypass LLM) */
   commands?: Record<string, AnyPackCommandDefinition<S>>;
-  /** Optional initial state */
-  initialState?: S;
-  /** Optional externalized state ownership hooks */
-  externalize?: ExternalizeStateConfig<S>;
 }
 
 /**
@@ -102,11 +98,8 @@ export interface PackConfig<S = unknown> {
   name: string;
   description: string;
   instructions?: string | ((state: S) => string);
-  validator: z.ZodType<S>;
   tools?: Record<string, AnyPackToolDefinition<S>>;
   commands?: Record<string, AnyPackCommandDefinition<S>>;
-  initialState?: S;
-  externalize?: ExternalizeStateConfig<S>;
 }
 
 /**
@@ -133,7 +126,7 @@ export function isPack(value: unknown): value is Pack {
     value !== null &&
     "name" in value &&
     "description" in value &&
-    "validator" in value &&
+    "context" in value &&
     "tools" in value
   );
 }

@@ -40,7 +40,7 @@ describe('Custom System Prompt Builder', () => {
       node: Node<any, S>,
       state: S,
       ancestors: Instance[],
-      packStates: Record<string, unknown>
+      context: Record<string, unknown>
     ): string => {
       return `CUSTOM PROMPT: ${node.instructions} - State: ${JSON.stringify(state)}`
     }
@@ -62,7 +62,7 @@ describe('Custom System Prompt Builder', () => {
       node: Node<any, any>
       state: any
       ancestors: Instance[]
-      packStates: Record<string, unknown>
+      context: Record<string, unknown>
       options?: any
     } | null = null
 
@@ -71,10 +71,10 @@ describe('Custom System Prompt Builder', () => {
       node: Node<any, S>,
       state: S,
       ancestors: Instance[],
-      packStates: Record<string, unknown>,
+      context: Record<string, unknown>,
       options?: any
     ): string => {
-      capturedParams = { node, state, ancestors, packStates, options }
+      capturedParams = { node, state, ancestors, context, options }
       return 'test'
     }
 
@@ -98,7 +98,7 @@ describe('Custom System Prompt Builder', () => {
       },
     ]
 
-    const packStates = { myPack: { data: 'pack-data' } }
+    const context = { myContext: { data: 'context-data' } }
     const options = { currentStep: 5, maxSteps: 10 }
 
     const charter = createCharter({
@@ -107,13 +107,13 @@ describe('Custom System Prompt Builder', () => {
       buildSystemPrompt: customBuilder,
     })
 
-    buildSystemPrompt(charter, node, { value: 'test-state' }, ancestors, packStates, options)
+    buildSystemPrompt(charter, node, { value: 'test-state' }, ancestors, context, options)
 
     expect(capturedParams).not.toBeNull()
     expect(capturedParams!.node).toBe(node)
     expect(capturedParams!.state).toEqual({ value: 'test-state' })
     expect(capturedParams!.ancestors).toEqual(ancestors)
-    expect(capturedParams!.packStates).toEqual(packStates)
+    expect(capturedParams!.context).toEqual(context)
     expect(capturedParams!.options).toEqual(options)
   })
 
@@ -146,7 +146,7 @@ describe('Custom System Prompt Builder', () => {
       node: Node<any, S>,
       state: S,
       ancestors: Instance[],
-      packStates: Record<string, unknown>
+      context: Record<string, unknown>
     ): string => {
       // In real implementation, node.id would be used to lookup metadata
       const nodeId = node.instructions.includes('Manager') ? 'manager' : 'troubleshooter'
@@ -170,7 +170,7 @@ describe('Custom System Prompt Builder', () => {
     expect(troubleshooterPrompt).toContain('Diagnose and resolve issues')
   })
 
-  it('should allow custom builder to format pack states differently', () => {
+  it('should allow custom builder to format context differently', () => {
     const node = createNode({
       instructions: 'Test node',
       validator: z.object({}),
@@ -182,12 +182,12 @@ describe('Custom System Prompt Builder', () => {
       node: Node<any, S>,
       state: S,
       ancestors: Instance[],
-      packStates: Record<string, unknown>
+      context: Record<string, unknown>
     ): string => {
-      const packInfo = Object.entries(packStates)
-        .map(([name, state]) => `Pack ${name}: ${JSON.stringify(state)}`)
+      const contextInfo = Object.entries(context)
+        .map(([name, state]) => `Context ${name}: ${JSON.stringify(state)}`)
         .join('\n')
-      return `${node.instructions}\n\n# Pack States:\n${packInfo}`
+      return `${node.instructions}\n\n# Context:\n${contextInfo}`
     }
 
     const charter = createCharter({
@@ -196,16 +196,16 @@ describe('Custom System Prompt Builder', () => {
       buildSystemPrompt: customBuilder,
     })
 
-    const packStates = {
+    const context = {
       plans: { activePlan: { id: '1', status: 'active' } },
       context: { userId: 'user-123' },
     }
 
-    const prompt = buildSystemPrompt(charter, node, {}, [], packStates)
+    const prompt = buildSystemPrompt(charter, node, {}, [], context)
 
-    expect(prompt).toContain('# Pack States:')
-    expect(prompt).toContain('Pack plans:')
-    expect(prompt).toContain('Pack context:')
+    expect(prompt).toContain('# Context:')
+    expect(prompt).toContain('Context plans:')
+    expect(prompt).toContain('Context context:')
     expect(prompt).toContain('activePlan')
     expect(prompt).toContain('userId')
   })

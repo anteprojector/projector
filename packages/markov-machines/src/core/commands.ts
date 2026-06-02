@@ -15,6 +15,7 @@ import { executeCommand as executeCommandOnInstance } from "../runtime/command-e
 import { isCedeResult, isTransitionToResult } from "../types/transitions";
 import { isCommandValueResult } from "../types/commands";
 import { updateState as applyStateUpdate } from "../runtime/state-manager";
+import { getOrInitContextState, resolvePackContext } from "../runtime/context-resolver";
 
 function mergePatch(
   current: Record<string, unknown> | undefined,
@@ -42,7 +43,7 @@ export function getAvailableCommands(machine: Machine): CommandInfo[] {
   }));
 
   // Collect pack commands from all packs on the node
-  const packs = active.packs ?? active.node.packs ?? [];
+  const packs = active.node.packs ?? [];
   for (const pack of packs) {
     const packCommands = pack.commands ?? {};
     for (const [name, cmd] of Object.entries(packCommands)) {
@@ -169,16 +170,15 @@ export async function runCommand<AppMessage = unknown>(
   }
 
   // Check if this is a pack command
-  const packs = target.packs ?? target.node.packs ?? [];
+  const packs = target.node.packs ?? [];
   for (const pack of packs) {
     if (pack.commands?.[commandName]) {
-      // Pass ROOT's packStates (pack states are only stored on root instance)
       const packResult = await executePackCommand<AppMessage>(
+        machine,
         target,
         pack.name,
         commandName,
         input,
-        machine.instance.packStates ?? {},
         machine.enqueue,
       );
 
@@ -217,21 +217,20 @@ export async function runCommand<AppMessage = unknown>(
  * @param packName - The pack name
  * @param commandName - The command name
  * @param input - The command input
- * @param rootPackStates - Pack states from the ROOT instance (pack states are only stored on root)
  * @param enqueue - Function to enqueue messages (for state updates via instanceMessage)
  */
 async function executePackCommand<AppMessage = unknown>(
+  machine: Machine<AppMessage>,
   instance: Instance,
   packName: string,
   commandName: string,
   input: unknown,
-  rootPackStates: Record<string, unknown>,
   enqueue: (msgs: MachineMessage<AppMessage>[]) => void,
 ): Promise<CommandExecutionResult & {
   messages?: MachineMessage<AppMessage>[];
 }> {
   // Find the pack on the instance (deserialized) or fall back to node
-  const pack = (instance.packs ?? instance.node.packs)?.find((p) => p.name === packName);
+  const pack = instance.node.packs?.find((p) => p.name === packName);
   if (!pack) {
     return { success: false, error: `Pack not found: ${packName}` };
   }
@@ -248,25 +247,27 @@ async function executePackCommand<AppMessage = unknown>(
     return { success: false, error: `Invalid input: ${parsed.error.message}` };
   }
 
-  // Get current pack state from ROOT (not from instance - pack states are only on root)
-  let packState = rootPackStates[packName] ?? pack.initialState ?? {};
-  let hasPackStateUpdate = false;
+  const context = resolvePackContext(machine.charter, pack);
+  const rootContext = { ...(machine.instance.context ?? {}) };
+  let contextState = getOrInitContextState(rootContext, context);
+  let hasContextUpdate = false;
   let accumulatedPatch: Record<string, unknown> | undefined;
 
   // Create context
   const ctx: PackCommandContext<unknown> = {
-    state: packState,
+    state: contextState,
     updateState: (patch: Partial<unknown>) => {
       const result = applyStateUpdate(
-        packState as Record<string, unknown>,
+        contextState as Record<string, unknown>,
         patch as Partial<Record<string, unknown>>,
-        pack.validator as any,
+        context.schema as any,
       );
       if (!result.success) {
-        throw new Error(`Pack state update validation failed: ${result.error}`);
+        throw new Error(`Context state update validation failed: ${result.error}`);
       }
-      packState = result.state;
-      hasPackStateUpdate = true;
+      contextState = result.state;
+      rootContext[context.name] = result.state;
+      hasContextUpdate = true;
       accumulatedPatch = mergePatch(
         accumulatedPatch,
         patch as Partial<Record<string, unknown>>,
@@ -294,12 +295,12 @@ async function executePackCommand<AppMessage = unknown>(
     const message = error instanceof Error ? error.message : String(error);
     return { success: false, error: message };
   } finally {
-    if (hasPackStateUpdate) {
+    if (hasContextUpdate) {
       enqueue([instanceMessage<AppMessage>(
         {
-          kind: "packState",
-          packName,
-          patch: accumulatedPatch ?? (packState as Record<string, unknown>),
+          kind: "context",
+          contextName: context.name,
+          patch: accumulatedPatch ?? (contextState as Record<string, unknown>),
         },
       )]);
     }

@@ -11,10 +11,11 @@ export interface DisplayCommand {
 export interface DisplayPack {
   name: string;
   description: string;
+  contextName: string;
   instructions?: string;
   instructionsDynamic?: boolean;
   state: unknown;
-  validator: Record<string, unknown>;
+  schema: Record<string, unknown>;
   commands: Record<string, DisplayCommand>;
 }
 
@@ -38,6 +39,6 @@ export interface DisplayInstance {
   state: unknown;
   children?: DisplayInstance[];
   packs?: DisplayPack[];
-  packStates?: Record<string, unknown>;
+  context?: Record<string, unknown>;
   suspended?: SerializedSuspendInfo;
 }

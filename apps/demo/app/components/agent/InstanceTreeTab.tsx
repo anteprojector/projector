@@ -30,6 +30,22 @@ interface RestorableNode {
   name: string;
 }
 
+function collectDisplayPacks(instance: DisplayInstance): { name: string }[] {
+  const packs: { name: string }[] = [];
+  function walk(inst: DisplayInstance) {
+    for (const pack of inst.packs || []) {
+      if (!packs.some((p) => p.name === pack.name)) {
+        packs.push({ name: pack.name });
+      }
+    }
+    for (const child of inst.children || []) {
+      walk(child);
+    }
+  }
+  walk(instance);
+  return packs;
+}
+
 function collectRestorableNodes(instance: DisplayInstance | SerializedInstance): RestorableNode[] {
   const nodes: RestorableNode[] = [];
 
@@ -58,7 +74,7 @@ function RestoreTab({
 }) {
   const restoreToCharter = useMutation(api.sessions.restoreToCharter);
 
-  const packs = (instance as DisplayInstance).packs || [];
+  const packs = "packs" in instance ? collectDisplayPacks(instance as DisplayInstance) : [];
   const nodes = collectRestorableNodes(instance);
 
   const handleRestoreNode = useCallback((instanceId: string, nodeName: string) => {

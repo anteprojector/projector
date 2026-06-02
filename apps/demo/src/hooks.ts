@@ -74,7 +74,7 @@ export function useAutoScrollOnNewContent<T extends HTMLElement>(
 // ---------------------------------------------------------------------------
 
 export interface OptimisticPatch {
-  packState?: Record<string, Record<string, unknown>>;
+  context?: Record<string, Record<string, unknown>>;
 }
 
 /**
@@ -159,18 +159,18 @@ export function useOptimisticCommands(
     if (!instance || pendingEntries.length === 0) return instance;
 
     const base = { ...instance };
-    const basePS = (base.packStates as Record<string, any>) ?? {};
-    let merged = { ...basePS };
+    const baseContext = (base.context as Record<string, any>) ?? {};
+    let merged = { ...baseContext };
 
     for (const patch of pendingEntries) {
-      if (patch.packState) {
-        for (const [packName, fields] of Object.entries(patch.packState)) {
-          merged[packName] = { ...(merged[packName] ?? {}), ...fields };
+      if (patch.context) {
+        for (const [contextName, fields] of Object.entries(patch.context)) {
+          merged[contextName] = { ...(merged[contextName] ?? {}), ...fields };
         }
       }
     }
 
-    base.packStates = merged;
+    base.context = merged;
     return base;
   }, [instance, pending]);
 

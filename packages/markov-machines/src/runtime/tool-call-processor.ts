@@ -19,7 +19,7 @@ import {
   type AnthropicBuiltinTool,
 } from "../types/tools";
 import type { AnyPackToolDefinition } from "../types/pack";
-import { getOrInitPackState } from "../core/machine";
+import { getOrInitContextState, resolvePackContext } from "./context-resolver";
 
 // Tool name constants
 const TOOL_UPDATE_STATE = "updateState";
@@ -30,7 +30,7 @@ export interface ToolCallContext {
   charter: Charter<any>;
   instance: Instance;
   ancestors: Instance[];
-  packStates: Record<string, unknown>;
+  context: Record<string, unknown>;
   currentState: unknown;
   currentNode: Node<any, unknown>;
   /** Conversation history for getInstanceMessages */
@@ -48,9 +48,9 @@ export interface ToolCallResult<AppMessage = unknown> {
   currentState: unknown;
   /** Accumulated patch for currentState (shallow merge of successful updateState calls) */
   currentStatePatch?: Record<string, unknown>;
-  packStates: Record<string, unknown>;
-  /** Accumulated patches for pack states (packName -> shallow merged patch) */
-  packStatePatches: Record<string, Record<string, unknown>>;
+  context: Record<string, unknown>;
+  /** Accumulated patches for context state (contextName -> shallow merged patch) */
+  contextPatches: Record<string, Record<string, unknown>>;
   queuedTransition?: { name: string; reason: string; args: unknown };
   /** If true, a terminal tool was called and the turn should end immediately */
   terminal?: boolean;
@@ -78,7 +78,7 @@ interface RegularToolResult {
   newCurrentState: unknown;
   toolResult: ToolResultBlock;
   currentStatePatch?: Record<string, unknown>;
-  packStatePatch?: { packName: string; patch: Record<string, unknown> };
+  contextPatch?: { contextName: string; patch: Record<string, unknown> };
   /** Assistant content from toolReply userMessage (should be role: assistant) */
   assistantContent?: TextBlock | OutputBlock<any>;
   /** If true, this tool is terminal and the turn should end */
@@ -167,7 +167,7 @@ async function handleRegularTool(
   owner: "charter" | { pack: string } | Instance,
   ctx: ToolCallContext,
   currentState: unknown,
-  packStates: Record<string, unknown>,
+  contextStates: Record<string, unknown>,
 ): Promise<RegularToolResult | null> {
   // Check if this is a pack tool
   if (typeof owner === "object" && "pack" in owner) {
@@ -182,8 +182,9 @@ async function handleRegularTool(
         toolResult: toolResult(id, `Pack not found: ${packName}`, true),
       };
     }
-    let packState = getOrInitPackState(packStates, pack);
-    let packStatePatch: Record<string, unknown> | undefined;
+    const context = resolvePackContext(ctx.charter, pack);
+    let contextState = getOrInitContextState(contextStates, context);
+    let contextPatch: Record<string, unknown> | undefined;
 
     // Execute pack tool with pack context
     try {
@@ -200,40 +201,40 @@ async function handleRegularTool(
         }
       }
 
-      // Track pack state validation errors
-      let packStateError: string | undefined;
+      // Track context state validation errors
+      let contextStateError: string | undefined;
 
       const result = await packTool.execute(toolInput, {
-        state: packState,
+        state: contextState,
         updateState: (patch: Partial<unknown>) => {
           const result = updateState(
-            packState as Record<string, unknown>,
+            contextState as Record<string, unknown>,
             patch as Partial<Record<string, unknown>>,
-            pack.validator as any,
+            context.schema as any,
           );
           if (result.success) {
-            packState = result.state;
-            packStates[packName] = result.state;
-            packStatePatch = mergePatch(
-              packStatePatch,
+            contextState = result.state;
+            contextStates[context.name] = result.state;
+            contextPatch = mergePatch(
+              contextPatch,
               patch as Partial<Record<string, unknown>>,
             );
-            packStateError = undefined; // Clear any prior error
+            contextStateError = undefined; // Clear any prior error
           } else {
-            packStateError = `Pack state validation failed: ${result.error}`;
+            contextStateError = `Context state validation failed: ${result.error}`;
           }
         },
         rootInstanceId: ctx.rootInstanceId,
       });
 
-      // If there was a pack state validation error, include it in the result
-      if (packStateError) {
+      // If there was a context state validation error, include it in the result
+      if (contextStateError) {
         const resultStr = typeof result === "string" ? result : JSON.stringify(result);
         return {
           newCurrentState: currentState,
-          toolResult: toolResult(id, `${resultStr}\n\nError: ${packStateError}`, true),
-          ...(packStatePatch
-            ? { packStatePatch: { packName, patch: packStatePatch } }
+          toolResult: toolResult(id, `${resultStr}\n\nError: ${contextStateError}`, true),
+          ...(contextPatch
+            ? { contextPatch: { contextName: context.name, patch: contextPatch } }
             : {}),
         };
       }
@@ -248,8 +249,8 @@ async function handleRegularTool(
         return {
           newCurrentState: currentState,
           toolResult: toolResult(id, result.llmMessage),
-          ...(packStatePatch
-            ? { packStatePatch: { packName, patch: packStatePatch } }
+          ...(contextPatch
+            ? { contextPatch: { contextName: context.name, patch: contextPatch } }
             : {}),
           assistantContent,
           terminal: packTool.terminal,
@@ -259,8 +260,8 @@ async function handleRegularTool(
       return {
         newCurrentState: currentState,
         toolResult: toolResult(id, typeof result === "string" ? result : JSON.stringify(result)),
-        ...(packStatePatch
-          ? { packStatePatch: { packName, patch: packStatePatch } }
+        ...(contextPatch
+          ? { contextPatch: { contextName: context.name, patch: contextPatch } }
           : {}),
         terminal: packTool.terminal,
       };
@@ -269,8 +270,8 @@ async function handleRegularTool(
       return {
         newCurrentState: currentState,
         toolResult: toolResult(id, `Tool error: ${errorMsg}`, true),
-        ...(packStatePatch
-          ? { packStatePatch: { packName, patch: packStatePatch } }
+        ...(contextPatch
+          ? { contextPatch: { contextName: context.name, patch: contextPatch } }
           : {}),
       };
     }
@@ -357,8 +358,8 @@ export async function processToolCalls<AppMessage = unknown>(
   let terminal = false;
   let currentState = ctx.currentState;
   let currentStatePatch: Record<string, unknown> | undefined;
-  const packStates = { ...ctx.packStates };
-  const packStatePatches: Record<string, Record<string, unknown>> = {};
+  const context = { ...ctx.context };
+  const contextPatches: Record<string, Record<string, unknown>> = {};
   let queuedTransition: { name: string; reason: string; args: unknown } | undefined;
 
   const tracer = ctx.tracer;
@@ -455,16 +456,16 @@ export async function processToolCalls<AppMessage = unknown>(
           resolved.owner,
           ctx,
           currentState,
-          packStates,
+          context,
         );
         if (result) {
           currentState = result.newCurrentState;
           if (result.currentStatePatch) {
             currentStatePatch = mergePatch(currentStatePatch, result.currentStatePatch);
           }
-          if (result.packStatePatch) {
-            const { packName, patch } = result.packStatePatch;
-            packStatePatches[packName] = mergePatch(packStatePatches[packName], patch);
+          if (result.contextPatch) {
+            const { contextName, patch } = result.contextPatch;
+            contextPatches[contextName] = mergePatch(contextPatches[contextName], patch);
           }
           toolResults.push(result.toolResult);
           if (result.assistantContent) {
@@ -509,8 +510,8 @@ export async function processToolCalls<AppMessage = unknown>(
     assistantMessages,
     currentState,
     ...(currentStatePatch ? { currentStatePatch } : {}),
-    packStates,
-    packStatePatches,
+    context,
+    contextPatches,
     queuedTransition,
     terminal,
   };

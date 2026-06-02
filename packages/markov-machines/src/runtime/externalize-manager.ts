@@ -8,9 +8,10 @@ import type {
   ExternalStateHandler,
   ExternalStateMutationEvent,
 } from "../types/externalize";
-import type { InstanceMessage, PackStateUpdatePayload, StateUpdatePayload } from "../types/messages";
-import type { Pack } from "../types/pack";
+import type { ContextUpdatePayload, InstanceMessage, StateUpdatePayload } from "../types/messages";
+import type { Context } from "../types/context";
 import { updateState } from "./state-manager";
+import { getAllNodePacks, resolvePackContext } from "./context-resolver";
 
 interface DesiredRegistration<AppMessage = unknown> {
   id: string;
@@ -68,16 +69,23 @@ export function createExternalizeRuntime<AppMessage = unknown>(
   const registrations = new Map<string, Registration<AppMessage>>();
   let mutationSequence = 0;
 
-  const resolvePackByName = (packName: string): Pack | undefined => {
-    const charterPack = machine.charter.packs.find((pack) => pack.name === packName);
-    if (charterPack) return charterPack;
-    const instancePacks = machine.instance.packs ?? machine.instance.node.packs ?? [];
-    return instancePacks.find((pack) => pack.name === packName);
+  const resolveContextByName = (contextName: string): Context | undefined => {
+    const charterContext = machine.charter.contexts.find((context) => context.name === contextName);
+    if (charterContext) return charterContext;
+    for (const pack of getAllNodePacks(machine.instance)) {
+      const context = resolvePackContext(machine.charter, pack);
+      if (context.name === contextName) return context;
+    }
+    for (const pack of machine.charter.packs) {
+      const context = resolvePackContext(machine.charter, pack);
+      if (context.name === contextName) return context;
+    }
+    return undefined;
   };
 
   const readScopeState = (scope: ExternalScope): unknown => {
-    if (scope.kind === "pack") {
-      return machine.instance.packStates?.[scope.packName];
+    if (scope.kind === "context") {
+      return machine.instance.context?.[scope.contextName];
     }
     const instance = findInstanceById(machine.instance, scope.instanceId);
     if (!instance) {
@@ -93,19 +101,19 @@ export function createExternalizeRuntime<AppMessage = unknown>(
   ): void => {
     const mode = options?.mode ?? "patch";
 
-    if (scope.kind === "pack") {
-      const pack = resolvePackByName(scope.packName);
-      if (!pack) {
-        throw new Error(`Externalized pack not found: ${scope.packName}`);
+    if (scope.kind === "context") {
+      const context = resolveContextByName(scope.contextName);
+      if (!context) {
+        throw new Error(`Externalized context not found: ${scope.contextName}`);
       }
-      const currentPackStates = machine.instance.packStates ?? {};
-      const currentState = currentPackStates[scope.packName] ?? pack.initialState ?? {};
+      const currentContext = machine.instance.context ?? {};
+      const currentState = currentContext[scope.contextName] ?? context.initialState ?? {};
       let nextState: unknown;
       if (mode === "replace") {
-        const parsed = pack.validator.safeParse(next);
+        const parsed = context.schema.safeParse(next);
         if (!parsed.success) {
           throw new Error(
-            `Externalized pack state validation failed (${scope.packName}): ${parsed.error.message}`,
+            `Externalized context state validation failed (${scope.contextName}): ${parsed.error.message}`,
           );
         }
         nextState = parsed.data;
@@ -113,20 +121,20 @@ export function createExternalizeRuntime<AppMessage = unknown>(
         const result = updateState(
           currentState as Record<string, unknown>,
           next as Partial<Record<string, unknown>>,
-          pack.validator as any,
+          context.schema as any,
         );
         if (!result.success) {
           throw new Error(
-            `Externalized pack state validation failed (${scope.packName}): ${result.error}`,
+            `Externalized context state validation failed (${scope.contextName}): ${result.error}`,
           );
         }
         nextState = result.state;
       }
       machine.instance = {
         ...machine.instance,
-        packStates: {
-          ...currentPackStates,
-          [scope.packName]: nextState,
+        context: {
+          ...currentContext,
+          [scope.contextName]: nextState,
         },
       };
       return;
@@ -169,23 +177,22 @@ export function createExternalizeRuntime<AppMessage = unknown>(
     const desired = new Map<string, DesiredRegistration<AppMessage>>();
     const rootInstanceId = machine.instance.id;
 
-    const packsByName = new Map<string, Pack>();
-    for (const pack of machine.charter.packs) {
-      packsByName.set(pack.name, pack);
+    const contextsByName = new Map<string, Context>();
+    for (const context of machine.charter.contexts) {
+      contextsByName.set(context.name, context);
     }
-    for (const pack of machine.instance.packs ?? machine.instance.node.packs ?? []) {
-      if (!packsByName.has(pack.name)) {
-        packsByName.set(pack.name, pack);
-      }
+    for (const pack of [...machine.charter.packs, ...getAllNodePacks(machine.instance)]) {
+      const context = resolvePackContext(machine.charter, pack);
+      contextsByName.set(context.name, context);
     }
 
-    for (const pack of packsByName.values()) {
-      const handler = pack.externalize?.state as ExternalStateHandler<unknown, AppMessage> | undefined;
+    for (const context of contextsByName.values()) {
+      const handler = context.externalize?.state as ExternalStateHandler<unknown, AppMessage> | undefined;
       if (!handler) continue;
       const scope: ExternalScope = {
-        kind: "pack",
-        id: `pack:${pack.name}`,
-        packName: pack.name,
+        kind: "context",
+        id: `context:${context.name}`,
+        contextName: context.name,
         rootInstanceId,
       };
       desired.set(scope.id, {
@@ -318,8 +325,8 @@ export function createExternalizeRuntime<AppMessage = unknown>(
     if (payload.kind === "state") {
       scopeId = `node:${payload.instanceId}`;
       patch = payload.patch;
-    } else if (payload.kind === "packState") {
-      scopeId = `pack:${payload.packName}`;
+    } else if (payload.kind === "context") {
+      scopeId = `context:${payload.contextName}`;
       patch = payload.patch;
     } else {
       return undefined;
@@ -334,7 +341,7 @@ export function createExternalizeRuntime<AppMessage = unknown>(
       scope: registration.scope,
       state: readScopeState(registration.scope),
       patch,
-      payload: payload as StateUpdatePayload | PackStateUpdatePayload,
+      payload: payload as StateUpdatePayload | ContextUpdatePayload,
       message,
       stepNumber,
       sequence: ++mutationSequence,
