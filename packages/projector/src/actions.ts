@@ -129,7 +129,7 @@ export function getActionBinding(action: AnyAction): ActionBinding | undefined {
 
 export function assertNodeActionStateCompatibility(
   action: AnyAction,
-  node: Node,
+  node: Node<any>,
   kind: "tool" | "command",
 ): void {
   if (action.state === null) {

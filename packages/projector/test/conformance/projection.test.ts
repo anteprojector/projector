@@ -35,14 +35,23 @@ describe("conformance: projection IR", () => {
       root: { id: "r", node: root },
       charter: charter({ executor }),
     });
-    machine.enqueueFrame({ messages: [{ type: "user", text: "summarize" }] });
+    machine.enqueueFrame({ messages: [{ type: "user", content: "summarize", text: "summarize" }] });
 
     await drain(runMachine(machine));
 
     const parent = requestForRuntime(requests, "instance:r");
     expect(parent.inference.systemParts).toEqual(["root", "policy"]);
     expect(parent.inference.dynamicParts).toEqual(["worker", "memory"]);
-    expect(parent.inference.history).toEqual([{ type: "user", text: "summarize" }]);
+    expect(parent.inference.history).toMatchObject([
+      { type: "user", content: "summarize", text: "summarize" },
+      {
+        type: "work",
+        kind: "activation",
+        runtimeInstanceId: "instance:r",
+        generatorId: "instance:r",
+        sourceFrameId: "frame-0",
+      },
+    ]);
   });
 
   it("hides child runtime aggregates from parent inference by default", async () => {
@@ -70,7 +79,7 @@ describe("conformance: projection IR", () => {
       root: { id: "r", node: root },
       charter: charter({ executor }),
     });
-    machine.enqueueFrame({ messages: [{ type: "user", text: "run" }] });
+    machine.enqueueFrame({ messages: [{ type: "user", content: "run", text: "run" }] });
 
     await drain(runMachine(machine));
 
@@ -102,7 +111,7 @@ describe("conformance: projection IR", () => {
       root: { id: "r", node: root },
       charter: charter({ executor }),
     });
-    machine.enqueueFrame({ messages: [{ type: "user", text: "run" }] });
+    machine.enqueueFrame({ messages: [{ type: "user", content: "run", text: "run" }] });
 
     await drain(runMachine(machine));
 
@@ -131,11 +140,11 @@ describe("conformance: projection IR", () => {
       {
         targetGenerator: generator(runtimeInstanceId, "worker"),
         frameHistory: [
-          frame("user", [{ type: "user", text: "default broadcast" }]),
-          frame("other-self", [{ type: "assistant", text: "hidden self" }]),
+          frame("user", [{ type: "user", content: "default broadcast", text: "default broadcast" }]),
+          frame("other-self", [{ type: "assistant", content: "hidden self", text: "hidden self" }]),
           frame(
             "worker-self",
-            [{ type: "assistant", text: "visible self" }],
+            [{ type: "assistant", content: "visible self", text: "visible self" }],
             { generatorId: runtimeInstanceId },
           ),
           frame("runtime-target", [
@@ -148,6 +157,7 @@ describe("conformance: projection IR", () => {
           frame("address-list-target", [
             {
               type: "assistant",
+              content: "visible address list target",
               text: "visible address list target",
               audience: [workerAddress],
             },
@@ -155,6 +165,7 @@ describe("conformance: projection IR", () => {
           frame("other-runtime", [
             {
               type: "assistant",
+              content: "hidden runtime target",
               text: "hidden runtime target",
               audience: { type: "instance", instanceId: "r" },
             },
@@ -164,8 +175,8 @@ describe("conformance: projection IR", () => {
     );
 
     expect(compiled.history).toEqual([
-      { type: "user", text: "default broadcast" },
-      { type: "assistant", text: "visible self" },
+      { type: "user", content: "default broadcast", text: "default broadcast" },
+      { type: "assistant", content: "visible self", text: "visible self" },
       {
         type: "tool",
         name: "trace",
@@ -173,6 +184,7 @@ describe("conformance: projection IR", () => {
       },
       {
         type: "assistant",
+        content: "visible address list target",
         text: "visible address list target",
         audience: [workerAddress],
       },
@@ -196,17 +208,27 @@ describe("conformance: projection IR", () => {
         targetGenerator: generator("instance:r", "primary"),
         activationId,
         frameHistory: [
-          frame("before", [{ type: "user", text: "queued before", delivery: "queued" }]),
+          frame("before", [{ type: "user", content: "queued before", text: "queued before", delivery: "queued" }]),
           activationFrame(activationId, "instance:r", "before"),
-          frame("after", [{ type: "user", text: "immediate after" }]),
-          frame("queued-after", [{ type: "user", text: "queued after", delivery: "queued" }]),
+          frame("after", [{ type: "user", content: "immediate after", text: "immediate after" }]),
+          frame("queued-after", [{ type: "user", content: "queued after", text: "queued after", delivery: "queued" }]),
         ],
       },
     );
 
     expect(compiled.history).toEqual([
-      { type: "user", text: "queued before", delivery: "queued" },
-      { type: "user", text: "immediate after" },
+      { type: "user", content: "queued before", text: "queued before", delivery: "queued" },
+      {
+        type: "work",
+        kind: "activation",
+        activationId,
+        runtimeInstanceId: "instance:r",
+        generatorId: "instance:r",
+        sourceFrameId: "before",
+        concurrencyKey: "instance:r",
+        concurrency: "serial",
+      },
+      { type: "user", content: "immediate after", text: "immediate after" },
     ]);
   });
 
@@ -227,12 +249,12 @@ describe("conformance: projection IR", () => {
         targetGenerator: generator("instance:r", "primary"),
         activationId,
         frameHistory: [
-          frame("before", [{ type: "user", text: "before" }]),
+          frame("before", [{ type: "user", content: "before", text: "before" }]),
           activationFrame(activationId, "instance:r", "before"),
-          frame("after", [{ type: "user", text: "hidden external after" }]),
+          frame("after", [{ type: "user", content: "hidden external after", text: "hidden external after" }]),
           frame(
             "same-activation",
-            [{ type: "assistant", text: "same activation" }],
+            [{ type: "assistant", content: "same activation", text: "same activation" }],
             {
               generatorId: "instance:r",
               runtimeInstanceId: "instance:r",
@@ -244,8 +266,18 @@ describe("conformance: projection IR", () => {
     );
 
     expect(compiled.history).toEqual([
-      { type: "user", text: "before" },
-      { type: "assistant", text: "same activation" },
+      { type: "user", content: "before", text: "before" },
+      {
+        type: "work",
+        kind: "activation",
+        activationId,
+        runtimeInstanceId: "instance:r",
+        generatorId: "instance:r",
+        sourceFrameId: "before",
+        concurrencyKey: "instance:r",
+        concurrency: "serial",
+      },
+      { type: "assistant", content: "same activation", text: "same activation" },
     ]);
   });
 
@@ -271,7 +303,7 @@ describe("conformance: projection IR", () => {
         {
           targetGenerator: generator("instance:r", "primary"),
           activationId: "activation-missing",
-          frameHistory: [frame("user", [{ type: "user", text: "hi" }])],
+          frameHistory: [frame("user", [{ type: "user", content: "hi", text: "hi" }])],
         },
       ),
     ).toThrow(/activation work frame/);

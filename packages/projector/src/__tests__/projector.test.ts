@@ -18,6 +18,7 @@ import {
   hydrateProjection,
   hydrateStateDescriptor,
   inspectCompiledProjectionTree,
+  isActorMessage,
   messagesBeforeLastCompletion,
   messagesSinceLastCompletion,
   resolveStates,
@@ -31,19 +32,27 @@ import {
   SYNTHETIC_ROOT_RUNTIME_ID,
   traversalFrames,
   type Action,
+  type ActorMessage,
+  type AssistantContentOf,
+  type AnyActorMessage,
   type Charter,
+  type CompiledInference,
+  type DefaultActorMessage,
   type ExecutorRunRequest,
   type Frame,
   type HistoryProjectionFunction,
   type Instance,
   type ProjectionFunction,
+  type UserContentOf,
 } from "../../index.ts";
 
 const executor = { run: () => ({ completionReason: "done" as const }) };
 
-function charter(overrides: Partial<Charter> = {}): Charter {
-  return createCharter({
-    executor,
+function charter<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  overrides: Partial<Charter<TActorMessage>> = {},
+): Charter<TActorMessage> {
+  return createCharter<TActorMessage>({
+    executor: executor as Charter<TActorMessage>["executor"],
     nodes: {},
     tools: {},
     commands: {},
@@ -52,6 +61,84 @@ function charter(overrides: Partial<Charter> = {}): Charter {
     ...overrides,
   });
 }
+
+describe("actor message typing", () => {
+  it("allows text-only actor messages while preserving typed content extraction", () => {
+    type RichActorMessage = ActorMessage<
+      { answer: string },
+      { blocks: Array<{ type: "text"; text: string }> }
+    >;
+
+    const textOnlyUser = { type: "user", text: "hello" } satisfies RichActorMessage;
+    const textOnlyAssistant = { type: "assistant", text: "hi" } satisfies RichActorMessage;
+
+    expect(isActorMessage(textOnlyUser)).toBe(true);
+    expect(isActorMessage(textOnlyAssistant)).toBe(true);
+    expectTypeOf<AssistantContentOf<RichActorMessage>>().toEqualTypeOf<{ answer: string }>();
+    expectTypeOf<UserContentOf<RichActorMessage>>().toEqualTypeOf<{
+      blocks: Array<{ type: "text"; text: string }>;
+    }>();
+  });
+
+  it("anchors actor message types at charter and validates node output against assistant content", () => {
+    type AppActorMessage = ActorMessage<{ answer: string }>;
+    const schema = z.object({ answer: z.string() });
+    const appNode = createNode<AppActorMessage>({
+      key: "typed",
+      output: {
+        schema,
+        mapTextBlock: (text) => ({ answer: text }),
+      },
+    });
+
+    const appCharter = createCharter<AppActorMessage>({
+      executor: executor as Charter<AppActorMessage>["executor"],
+      nodes: { typed: appNode },
+      tools: {},
+      commands: {},
+      states: {},
+      projections: {},
+    });
+
+    expectTypeOf(appCharter).toMatchTypeOf<Charter<AppActorMessage>>();
+
+    createNode<AppActorMessage>({
+      key: "badOutput",
+      output: {
+        // @ts-expect-error output.schema must parse the configured assistant content.
+        schema: z.string(),
+      },
+    });
+
+    const stringOutputNode = createNode({
+      key: "stringOutput",
+      output: { schema: z.string() },
+    });
+    createCharter<AppActorMessage>({
+      executor: executor as Charter<AppActorMessage>["executor"],
+      nodes: {
+        // @ts-expect-error registered nodes must use the charter actor message type.
+        stringOutput: stringOutputNode,
+      },
+      tools: {},
+      commands: {},
+      states: {},
+      projections: {},
+    });
+  });
+
+  it("types compiled inference history as all frame messages", () => {
+    type AppActorMessage = ActorMessage<{ answer: string }>;
+    const workMessage = {
+      type: "work",
+      kind: "completion",
+      activationId: "activation-1",
+      reason: "done",
+    } satisfies Extract<CompiledInference<AppActorMessage>["history"][number], { type: "work" }>;
+
+    expect(workMessage.type).toBe("work");
+  });
+});
 
 describe("node normalization", () => {
   it("applies node, runtime, state, and member defaults", () => {
@@ -261,12 +348,12 @@ describe("projection compilation", () => {
 
     const compiled = compileProjection(
       { id: "i", node: root },
-      { history: [{ type: "user", text: "kept" }] },
+      { history: [{ type: "user", content: "kept", text: "kept" }] },
     );
 
     expect(compiled.systemParts).toEqual([]);
     expect(compiled.dynamicParts).toEqual(["replace"]);
-    expect(compiled.history).toEqual([{ type: "user", text: "kept" }]);
+    expect(compiled.history).toEqual([{ type: "user", content: "kept", text: "kept" }]);
     expect(compiled.tools.map((tool) => tool.name)).toEqual(["dup"]);
   });
 
@@ -713,7 +800,7 @@ describe("retrieval aliases", () => {
 });
 
 describe("history projection", () => {
-  it("uses actor history projection by default for target generators", () => {
+  it("uses full message history projection by default for target generators", () => {
     const worker = createNode({
       key: "worker",
       runtime: { type: "worker", trigger: { type: "parent-completion" } },
@@ -724,29 +811,46 @@ describe("history projection", () => {
     const compiled = compileProjection(instance, {
       targetGenerator: generator("member:r/worker", "worker"),
       frameHistory: [
-        frame("one", [{ type: "user", text: "hello" }]),
-        frame("two", []),
-        frame("three", [{ type: "assistant", text: "hi", audience: "broadcast" }]),
+        frame("one", [{ type: "user", content: "hello", text: "hello" }]),
+        frame("two", [
+          {
+            type: "instance",
+            kind: "state.replace",
+            instanceId: "r",
+            stateKey: "status",
+            value: "ready",
+          },
+        ]),
+        frame("three", [{ type: "assistant", content: "hi", text: "hi", audience: "broadcast" }]),
       ],
     });
 
     expect(compiled.history).toEqual([
-      { type: "user", text: "hello" },
-      { type: "assistant", text: "hi", audience: "broadcast" },
+      { type: "user", content: "hello", text: "hello" },
+      {
+        type: "instance",
+        kind: "state.replace",
+        instanceId: "r",
+        stateKey: "status",
+        value: "ready",
+      },
+      { type: "assistant", content: "hi", text: "hi", audience: "broadcast" },
     ]);
   });
 
   it("lets runtime history projection return synthetic messages from frames and state", () => {
-    const projection: HistoryProjectionFunction = (ctx) => [
-      {
+    const projection: HistoryProjectionFunction = (ctx) => {
+      const text = JSON.stringify({
+        messages: actorMessages(ctx),
+        state: ctx.states.memory,
+        trigger: ctx.trigger.type,
+      });
+      return [{
         type: "user",
-        text: JSON.stringify({
-          messages: actorMessages(ctx),
-          state: ctx.states.memory,
-          trigger: ctx.trigger.type,
-        }),
-      },
-    ];
+        content: text,
+        text,
+      }];
+    };
     const worker = createNode({
       key: "worker",
       state: {
@@ -765,14 +869,19 @@ describe("history projection", () => {
 
     const compiled = compileProjection(instance, {
       targetGenerator: generator("member:r/worker", "worker"),
-      frameHistory: [frame("one", [{ type: "user", text: "remember tea" }])],
+      frameHistory: [frame("one", [{ type: "user", content: "remember tea", text: "remember tea" }])],
     });
 
     expect(compiled.history).toEqual([
       {
         type: "user",
+        content: JSON.stringify({
+          messages: [{ type: "user", content: "remember tea", text: "remember tea" }],
+          state: { memories: ["existing"] },
+          trigger: "parent-completion",
+        }),
         text: JSON.stringify({
-          messages: [{ type: "user", text: "remember tea" }],
+          messages: [{ type: "user", content: "remember tea", text: "remember tea" }],
           state: { memories: ["existing"] },
           trigger: "parent-completion",
         }),
@@ -782,7 +891,7 @@ describe("history projection", () => {
 
   it("qualifies duplicate state keys in history projection state values", () => {
     const projection: HistoryProjectionFunction = (ctx) => [
-      { type: "user", text: JSON.stringify(ctx.states) },
+      { type: "user", content: JSON.stringify(ctx.states), text: JSON.stringify(ctx.states) },
     ];
     const node = createNode({
       key: "agent",
@@ -806,7 +915,11 @@ describe("history projection", () => {
     );
 
     expect(compiled.history).toEqual([
-      { type: "user", text: JSON.stringify({ "shared:a": 1, "shared:b": 1 }) },
+      {
+        type: "user",
+        content: JSON.stringify({ "shared:a": 1, "shared:b": 1 }),
+        text: JSON.stringify({ "shared:a": 1, "shared:b": 1 }),
+      },
     ]);
   });
 
@@ -818,7 +931,7 @@ describe("history projection", () => {
       trigger: { type: "parent-completion" as const },
       states: {},
       history: [
-        frame("before", [{ type: "user", text: "old" }]),
+        frame("before", [{ type: "user", content: "old", text: "old" }]),
         {
           id: "completion",
           ...createRuntimeCompletionFrame({
@@ -828,15 +941,15 @@ describe("history projection", () => {
             completionReason: "done",
           }),
         },
-        frame("after", [{ type: "user", text: "new" }]),
-        frame("other", [{ type: "assistant", text: "answer" }]),
+        frame("after", [{ type: "user", content: "new", text: "new" }]),
+        frame("other", [{ type: "assistant", content: "answer", text: "answer" }]),
       ],
     };
 
-    expect(messagesBeforeLastCompletion(ctx)).toEqual([{ type: "user", text: "old" }]);
+    expect(messagesBeforeLastCompletion(ctx)).toEqual([{ type: "user", content: "old", text: "old" }]);
     expect(messagesSinceLastCompletion(ctx)).toEqual([
-      { type: "user", text: "new" },
-      { type: "assistant", text: "answer" },
+      { type: "user", content: "new", text: "new" },
+      { type: "assistant", content: "answer", text: "answer" },
     ]);
   });
 
@@ -844,6 +957,8 @@ describe("history projection", () => {
     const historyProjection: HistoryProjectionFunction = () => [];
     const registry = charter({ historyProjections: { memory: historyProjection } });
 
+    expect(serializeHistoryProjection({ type: "messages" }, registry)).toEqual({ type: "messages" });
+    expect(hydrateHistoryProjection({ type: "messages" }, registry)).toEqual({ type: "messages" });
     expect(serializeHistoryProjection({ type: "actor" }, registry)).toEqual({ type: "actor" });
     expect(hydrateHistoryProjection({ type: "actor" }, registry)).toEqual({ type: "actor" });
     expect(serializeHistoryProjection(historyProjection, registry)).toBe("memory");
@@ -872,8 +987,8 @@ describe("history projection", () => {
         targetGenerator: generator(runtimeInstanceId, "worker"),
         activationId,
         frameHistory: [
-          frame("before", [{ type: "user", text: "queued before", delivery: "queued" }]),
-          frame("self-other", [{ type: "assistant", text: "hidden self" }]),
+          frame("before", [{ type: "user", content: "queued before", text: "queued before", delivery: "queued" }]),
+          frame("self-other", [{ type: "assistant", content: "hidden self", text: "hidden self" }]),
           {
             id: "activation",
             ...createActivationFrame({
@@ -885,24 +1000,34 @@ describe("history projection", () => {
               concurrency: "serial",
             }),
           },
-          frame("after", [{ type: "user", text: "hidden by snapshot" }]),
+          frame("after", [{ type: "user", content: "hidden by snapshot", text: "hidden by snapshot" }]),
           frame("queued-after", [
-            { type: "user", text: "hidden queued", delivery: "queued" },
+            { type: "user", content: "hidden queued", text: "hidden queued", delivery: "queued" },
           ]),
           {
             id: "same-activation",
             generatorId: runtimeInstanceId,
             runtimeInstanceId,
             activationId,
-            messages: [{ type: "assistant", text: "same activation" }],
+            messages: [{ type: "assistant", content: "same activation", text: "same activation" }],
           },
         ],
       },
     );
 
     expect(compiled.history).toEqual([
-      { type: "user", text: "queued before", delivery: "queued" },
-      { type: "assistant", text: "same activation" },
+      { type: "user", content: "queued before", text: "queued before", delivery: "queued" },
+      {
+        type: "work",
+        kind: "activation",
+        activationId,
+        runtimeInstanceId,
+        generatorId: runtimeInstanceId,
+        sourceFrameId: "before",
+        concurrencyKey: runtimeInstanceId,
+        concurrency: "serial",
+      },
+      { type: "assistant", content: "same activation", text: "same activation" },
     ]);
   });
 });
@@ -924,7 +1049,7 @@ describe("commands and instance mutations", () => {
         expect(ctx.state).toEqual({ count: 1 });
         ctx.replaceState?.({ count: input.value });
         expect(ctx.state).toEqual({ count: 4 });
-        return { type: "assistant", text: "updated", audience: "broadcast" };
+        return { type: "assistant", content: "updated", text: "updated", audience: "broadcast" };
       },
     });
     const controls = createNode({
@@ -949,7 +1074,7 @@ describe("commands and instance mutations", () => {
       }),
     ).resolves.toEqual({
       success: true,
-      value: { type: "assistant", text: "updated", audience: "broadcast" },
+      value: { type: "assistant", content: "updated", text: "updated", audience: "broadcast" },
       clientId: "client-1",
     });
 
@@ -958,7 +1083,7 @@ describe("commands and instance mutations", () => {
       { type: "command", name: "setCounter", clientId: "client-1" },
       { type: "instance", kind: "state.patch", instanceId: "r", stateKey: "counter" },
       { type: "instance", kind: "state.replace", instanceId: "r", stateKey: "counter" },
-      { type: "assistant", text: "updated", audience: "broadcast" },
+      { type: "assistant", content: "updated", text: "updated", audience: "broadcast" },
     ]);
   });
 
@@ -996,7 +1121,7 @@ describe("commands and instance mutations", () => {
       ],
     });
 
-    const frames = await collectFrames(runMachine(machine, { startWork: false }));
+    const frames = await collectFrames(runMachine(machine, { scheduleWork: false }));
     const activation = frames.find((item) => item.messages[0]?.type === "work");
 
     expect(instance.children?.map((child) => child.id)).toEqual(["child"]);
@@ -1098,7 +1223,7 @@ describe("work scheduling", () => {
       charter: charter({ executor: runtimeExecutor }),
     });
     const userFrame = machine.enqueueFrame({
-      messages: [{ type: "user", text: "remember my name" }],
+      messages: [{ type: "user", content: "remember my name", text: "remember my name" }],
     });
 
     const iterator = runMachine(machine)[Symbol.asyncIterator]();
@@ -1187,7 +1312,7 @@ describe("work scheduling", () => {
       root: { id: "r", node: root },
       charter: charter({ executor: runtimeExecutor }),
     });
-    machine.enqueueFrame({ messages: [{ type: "user", text: "go" }] });
+    machine.enqueueFrame({ messages: [{ type: "user", content: "go", text: "go" }] });
 
     const iterator = runMachine(machine)[Symbol.asyncIterator]();
     await iterator.next();
@@ -1209,13 +1334,13 @@ describe("work scheduling", () => {
     expect(machine.frames.map((frame) => frame.messages[0])).toMatchObject([
       { type: "user" },
       { type: "work", kind: "activation", runtimeInstanceId: "instance:r" },
-      { type: "assistant", text: "instance:r" },
+      { type: "assistant", content: "instance:r", text: "instance:r" },
       { type: "work", kind: "completion" },
     ]);
     expect(calls).toEqual(["instance:r"]);
 
     await expect(assistant).resolves.toMatchObject({
-      value: { messages: [{ type: "assistant", text: "instance:r" }] },
+      value: { messages: [{ type: "assistant", content: "instance:r", text: "instance:r" }] },
     });
     expect(calls).toEqual(["instance:r"]);
 
@@ -1235,7 +1360,7 @@ describe("work scheduling", () => {
     expect(calls).toEqual(["instance:r"]);
   });
 
-  it("does not reconcile new work after stopAndDrainFrames stops the run", async () => {
+  it("stops scheduling executor work while still yielding activation frames", async () => {
     const calls: string[] = [];
     const runtimeExecutor = {
       run: async (request: ExecutorRunRequest) => {
@@ -1257,7 +1382,7 @@ describe("work scheduling", () => {
       root: { id: "r", node: root },
       charter: charter({ executor: runtimeExecutor }),
     });
-    machine.enqueueFrame({ messages: [{ type: "user", text: "go" }] });
+    machine.enqueueFrame({ messages: [{ type: "user", content: "go", text: "go" }] });
 
     const run = runMachine(machine);
     const iterator = run[Symbol.asyncIterator]();
@@ -1272,17 +1397,30 @@ describe("work scheduling", () => {
       reason: "end-turn",
     });
 
-    await expect(run.stopAndDrainFrames()).resolves.toEqual([]);
+    run.stopSchedulingWork();
+    const memoryActivation = await iterator.next();
+    expect(memoryActivation.value?.messages[0]).toMatchObject({
+      type: "work",
+      kind: "activation",
+      runtimeInstanceId: "member:r/memory",
+    });
+    const memoryActivationId = (memoryActivation.value?.messages[0] as { activationId?: string } | undefined)
+      ?.activationId;
+    expect(memoryActivationId).toBeDefined();
     await expect(iterator.next()).resolves.toMatchObject({ done: true });
+    expect(calls).toEqual(["instance:r"]);
     expect(
       machine.frames
         .flatMap((frame) => frame.messages)
         .some((message) =>
           message.type === "work" &&
-            message.kind === "activation" &&
-            message.runtimeInstanceId === "member:r/memory"
+            message.kind === "completion" &&
+            message.activationId === memoryActivationId
         ),
     ).toBe(false);
+
+    await collectFrames(runMachine(machine));
+    expect(calls).toEqual(["instance:r", "member:r/memory"]);
   });
 
   it("reconciles deterministic activation frames idempotently without starting work", async () => {
@@ -1298,9 +1436,9 @@ describe("work scheduling", () => {
     });
     first.enqueueFrame({
       id: "user-1",
-      messages: [{ type: "user", text: "hi" }],
+      messages: [{ type: "user", content: "hi", text: "hi" }],
     } as Frame);
-    const firstFrames = await collectFrames(runMachine(first, { startWork: false }));
+    const firstFrames = await collectFrames(runMachine(first, { scheduleWork: false }));
     const firstActivation = firstFrames.find((item) => item.messages[0]?.type === "work");
 
     const second = createMachine({
@@ -1310,13 +1448,13 @@ describe("work scheduling", () => {
     });
     second.enqueueFrame({
       id: "user-1",
-      messages: [{ type: "user", text: "hi" }],
+      messages: [{ type: "user", content: "hi", text: "hi" }],
     } as Frame);
-    const secondFrames = await collectFrames(runMachine(second, { startWork: false }));
+    const secondFrames = await collectFrames(runMachine(second, { scheduleWork: false }));
     const secondActivation = secondFrames.find((item) => item.messages[0]?.type === "work");
 
     expect(firstActivation?.messages[0]).toMatchObject(secondActivation?.messages[0] ?? {});
-    await expect(collectFrames(runMachine(first, { startWork: false }))).resolves.toEqual([]);
+    await expect(collectFrames(runMachine(first, { scheduleWork: false }))).resolves.toEqual([]);
   });
 
   it("does not let a runtime actor frame trigger its own runtime again", async () => {
@@ -1333,10 +1471,10 @@ describe("work scheduling", () => {
       generatorId: "instance:r",
       runtimeInstanceId: "instance:r",
       activationId: "activation-existing",
-      messages: [{ type: "assistant", text: "self output" }],
+      messages: [{ type: "assistant", content: "self output", text: "self output" }],
     });
 
-    const frames = await collectFrames(runMachine(machine, { startWork: false }));
+    const frames = await collectFrames(runMachine(machine, { scheduleWork: false }));
     expect(frames).toHaveLength(1);
     expect(frames[0]?.messages[0]).toMatchObject({ type: "assistant" });
   });
@@ -1351,7 +1489,7 @@ describe("work scheduling", () => {
       charter: charter({ executor: runtimeExecutor }),
     });
     machine.enqueueFrame({
-      messages: [{ type: "user", text: "hi" }],
+      messages: [{ type: "user", content: "hi", text: "hi" }],
     });
 
     const frames = await collectFrames(runMachine(machine));
@@ -1379,7 +1517,7 @@ describe("work scheduling", () => {
       root: createRoot([{ id: "r", node: root }]),
       charter: charter({ executor: runtimeExecutor }),
     });
-    machine.enqueueFrame({ messages: [{ type: "user", text: "hi" }] });
+    machine.enqueueFrame({ messages: [{ type: "user", content: "hi", text: "hi" }] });
 
     await collectFrames(runMachine(machine));
 
@@ -1394,7 +1532,9 @@ describe("work scheduling", () => {
         if (!context) return;
         syncs.push({
           visibleFrameIds: context.visibleFrames.map((frame) => frame.id),
-          historyTexts: context.inference.history.map((message) => message.text ?? ""),
+          historyTexts: context.inference.history
+            .filter(isActorMessage)
+            .map((message) => message.text ?? ""),
         });
       },
     };
@@ -1406,11 +1546,11 @@ describe("work scheduling", () => {
     const transcriptFrame = machine.enqueueFrame({
       id: "transcript-1",
       inert: true,
-      messages: [{ type: "user", text: "voice transcript" }],
+      messages: [{ type: "user", content: "voice transcript", text: "voice transcript" }],
     } as Frame);
     const userFrame = machine.enqueueFrame({
       id: "user-1",
-      messages: [{ type: "user", text: "hi" }],
+      messages: [{ type: "user", content: "hi", text: "hi" }],
     } as Frame);
     const persisted: string[] = [];
 
@@ -1432,6 +1572,46 @@ describe("work scheduling", () => {
       [persisted[3]!],
     ]);
     expect(syncs[0]?.historyTexts).toEqual(["voice transcript", "hi"]);
+  });
+
+  it("ingests inert frames without enqueue notifications or pending yields", async () => {
+    const root = createNode({
+      key: "root",
+      state: {
+        key: "counter",
+        schema: z.object({ count: z.number() }),
+        init: { count: 0 },
+      },
+      runtime: { type: "primary", trigger: { type: "actor-frame" } },
+    });
+    const machine = createMachine({
+      id: "inert-ingest-demo",
+      root: { id: "r", node: root },
+      charter: charter(),
+    });
+    const observed: string[] = [];
+    machine.subscribe((frame) => {
+      observed.push(frame.id);
+    });
+
+    machine.ingestInertFrame({
+      id: "external-state-update",
+      inert: true,
+      messages: [
+        {
+          type: "instance",
+          kind: "state.patch",
+          instanceId: "r",
+          stateKey: "counter",
+          patch: { count: 1 },
+        },
+        { type: "user", content: "imported context", text: "imported context" },
+      ],
+    });
+
+    expect(observed).toEqual([]);
+    expect(resolveStates(machine.root)[0]?.container.value).toEqual({ count: 1 });
+    await expect(collectFrames(runMachine(machine, { scheduleWork: false }))).resolves.toEqual([]);
   });
 
   it("creates external action contexts that patch and replace bound state", async () => {
@@ -1512,16 +1692,17 @@ describe("work scheduling", () => {
       root: { id: "r", node: root },
       charter: charter({ executor: runtimeExecutor }),
     });
-    machine.enqueueFrame({ messages: [{ type: "user", text: "hi" }] });
+    machine.enqueueFrame({ messages: [{ type: "user", content: "hi", text: "hi" }] });
 
     const frames = await collectFrames(runMachine(machine));
 
     expect(frames.map((frame) => frame.messages[0])).toMatchObject([
-      { type: "user", text: "hi" },
+      { type: "user", content: "hi", text: "hi" },
       { type: "work", kind: "activation" },
       { type: "tool", name: "trace", text: "ran" },
       {
         type: "assistant",
+        content: "hello from the model",
         text: "hello from the model",
         audience,
       },
@@ -1538,14 +1719,12 @@ describe("work scheduling", () => {
   });
 
   it("maps text output through an output schema and mapper", async () => {
+    type StructuredActorMessage = ActorMessage<{ answer: string }>;
     const structuredOutputSchema = z.object({
-      type: z.literal("tool"),
-      name: z.literal("structured"),
-      value: z.object({ answer: z.string() }),
-      audience: z.literal("broadcast").optional(),
+      answer: z.string(),
     });
     const runtimeExecutor = {
-      run: async (request: ExecutorRunRequest) => {
+      run: async (request: ExecutorRunRequest<StructuredActorMessage>) => {
         expect(request.output?.schema).toBe(structuredOutputSchema);
         return {
           completionReason: "done" as const,
@@ -1553,15 +1732,13 @@ describe("work scheduling", () => {
         };
       },
     };
-    const root = createNode({
+    const root = createNode<StructuredActorMessage>({
       key: "root",
       output: {
         audience: "broadcast",
         schema: structuredOutputSchema,
         mapTextBlock: (text) => ({
-          type: "tool" as const,
-          name: "structured" as const,
-          value: JSON.parse(text) as { answer: string },
+          answer: (JSON.parse(text) as { answer: string }).answer,
         }),
       },
       runtime: { type: "primary", trigger: { type: "actor-frame" } },
@@ -1569,16 +1746,16 @@ describe("work scheduling", () => {
     const machine = createMachine({
       id: "structured-output-demo",
       root: { id: "r", node: root },
-      charter: charter({ executor: runtimeExecutor }),
+      charter: charter<StructuredActorMessage>({ executor: runtimeExecutor }),
     });
-    machine.enqueueFrame({ messages: [{ type: "user", text: "hi" }] });
+    machine.enqueueFrame({ messages: [{ type: "user", content: "hi", text: "hi" }] });
 
     const frames = await collectFrames(runMachine(machine));
 
     expect(frames[2]?.messages[0]).toEqual({
-      type: "tool",
-      name: "structured",
-      value: { answer: "yes" },
+      type: "assistant",
+      content: { answer: "yes" },
+      text: JSON.stringify({ answer: "yes" }),
       audience: "broadcast",
     });
   });
@@ -1676,12 +1853,13 @@ describe("serialization and refs", () => {
   });
 
   it("serializes inline output schema and rejects inline output mappers", () => {
-    const outputSchema = z.object({ type: z.literal("assistant"), text: z.string() });
-    const inline = createNode({
+    type StructuredActorMessage = ActorMessage<{ answer: string }>;
+    const outputSchema = z.object({ answer: z.string() });
+    const inline = createNode<StructuredActorMessage>({
       key: "inlineOutput",
       output: { audience: "broadcast", schema: outputSchema },
     });
-    const registry = charter({});
+    const registry = charter<StructuredActorMessage>({});
 
     const serialized = serializeInstance({ id: "i", node: inline }, registry);
 
@@ -1690,15 +1868,12 @@ describe("serialization and refs", () => {
     }
     expect(serialized.node.output?.audience).toBe("broadcast");
     const hydrated = hydrateInstance(serialized, registry);
-    expect(hydrated.node.output?.schema?.parse({ type: "assistant", text: "ok" })).toEqual({
-      type: "assistant",
-      text: "ok",
-    });
+    expect(hydrated.node.output?.schema?.parse({ answer: "ok" })).toEqual({ answer: "ok" });
 
-    const mapped = createNode({
+    const mapped = createNode<StructuredActorMessage>({
       key: "mappedOutput",
       output: {
-        mapTextBlock: (text) => ({ type: "assistant" as const, text }),
+        mapTextBlock: (text) => ({ answer: text }),
       },
     });
     expect(() => serializeInstance({ id: "m", node: mapped }, registry)).toThrow(
@@ -1728,8 +1903,10 @@ function frame(id: string, messages: Frame["messages"]): Frame {
   return { id, generatorId: id, messages };
 }
 
-async function collectFrames(run: AsyncIterable<Frame>): Promise<Frame[]> {
-  const frames: Frame[] = [];
+async function collectFrames<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  run: AsyncIterable<Frame<TActorMessage>>,
+): Promise<Frame<TActorMessage>[]> {
+  const frames: Frame<TActorMessage>[] = [];
   for await (const frame of run) {
     frames.push(frame);
   }

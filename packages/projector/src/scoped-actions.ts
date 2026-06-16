@@ -1,20 +1,20 @@
 import type { ProjectionFrame } from "./frames.ts";
-import type { AnyAction, Charter, Node } from "./types.ts";
+import type { AnyAction, AnyActorMessage, Charter, Node } from "./types.ts";
 
 export type ActionKind = "tool" | "command";
 
-export function resolveFrameTools(
-  frame: ProjectionFrame,
-  charter: Charter | undefined,
+export function resolveFrameTools<TActorMessage extends AnyActorMessage>(
+  frame: ProjectionFrame<TActorMessage>,
+  charter: Charter<TActorMessage> | undefined,
 ): AnyAction[] {
   return frame.node.toolRefs.map((name) =>
     resolveScopedAction(frame, name, "tool", charter)
   );
 }
 
-export function resolveFrameCommands(
-  frame: ProjectionFrame,
-  charter: Charter | undefined,
+export function resolveFrameCommands<TActorMessage extends AnyActorMessage>(
+  frame: ProjectionFrame<TActorMessage>,
+  charter: Charter<TActorMessage> | undefined,
 ): AnyAction[] {
   return frame.node.commandRefs.map((name) =>
     resolveScopedAction(frame, name, "command", charter)
@@ -22,10 +22,10 @@ export function resolveFrameCommands(
 }
 
 export function resolveScopedAction(
-  frame: ProjectionFrame,
+  frame: ProjectionFrame<any>,
   name: string,
   kind: ActionKind,
-  charter: Charter | undefined,
+  charter: Charter<any> | undefined,
 ): AnyAction {
   const selfBinding = actionBinding(frame.node, name, kind);
   if (selfBinding) {
@@ -49,7 +49,7 @@ export function resolveScopedAction(
 }
 
 function actionBinding(
-  node: Node,
+  node: Node<any>,
   name: string,
   kind: ActionKind,
 ): AnyAction | undefined {

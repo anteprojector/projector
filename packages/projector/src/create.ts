@@ -2,6 +2,8 @@ import type {
   ActionConfigEntry,
   ActionBindings,
   AnyAction,
+  AnyActorMessage,
+  DefaultActorMessage,
   Node,
   NodeConfig,
   NormalizedRuntime,
@@ -33,7 +35,10 @@ type InferState<TConfig> = TConfig extends { state: StateDescriptor<infer S> }
   ? NormalizedStateDescriptor<S>
   : undefined;
 
-export type CreatedNode<TConfig extends NodeConfig> = Node & {
+export type CreatedNode<
+  TActorMessage extends AnyActorMessage,
+  TConfig extends NodeConfig<TActorMessage>,
+> = Node<TActorMessage> & {
   state: InferState<TConfig>;
   __tools?: InferActionMetas<TConfig, "tools">;
   __commands?: InferActionMetas<TConfig, "commands">;
@@ -53,7 +58,9 @@ export function normalizeStaticProjection(
   return { ...DEFAULT_STATIC_PROJECTION, ...projection };
 }
 
-export function normalizeProjection(projection: Projection | undefined): Projection {
+export function normalizeProjection<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  projection: Projection<TActorMessage> | undefined,
+): Projection<TActorMessage> {
   if (!projection) {
     return { ...DEFAULT_STATIC_PROJECTION };
   }
@@ -76,7 +83,9 @@ export function normalizeStateDescriptor<S>(
   };
 }
 
-export function normalizeRuntime(runtime: Runtime | undefined): NormalizedRuntime {
+export function normalizeRuntime<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  runtime: Runtime<TActorMessage> | undefined,
+): NormalizedRuntime<TActorMessage> {
   if (!runtime || !runtime.type || runtime.type === "component") {
     return { type: "component" };
   }
@@ -86,7 +95,7 @@ export function normalizeRuntime(runtime: Runtime | undefined): NormalizedRuntim
       ...runtime,
       concurrency: runtime.concurrency ?? "serial",
       activationHistory: runtime.activationHistory ?? "live",
-      historyProjection: runtime.historyProjection ?? { type: "actor" },
+      historyProjection: runtime.historyProjection ?? { type: "messages" },
       boundaryProjection: normalizeProjection(runtime.boundaryProjection ?? DEFAULT_BOUNDARY_PROJECTION),
     };
   }
@@ -99,12 +108,15 @@ export function normalizeRuntime(runtime: Runtime | undefined): NormalizedRuntim
     ...runtime,
     concurrency: runtime.concurrency ?? "serial",
     activationHistory: runtime.activationHistory ?? "live",
-    historyProjection: runtime.historyProjection ?? { type: "actor" },
+    historyProjection: runtime.historyProjection ?? { type: "messages" },
     boundaryProjection: normalizeProjection(runtime.boundaryProjection ?? DEFAULT_BOUNDARY_PROJECTION),
   };
 }
 
-export function createNode<const TConfig extends NodeConfig>(config: TConfig): CreatedNode<TConfig> {
+export function createNode<
+  TActorMessage extends AnyActorMessage = DefaultActorMessage,
+  const TConfig extends NodeConfig<TActorMessage> = NodeConfig<TActorMessage>,
+>(config: TConfig): CreatedNode<TActorMessage, TConfig> {
   const key = config.key ?? config.name;
   if (!key) {
     throw new Error("Node requires key or name");
@@ -126,7 +138,7 @@ export function createNode<const TConfig extends NodeConfig>(config: TConfig): C
     output: config.output,
     projection: normalizeProjection(config.projection),
     runtime: normalizeRuntime(config.runtime),
-  } as CreatedNode<TConfig>;
+  } as CreatedNode<TActorMessage, TConfig>;
 }
 
 function normalizeActionEntries(entries: readonly ActionConfigEntry[]): {
@@ -149,8 +161,10 @@ function normalizeActionEntries(entries: readonly ActionConfigEntry[]): {
   return { bindings, refs };
 }
 
-function normalizeMembers(configs: Node[]): Node[] {
-  const members: Node[] = [];
+function normalizeMembers<TActorMessage extends AnyActorMessage>(
+  configs: Node<TActorMessage>[],
+): Node<TActorMessage>[] {
+  const members: Node<TActorMessage>[] = [];
   const keys = new Set<string>();
 
   for (const node of configs) {

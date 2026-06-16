@@ -69,14 +69,48 @@ type AudienceTarget = RuntimeAddress;
 
 type Audience = "self" | "broadcast" | AudienceTarget | AudienceTarget[];
 
-/**
- * Output configuration for implicit LLM text responses.
- * @typeParam M - The application message type this output maps to.
- */
-type OutputConfig<M = AssistantMessage> = {
+type UserMessage<TContent = string> = {
+  type: "user";
+  content?: TContent;
+  text?: string;
   audience?: Audience;
-  schema?: z.ZodType<M>;
-  mapTextBlock?: (text: string) => M;
+  delivery?: MessageDelivery;
+};
+
+type AssistantMessage<TContent = string> = {
+  type: "assistant";
+  content?: TContent;
+  text?: string;
+  audience?: Audience;
+  delivery?: MessageDelivery;
+};
+
+type ToolMessage = {
+  type: "tool";
+  name: string;
+  text?: string;
+  value?: unknown;
+  audience?: Audience;
+  delivery?: MessageDelivery;
+};
+
+type ActorMessage<
+  TAssistantContent = string,
+  TUserContent = string,
+> = UserMessage<TUserContent> | AssistantMessage<TAssistantContent> | ToolMessage;
+
+type AnyActorMessage = ActorMessage<any, any>;
+type DefaultActorMessage = ActorMessage<string>;
+
+type AssistantContentOf<TActorMessage> =
+  Extract<TActorMessage, { type: "assistant" }> extends { content?: infer C }
+    ? C
+    : never;
+
+type OutputConfig<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
+  audience?: Audience;
+  schema?: z.ZodType<AssistantContentOf<TActorMessage>>;
+  mapTextBlock?: (text: string) => AssistantContentOf<TActorMessage>;
 };
 
 type RuntimeTrigger =
@@ -89,51 +123,60 @@ type RuntimeConcurrency = "serial" | "parallel";
 type ActivationHistory = "live" | "snapshot";
 
 type ActorHistoryProjection = { type: "actor" };
+type MessageHistoryProjection = { type: "messages" };
 
-type HistoryProjection =
-  | ActorHistoryProjection // default
+type HistoryProjection<TActorMessage extends AnyActorMessage = DefaultActorMessage> =
+  | ActorHistoryProjection
+  | MessageHistoryProjection // default
   | HistoryProjectionFunctionRef
-  | HistoryProjectionFunction;
+  | HistoryProjectionFunction<TActorMessage>;
 
-type HistoryProjectionContext = {
+type HistoryProjectionContext<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   target: Generator;
   runtimeInstanceId: RuntimeInstanceId;
   activationId: string;
   trigger: RuntimeTrigger;
-  history: Frame[];
+  history: Frame<TActorMessage>[];
   states: Record<StateKey, unknown>;
 };
 
-type HistoryProjectionFunction = (
-  ctx: HistoryProjectionContext,
-) => ActorMessage[];
+type HistoryProjectionFunction<TActorMessage extends AnyActorMessage = DefaultActorMessage> = (
+  ctx: HistoryProjectionContext<TActorMessage>,
+) => FrameMessage<TActorMessage>[];
 
-type TriggeredRuntimeOptions = {
+type TriggeredRuntimeOptions<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   trigger: RuntimeTrigger;
   concurrency?: RuntimeConcurrency; // default "serial"
   activationHistory?: ActivationHistory; // default "live"
-  historyProjection?: HistoryProjection; // default { type: "actor" }
+  historyProjection?: HistoryProjection<TActorMessage>; // default { type: "messages" }
 };
 
-type Runtime =
+type Runtime<TActorMessage extends AnyActorMessage = DefaultActorMessage> =
   | { type?: "component" } // default
   | ({
       type: "primary";
       boundaryProjection?: Projection; // default { mode: "hidden" }
-    } & TriggeredRuntimeOptions)
+    } & TriggeredRuntimeOptions<TActorMessage>)
   | ({
       type: "worker";
       boundaryProjection?: Projection; // default { mode: "hidden" }
-    } & TriggeredRuntimeOptions);
+    } & TriggeredRuntimeOptions<TActorMessage>);
 ```
+
+App-supplied user and assistant actor messages may be text-only, content-only,
+or both. `text` is the portable rendering fallback. `content` is app-owned rich
+message content and is optional even when the content type parameter is
+specified.
 
 `node.output` controls how implicit LLM text output is shaped after executor
 completion. `output.schema`, when present, is passed to the executor as the
-runtime's structured-output schema. `output.mapTextBlock`, when present, maps the
-executor's returned text block into the application message shape described by
-that schema. If no mapper is provided, returned text becomes an
-`AssistantMessage`. `output.audience` is applied to the implicit or mapped actor
-message when the mapped message does not already carry an explicit audience.
+runtime's structured-output schema and is type-checked against the configured
+assistant content type. `output.mapTextBlock`, when present, maps the executor's
+returned text block into that assistant content type before schema validation. If
+no mapper is provided, returned text becomes the assistant content. The framework
+then wraps the content in an `AssistantMessage` with `content` set and `text`
+preserved as the raw LLM text. `output.audience` is applied when the implicit
+assistant message does not already carry an explicit audience.
 Fully formed frames or messages emitted by tools, actions, or executors keep
 their own audience or use their message-type default.
 
@@ -146,13 +189,15 @@ parallel workers whose mid-loop context should not be steered by unrelated
 frames arriving after the activation starts.
 
 `runtime.historyProjection` controls how a runtime converts its visible frame
-history into executor-visible `ActorMessage[]`. The default `{ type: "actor" }`
-projection keeps actor messages in durable frame order after the normal audience,
-delivery, activation-history, and runtime-metadata filtering has selected the
-visible frames. A custom history projection receives the target generator
-metadata, the activation id, the runtime trigger, the filtered frame history, and
-current resolved state values. It returns synthetic or filtered actor messages
-for the executor history without mutating durable frames or projection sections.
+history into `CompiledInference.history`. The default `{ type: "messages" }`
+projection keeps all visible `FrameMessage`s in durable frame/message order after
+the normal audience, delivery, activation-history, and runtime-metadata filtering
+has selected the visible frames. The built-in `{ type: "actor" }` projection is a
+convenience that extracts only actor messages. A custom history projection
+receives the target generator metadata, the activation id, the runtime trigger,
+the filtered frame history, and current resolved state values. It returns
+synthetic or filtered frame messages for executor history without mutating
+durable frames or projection sections.
 
 History projection functions follow the same charter ref rules as other
 registered executable values. If registered in `charter.historyProjections`,
@@ -176,11 +221,11 @@ type StateContainer<S = unknown> = {
   value: S;
 };
 
-type Instance = {
+type Instance<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   id: string;
-  node: Node;
+  node: Node<TActorMessage>;
   states?: Record<string, StateContainer>;
-  children?: Instance[]; // removable runtime children
+  children?: Instance<TActorMessage>[]; // removable runtime children
 };
 ```
 
@@ -231,7 +276,7 @@ type ActionRef = string;
 type ActionConfigEntry = Action | ActionRef;
 type ActionBindings = Record<string, Action>;
 
-type NodeConfig = {
+type NodeConfig<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   key?: string;
   sourceNodeKey?: string;
   name?: string;
@@ -239,13 +284,13 @@ type NodeConfig = {
   tools?: ActionConfigEntry[];
   commands?: ActionConfigEntry[];
   state?: StateDescriptor;
-  members?: Node[]; // required/static compositional members
-  output?: OutputConfig;
+  members?: Node<TActorMessage>[]; // required/static compositional members
+  output?: OutputConfig<TActorMessage>;
   projection?: Projection;
-  runtime?: Runtime;
+  runtime?: Runtime<TActorMessage>;
 };
 
-type Node = {
+type Node<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   key: string;
   sourceNodeKey?: string;
   name?: string;
@@ -255,10 +300,10 @@ type Node = {
   commandBindings: ActionBindings;
   commandRefs: ActionRef[];
   state?: StateDescriptor;
-  members: Node[];
-  output?: OutputConfig;
+  members: Node<TActorMessage>[];
+  output?: OutputConfig<TActorMessage>;
   projection: Projection;
-  runtime: Runtime;
+  runtime: Runtime<TActorMessage>;
 };
 ```
 
@@ -275,9 +320,12 @@ duplicate sibling member keys are an error. If an app needs the same logical
 node twice under one parent, it should create distinct wrapper nodes with unique
 keys.
 
-Only keep `createNode(config)` for the first pass. A node may attach at most one
-state descriptor through `config.state`. Do not add `createSkillNode`,
-`createWorkerNode`, or `createPrimaryNode` initially.
+Only keep `createNode<TActorMessage>(config)` for the first pass. A node may
+attach at most one state descriptor through `config.state`. Do not add
+`createSkillNode`, `createWorkerNode`, or `createPrimaryNode` initially. Most
+apps should anchor the actor message type at `createCharter<TActorMessage>()`;
+`createNode<TActorMessage>()` is available when a node is authored away from that
+charter context or needs its `output.schema` checked locally.
 
 ## Charter
 
@@ -291,18 +339,27 @@ type ProjectionFunctionRef = Ref;
 type StateDescriptorRef = Ref;
 type HistoryProjectionFunctionRef = Ref;
 
-type Charter = {
+type Charter<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   key?: string;
   version?: string;
-  executor: Executor;
-  nodes: Record<string, Node>;
+  executor: Executor<TActorMessage>;
+  nodes: Record<string, Node<TActorMessage>>;
   tools: Record<string, Action>;
   commands: Record<string, Action>;
   states: Record<string, StateDescriptor>;
-  projections: Record<string, ProjectionFunction>;
-  historyProjections?: Record<string, HistoryProjectionFunction>;
+  projections: Record<string, ProjectionFunction<TActorMessage>>;
+  historyProjections?: Record<string, HistoryProjectionFunction<TActorMessage>>;
 };
 ```
+
+`createCharter<TActorMessage>()` is the primary type anchor for an application.
+The charter's actor message type flows into registered nodes, runtime history
+projections, executor requests, output configuration, frames, and machine
+instances. Apps that only need structured assistant output can use
+`ActorMessage<TAssistantContent>`, which leaves user content as `string`.
+Apps that need rich user and assistant content can use
+`ActorMessage<TAssistantContent, TUserContent>` or define a full actor-message
+union and pass that as `TActorMessage`.
 
 Refs are compact, plain strings. They are resolved by field context rather than
 by a generic namespaced grammar:
@@ -420,9 +477,9 @@ append order. The core framework does not require a dense global sequence field.
 The projection compiler produces an executor-neutral shape:
 
 ```ts
-type CompiledInference = {
+type CompiledInference<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   systemParts: string[];
-  history: ActorMessage[];
+  history: FrameMessage<TActorMessage>[];
   dynamicParts: string[];
   tools: Action[];
   retrievableStates: RetrievableState[];
@@ -529,7 +586,7 @@ History compilation is a separate pass from projection section compilation:
 ```ts
 const visibleFrames = compileVisibleFrameHistory(frames, targetGenerator);
 const history = applyHistoryProjection(
-  targetRuntime.historyProjection ?? { type: "actor" },
+  targetRuntime.historyProjection ?? { type: "messages" },
   {
     target: targetGenerator,
     runtimeInstanceId: targetRuntimeInstanceId,
@@ -541,16 +598,17 @@ const history = applyHistoryProjection(
 );
 ```
 
-The built-in `{ type: "actor" }` history projection extracts only actor messages
-from the visible frame history and preserves durable frame/message order. Work
-messages, instance mutation messages, and command messages remain runtime
-metadata and do not become executor-visible history unless a custom history
-projection explicitly turns them into actor messages. Custom history projection
-output is not durable runtime state; it is recomputed for the compiled inference.
+The built-in `{ type: "messages" }` history projection preserves all visible
+frame messages in durable frame/message order. The built-in `{ type: "actor" }`
+history projection extracts only actor messages from that visible frame history.
+Executors are responsible for rendering `CompiledInference.history` into the
+provider-visible conversation format they need; most LLM executors will filter
+to actor messages before rendering. Custom history projection output is not
+durable runtime state; it is recomputed for the compiled inference.
 
 Core should provide small helper functions for common history projections, such
-as `actorMessages(ctx)`, `messagesSinceLastCompletion(ctx)`, and
-`messagesBeforeLastCompletion(ctx)`. These helpers are pure views over the
+as `messages(ctx)`, `actorMessages(ctx)`, `messagesSinceLastCompletion(ctx)`,
+and `messagesBeforeLastCompletion(ctx)`. These helpers are pure views over the
 filtered frame history supplied in `HistoryProjectionContext`.
 
 Duplicate tool names are intentionally supported as an override mechanism. When
@@ -599,24 +657,45 @@ policy is designed.
 Executor output returns through the normal frame path:
 
 ```ts
-type ExecutorRunResult = {
+type EnqueueFrame<TActorMessage extends AnyActorMessage = DefaultActorMessage> = (
+  frame: FrameDraft<TActorMessage>,
+) => Frame<TActorMessage> | Promise<Frame<TActorMessage>>;
+
+type ExecutorRunRequest<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
+  generatorId: GeneratorId;
+  activationId: string;
+  runtimeInstanceId: RuntimeInstanceId;
+  inference: CompiledInference<TActorMessage>;
+  enqueueFrame: EnqueueFrame<TActorMessage>;
+  createActionContext?: (action: Action) => ActionContext<unknown>;
+  output?: OutputConfig<TActorMessage>;
+  signal?: AbortSignal;
+};
+
+type ExecutorRunResult<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   completionReason: CompletionReason;
   value?: string; // implicit LLM text output
-  frames?: Array<FrameDraft | Frame>; // fully formed executor-produced frames
+  frames?: Array<FrameDraft<TActorMessage> | Frame<TActorMessage>>; // fully formed executor-produced frames
+};
+
+type Executor<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
+  run(
+    request: ExecutorRunRequest<TActorMessage>,
+  ): ExecutorRunResult<TActorMessage> | Promise<ExecutorRunResult<TActorMessage>>;
 };
 ```
 
 When an executor returns `frames`, the framework enqueues them in result order,
 applying the current generator, runtime, and activation metadata where omitted.
 When an executor returns `value`, the framework maps that text through
-`node.output.mapTextBlock` if present; otherwise it creates an
-`AssistantMessage` with that text. If `node.output.schema` is present, the mapped
-output is validated against the schema before enqueueing. If `node.output.audience`
-is present, it is applied to mapped actor messages that do not already specify an
-audience. The mapped value must be a frame message and is enqueued in its own
-frame. Executor result frames and mapped text output are enqueued before the
-framework appends the activation completion frame, unless the activation has
-already completed itself.
+`node.output.mapTextBlock` if present; otherwise the raw text is used as
+assistant content. If `node.output.schema` is present, the assistant content is
+validated against the schema before enqueueing. The framework wraps that content
+in an `AssistantMessage` with the raw text preserved in `text`. If
+`node.output.audience` is present, it is applied to the implicit assistant
+message when no explicit audience is already present. Executor result frames and
+mapped text output are enqueued before the framework appends the activation
+completion frame, unless the activation has already completed itself.
 
 Add stable retrieval tool behavior:
 
@@ -813,33 +892,34 @@ type Generator = {
   runtimeInstanceId: RuntimeInstanceId;
 };
 
-type Frame = {
-  id: string;
+type FrameDraft<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   generatorId?: GeneratorId;
+  runtimeInstanceId?: RuntimeInstanceId;
   activationId?: string;
   inert?: boolean; // default false
-  messages: FrameMessage[];
+  messages: FrameMessage<TActorMessage>[];
+  metadata?: Record<string, unknown>;
 };
+
+type Frame<TActorMessage extends AnyActorMessage = DefaultActorMessage> =
+  FrameDraft<TActorMessage> & { id: string };
 
 type MessageDelivery = "immediate" | "queued";
 
-type MessageBase = {
-  audience?: Audience; // default depends on message type
-  delivery?: MessageDelivery; // default "immediate"
-};
-
-type ActorMessage = UserMessage | AssistantMessage | ToolMessage;
-
-type FrameMessage =
-  | ActorMessage
+type FrameMessage<TActorMessage extends AnyActorMessage = DefaultActorMessage> =
+  | TActorMessage
   | CommandMessage
-  | InstanceMessage
+  | InstanceMessage<TActorMessage>
   | WorkMessage;
 
-type PublicNodeRef = Node | Ref;
-type SerializedNodeRef = DryNode | Ref;
+type PublicNodeRef<TActorMessage extends AnyActorMessage = DefaultActorMessage> =
+  | Node<TActorMessage>
+  | Ref;
+type SerializedNodeRef<TActorMessage extends AnyActorMessage = DefaultActorMessage> =
+  | DryNode<TActorMessage>
+  | Ref;
 
-type InstanceMessage =
+type InstanceMessage<TActorMessage extends AnyActorMessage = DefaultActorMessage> =
   | {
       type: "instance";
       kind: "state.patch";
@@ -858,20 +938,20 @@ type InstanceMessage =
       type: "instance";
       kind: "transition";
       instanceId: InstanceId;
-      node: SerializedNodeRef;
+      node: SerializedNodeRef<TActorMessage>;
       states?: Record<StateKey, unknown>;
     }
   | {
       type: "instance";
       kind: "spawn";
       parentInstanceId: InstanceId;
-      children: SpawnChild[];
+      children: SpawnChild<TActorMessage>[];
     }
   | {
       type: "instance";
       kind: "attach";
       parentInstanceId: InstanceId;
-      children: SerializedInstance[];
+      children: SerializedInstance<TActorMessage>[];
     }
   | {
       type: "instance";
@@ -880,18 +960,18 @@ type InstanceMessage =
       reason?: "removed" | "cede" | "cancelled";
     };
 
-type SpawnChild = {
+type SpawnChild<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   id?: InstanceId;
-  node: SerializedNodeRef;
+  node: SerializedNodeRef<TActorMessage>;
   states?: Record<StateKey, unknown>;
-  children?: SpawnChild[];
+  children?: SpawnChild<TActorMessage>[];
 };
 
-type SerializedInstance = {
+type SerializedInstance<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   id: InstanceId;
-  node: SerializedNodeRef;
+  node: SerializedNodeRef<TActorMessage>;
   states?: Record<StateKey, StateContainer>;
-  children?: SerializedInstance[];
+  children?: SerializedInstance<TActorMessage>[];
 };
 
 type WorkMessage =
@@ -1154,8 +1234,8 @@ Reconciliation must also be deterministic:
 - Process source frames in stable durable append order.
 - For each source frame, derive candidate work frames in `ProjectionFrame`
   traversal order.
-- Append newly derived activation work frames and start their runnable executor
-  work immediately when `startWork` is enabled.
+- Append newly derived activation work frames and schedule runnable executor work
+  immediately when `scheduleWork` is enabled.
 - Do not use newly appended, not-yet-yielded frames as trigger sources for the
   next reconciliation batch.
 - If multiple terminal completions are possible for one activation, the first
@@ -1282,33 +1362,32 @@ trigger must match. Audience alone is not a runtime wake-up rule.
 ### Running Work
 
 `runMachine` should reconcile the frame log, discover runnable activations, and
-optionally start work.
+optionally schedule executor work.
 
 ```ts
 type RunMachineOptions = {
-  startWork?: boolean; // default true
-  streamWhenAvailable?: boolean; // default false
-  onStreamEvent?: (event: StreamEvent) => void | Promise<void>;
+  scheduleWork?: boolean; // default true
 };
 
-type MachineRun = AsyncIterable<Frame> & {
-  stopAndDrainFrames(): Promise<Frame[]>;
-  hasStarted(): boolean;
-  isDraining(): boolean;
-};
+type MachineRun<TActorMessage extends AnyActorMessage = DefaultActorMessage> =
+  AsyncIterable<Frame<TActorMessage>> & {
+    stopSchedulingWork(): void;
+    hasStarted(): boolean;
+    isDraining(): boolean;
+  };
 
-function runMachine(
-  machine: Machine,
+function runMachine<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  machine: Machine<TActorMessage>,
   options?: RunMachineOptions,
-): MachineRun;
+): MachineRun<TActorMessage>;
 ```
 
-`startWork: true` runs all runnable activations in parallel subject to each
-generator's concurrency policy. `startWork: false` reconciles work, yields any
-new framework work frames, and stops without starting executors. `runMachine`
-returns a cold `MachineRun`: executor work and frame emission begin only when
-the run is consumed through `for await`, direct async-iterator `next()` calls,
-or an explicit drain method. A `MachineRun` yields `Frame`s; it never returns
+`scheduleWork: true` schedules runnable activations in parallel subject to each
+generator's concurrency policy. `scheduleWork: false` reconciles durable work
+frames, yields any new framework work frames, and stops without calling
+executors. `runMachine` returns a cold `MachineRun`: executor scheduling and
+frame emission begin only when the run is consumed through `for await` or direct
+async-iterator `next()` calls. A `MachineRun` yields `Frame`s; it never returns
 runnable activation objects. Runnable work is represented durably by activation
 `WorkMessage`s inside yielded frames and can be discovered by folding the frame
 log.
@@ -1323,12 +1402,12 @@ runMachine(machine, options) creates a MachineRun whose drain loop:
   fold work messages to derive open and completed activations
   identify runnable activations
 
-  if options.startWork === false:
+  if options.scheduleWork === false or scheduling has been stopped:
     yield any newly appended framework work frames
-    stop without starting executors
+    stop without starting new executors
 
   compile runnable activations
-  start runnable activations in parallel immediately
+  schedule runnable activations in parallel immediately
   yield newly appended framework work frames and activation-produced frames
   wait for active activations when no frames are pending
   do not reconcile activation-produced frames into the next work batch until
@@ -1351,20 +1430,20 @@ for await (const frame of run) {
   await saveFrameAndMachine(frame, machine);
 
   if (!(await shouldContinue(frame, machine))) {
-    const pending = await run.stopAndDrainFrames();
-    for (const pendingFrame of pending) await saveFrame(pendingFrame);
-    await saveMachine(machine);
-    break;
+    run.stopSchedulingWork();
   }
 }
+
+await saveMachine(machine);
 ```
 
-`stopAndDrainFrames()` stops scheduling new executor work, prevents active
-activations from advancing past frame boundaries, and returns frames that were
-already enqueued but had not yet been yielded to the host. Drained frames are
-returned in stable append order. If the host exits a run early without draining,
-any already-enqueued frames are still in memory, but they have not crossed the
-normal durable checkpoint.
+`stopSchedulingWork()` requests a graceful scheduling stop. It prevents the run
+from starting any additional executor calls after the request. Already-started
+activations are allowed to finish, and frames they enqueue are still yielded
+through the same `MachineRun`. Reconciliation continues to append and yield
+deterministic activation work frames, but newly discovered incomplete activations
+are left unscheduled. A later `runMachine(machine, { scheduleWork: true })` can
+fold the frame log and schedule those incomplete activations.
 
 `hasStarted()` and `isDraining()` are host ergonomics and development-warning
 hooks. JavaScript cannot reliably detect that a returned async iterable will
@@ -1374,7 +1453,7 @@ or is currently being drained.
 External dispatch can use the same reconciliation path:
 
 ```ts
-const run = runMachine(machine, { startWork: false });
+const run = runMachine(machine, { scheduleWork: false });
 
 for await (const frame of run) {
   await saveFrameAndMachine(frame, machine);
@@ -1418,11 +1497,11 @@ const enqueued = machine.enqueueFrame(frame);
 ```
 
 `machine.enqueueFrame(frame)` owns framework in-memory enqueue semantics. It
-assigns frame identity, updates the in-memory frame log, and may invoke
-host-provided immediate observation hooks such as `onFrameEnqueued(frame)`.
-These hooks are for application-owned reactions, such as extracting
-user-visible assistant messages, updating live UI, logging, or performing
-optimistic/idempotent persistence keyed by frame ID.
+assigns frame identity, updates the in-memory frame log, and may notify
+host-provided immediate observation listeners registered with
+`machine.subscribe(listener)`. These listeners are for application-owned
+reactions, such as extracting user-visible assistant messages, updating live UI,
+logging, or performing optimistic/idempotent persistence keyed by frame ID.
 
 Newly enqueued frames are also pending emission through a `MachineRun` unless
 they were folded through an explicit ingestion API such as `ingestInertFrame`.
@@ -1472,94 +1551,27 @@ starts only after those frames have been yielded.
 
 ### Streaming Observation Events
 
-Streaming is an optional observation channel, not a durable runtime mechanism.
-Stream events are emitted to the host through `RunMachineOptions.onStreamEvent`
-when `streamWhenAvailable` is true and the executor can provide incremental
-output. Executors may ignore the hook.
+Streaming is primarily an executor and host concern. Provider adapters may expose
+their own streaming options and callbacks, and hosts may route partial output to
+lightweight UI or telemetry paths. `runMachine` does not need to own a generic
+streaming toggle before the executor API has settled.
 
-Stream events must not be appended to the frame log, must not trigger work, must
-not be included in compiled history, and must not affect projection traversal.
-The durable source of truth remains the final `Frame` containing the completed
-`AssistantMessage`.
+Partial stream output must not be appended to the projector frame log, must not
+trigger work, must not be included in compiled history, and must not affect
+projection traversal. The durable source of truth remains the final `Frame`
+containing the completed actor message.
 
-```ts
-type StreamEvent =
-  | {
-      type: "message_start";
-      streamId: string;
-      messageId: string;
-      seq: number;
-      generatorId: GeneratorId;
-      activationId: string;
-      runtimeInstanceId: RuntimeInstanceId;
-    }
-  | {
-      type: "message_delta";
-      streamId: string;
-      messageId: string;
-      seq: number;
-      generatorId: GeneratorId;
-      activationId: string;
-      runtimeInstanceId: RuntimeInstanceId;
-      delta: StreamDelta;
-    }
-  | {
-      type: "message_end";
-      streamId: string;
-      messageId: string;
-      seq: number;
-      generatorId: GeneratorId;
-      activationId: string;
-      runtimeInstanceId: RuntimeInstanceId;
-      finalFrameId?: string;
-    }
-  | {
-      type: "message_error";
-      streamId: string;
-      messageId: string;
-      seq: number;
-      generatorId: GeneratorId;
-      activationId: string;
-      runtimeInstanceId: RuntimeInstanceId;
-      error: StreamError;
-    };
+The core framework should make executor-owned streaming easier by preserving
+machine-scoped metadata on final actor messages. In particular, a final message
+should be able to carry a stable logical output identity, currently expected to
+be named `outputId`, plus optional stream completion metadata. Apps can map that
+machine-owned `outputId` to their own message IDs or storage idempotency keys.
+Core should not define an application `messageId` or database `idempotencyKey`.
 
-type StreamDelta = {
-  kind: "text" | "thinking" | string;
-  contentIndex?: number;
-  delta: string;
-};
-
-type StreamError = {
-  message: string;
-  code?: string;
-};
-```
-
-`messageId` links ephemeral stream events to the later durable assistant message.
-`streamId` identifies one streaming attempt and may differ across retries for the
-same eventual message. `seq` is scoped to one `streamId`; consumers should ignore
-duplicate or out-of-order events for the same stream.
-
-When the executor finishes an assistant message, the framework should enqueue a
-normal assistant frame whose message carries the same `messageId`, plus optional
-stream metadata:
-
-```ts
-{
-  type: "assistant",
-  items: [{ type: "text", text }],
-  metadata: {
-    messageId,
-    stream: { state: "complete", seq }
-  }
-}
-```
-
-The stream hook is a UI and telemetry convenience. The hook should be treated as
-best-effort and should not be the only path for persisting final assistant
+The stream side channel is a UI and telemetry convenience. It should be treated
+as best-effort and should not be the only path for persisting final assistant
 content. If stream transport fails, the activation may still complete normally
-and emit the durable assistant frame.
+and emit the durable final frame.
 
 ### Inert Frame Ingestion
 
@@ -1586,7 +1598,7 @@ to normal audience, delivery, and activation-history rules.
 Inert means the frame is not a trigger source. `ingestInertFrame` must not:
 
 - assign a new frame ID;
-- call `onFrameEnqueued`;
+- notify `machine.subscribe` listeners;
 - yield the frame from `runMachine`;
 - reconcile the frame into new activation work;
 - start executor work.
@@ -1958,8 +1970,22 @@ substantially, split heavier inspection or form-generation utilities later.
 ## Serialization
 
 Serialization means resumability, not just `JSON.stringify` compatibility. A
-serialized machine must be dry JSON data that can be hydrated against a
-compatible charter and continue execution.
+resumable machine is reconstructed from two inputs:
+
+- a current, already-materialized root instance snapshot; and
+- a durable frame log in stable append order.
+
+`createMachine({ root, frames })` treats `root` as the current canonical machine
+view supplied by the host. It preserves `frames` for projection history and work
+reconstruction, but it does not replay historical `InstanceMessage`s into
+`root`. Replaying arbitrary instance mutations into a current snapshot would be
+unsafe because the framework cannot know which mutations are already reflected in
+that snapshot.
+
+If an application wants replay-from-initial semantics, it must provide an initial
+root snapshot and a frame log whose instance mutations have not yet been applied,
+or introduce explicit snapshot cursor metadata and replay only frames after that
+cursor. That mode is out of scope for the first pass.
 
 Use these terms consistently:
 
@@ -1969,14 +1995,14 @@ Use these terms consistently:
 - Serialized: persisted/string form of dry data.
 
 The charter is the executable registry for every non-serializable runtime value.
-A machine snapshot may inline definitions, but every non-serializable
+An instance snapshot may inline definitions, but every non-serializable
 constituent inside an inline definition must be represented by a ref that can
 hydrate back to an executable value.
 
-Durable snapshots must never silently drop executable behavior. If serialization
-encounters a function, closure, schema, projection function, action executor, or
-other non-serializable value that cannot be represented by a valid ref, it must
-throw with a useful path to the failing field.
+Durable instance snapshots must never silently drop executable behavior. If
+serialization encounters a function, closure, schema, projection function, action
+executor, or other non-serializable value that cannot be represented by a valid
+ref, it must throw with a useful path to the failing field.
 
 ### Durable Versus Public Refs
 
@@ -1987,11 +2013,15 @@ transition(node);
 spawn({ node });
 ```
 
-Durable frames and machine snapshots must store only dry values:
+Durable frames and instance snapshots must store only dry values:
 
 ```ts
-type PublicNodeRef = Node | Ref;
-type SerializedNodeRef = DryNode | Ref;
+type PublicNodeRef<TActorMessage extends AnyActorMessage = DefaultActorMessage> =
+  | Node<TActorMessage>
+  | Ref;
+type SerializedNodeRef<TActorMessage extends AnyActorMessage = DefaultActorMessage> =
+  | DryNode<TActorMessage>
+  | Ref;
 ```
 
 Before a frame is appended to the durable frame log, any hydrated node, state,
@@ -2020,7 +2050,7 @@ inline node may contain serial data directly, but executable children must be
 refs.
 
 ```ts
-type DryNode = {
+type DryNode<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   key: string;
   sourceNodeKey?: string;
   name?: string;
@@ -2028,7 +2058,7 @@ type DryNode = {
   tools?: Ref[];
   commands?: Ref[];
   state?: DryStateDescriptor | Ref;
-  members?: Array<DryNode | Ref>;
+  members?: Array<DryNode<TActorMessage> | Ref>;
   projection?: DryProjection;
   runtime?: DryRuntime;
 };
@@ -2048,7 +2078,7 @@ cannot round-trip, serialization must throw.
 ### Actions And Commands
 
 Actions and commands are executable values. In the first pass, executable
-machine snapshots should serialize actions and commands only by ref.
+instance snapshots should serialize actions and commands only by ref.
 Metadata-only action serialization is allowed for display/client views, but not
 for executable machine persistence.
 
@@ -2090,8 +2120,10 @@ serialization must throw if one is encountered.
 History projection functions follow the same executable-value rule. Registered
 history projection functions serialize by bare string ref. Inline history
 projection functions may execute in memory, but machine serialization must throw
-if one is encountered. The built-in actor history projection is
-`{ type: "actor" }`; serialized runtimes may omit it when it is the default.
+if one is encountered. The built-in message history projection is
+`{ type: "messages" }`; serialized runtimes may omit it when it is the default.
+The built-in actor history projection is `{ type: "actor" }` and is serialized
+only when explicitly selected.
 
 ### Hydration
 
@@ -2166,10 +2198,10 @@ Add focused tests for:
 - Executor-visible compilation: commands stay out of compiled inference, tool
   order is preserved so provider assembly can resolve duplicate tool names with
   last-definition-wins behavior, retrieval state aliases match projected
-  retrieval access, default `{ type: "actor" }` history projection preserves
-  visible actor message order, and custom history projections receive filtered
-  frame history plus current state values and return executor-visible actor
-  messages.
+  retrieval access, default `{ type: "messages" }` history projection preserves
+  visible frame-message order, `{ type: "actor" }` extracts visible actor
+  messages, and custom history projections receive filtered frame history plus
+  current state values and return executor-visible frame messages.
 - Audience and history filtering: user messages default to broadcast,
   assistant/tool messages default to self, broadcast and explicit runtime
   address targets are visible to the correct generators, self messages are only
@@ -2192,17 +2224,18 @@ Add focused tests for:
   activations.
 - Concurrency and dispatch: serial primary and worker runtimes expose only the
   earliest incomplete activation per concurrency key, parallel runtimes expose
-  all incomplete activations as runnable, `runMachine(..., { startWork: false })`
-  yields reconciliation work frames without starting executors, and
+  all incomplete activations as runnable, `runMachine(..., { scheduleWork: false })`
+  yields reconciliation work frames without scheduling executors, and
   `enqueueFrame` observes/enqueues frames without recursively reconciling or
-  starting newly runnable work. A `MachineRun` is cold until consumed, drains
-  pending local frames in append order, and `stopAndDrainFrames()` returns
-  already-enqueued frames that have not crossed the host yield checkpoint.
+  scheduling newly runnable work. A `MachineRun` is cold until consumed, drains
+  pending local frames in append order, and `stopSchedulingWork()` stops future
+  executor scheduling while still yielding deterministic activation frames and
+  already-started activation output.
 - Inert ingestion: `ingestInertFrame` requires `frame.inert === true`, dedupes by
   caller-supplied frame ID, folds instance and work messages into local state,
   keeps actor messages eligible for history according to audience, delivery, and
   activation history, and does not invoke enqueue hooks, yield from `runMachine`,
-  reconcile activation work, or start executors.
+  reconcile activation work, or schedule executors.
 - Client integration smoke coverage, if included in the first implementation
   pass: client snapshots expose realized instances plus command residue without
   public frame-log synchronization, command and state addresses are stable for

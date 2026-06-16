@@ -127,7 +127,7 @@ export const applyClientMessage = mutation({
     }
 
     const producedFrames: Frame[] = [];
-    for await (const frame of runMachine(machine, { startWork: false })) {
+    for await (const frame of runMachine(machine, { scheduleWork: false })) {
       producedFrames.push(frame);
     }
 

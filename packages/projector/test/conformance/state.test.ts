@@ -26,7 +26,7 @@ describe("conformance: state access", () => {
       root: { id: "root", node: root, children: [{ id: "child", node: child }] },
       charter: charter({ executor }),
     });
-    machine.enqueueFrame({ messages: [{ type: "user", text: "run" }] });
+    machine.enqueueFrame({ messages: [{ type: "user", content: "run", text: "run" }] });
 
     await drain(runMachine(machine));
 
@@ -69,7 +69,7 @@ describe("conformance: state access", () => {
       root: rootInstance,
       charter: charter({ executor }),
     });
-    machine.enqueueFrame({ messages: [{ type: "user", text: "run" }] });
+    machine.enqueueFrame({ messages: [{ type: "user", content: "run", text: "run" }] });
 
     await drain(runMachine(machine));
 
@@ -102,7 +102,7 @@ describe("conformance: state access", () => {
       ]),
       charter: charter({ executor }),
     });
-    machine.enqueueFrame({ messages: [{ type: "user", text: "run" }] });
+    machine.enqueueFrame({ messages: [{ type: "user", content: "run", text: "run" }] });
 
     await drain(runMachine(machine));
 

@@ -8,31 +8,34 @@ import {
 import { normalizeStaticProjection } from "./create.ts";
 import type { ProjectionFrame, SyntheticRoot } from "./frames.ts";
 import { createRoot, directProjectionChildren, findFrameByRuntimeId, traversalFrames } from "./frames.ts";
-import { actorMessages } from "./history.ts";
+import { actorMessages, messages } from "./history.ts";
 import { resolveFrameCommands, resolveFrameTools } from "./scoped-actions.ts";
 import { resolveStates, type ResolvedState } from "./state.ts";
 import {
   activationFrameIndexFor,
-  actorMessageVisibleByActivationHistory,
   actorMessageVisibleByDelivery,
   actorMessageVisibleToGenerator,
+  frameVisibleByActivationHistory,
   isActorMessage,
 } from "./visibility.ts";
 import type {
   AnyAction,
-  ActorMessage,
+  AnyActorMessage,
   ActivationHistory,
   ActorHistoryProjection,
   Audience,
   Charter,
   CompiledInference,
+  DefaultActorMessage,
   Frame,
+  FrameMessage,
   Generator,
   GeneratorKind,
   HistoryProjection,
   HistoryProjectionContext,
   HistoryProjectionFunction,
   Instance,
+  MessageHistoryProjection,
   PrimaryRuntime,
   Projection,
   ProjectionContext,
@@ -65,12 +68,14 @@ type ProjectionSections = {
   states: StateItem[];
 };
 
-export type CompileProjectionOptions = {
+export type CompileProjectionOptions<
+  TActorMessage extends AnyActorMessage = DefaultActorMessage,
+> = {
   targetGenerator?: Generator;
-  history?: ActorMessage[];
-  frameHistory?: Frame[];
+  history?: FrameMessage<TActorMessage>[];
+  frameHistory?: Frame<TActorMessage>[];
   activationId?: string;
-  charter?: Charter;
+  charter?: Charter<TActorMessage>;
 };
 
 export type CompiledProjectionTree = {
@@ -135,10 +140,13 @@ type OutputMeta = {
   mapsTextBlock: boolean;
 };
 
-export function compileProjection(
-  rootOrInstances: SyntheticRoot | Instance | Instance[],
-  options: CompileProjectionOptions = {},
-): CompiledInference {
+export function compileProjection<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  rootOrInstances:
+    | SyntheticRoot<TActorMessage>
+    | Instance<TActorMessage>
+    | Instance<TActorMessage>[],
+  options: CompileProjectionOptions<TActorMessage> = {},
+): CompiledInference<TActorMessage> {
   assertActivationCompileOptions(options);
   const root = Array.isArray(rootOrInstances) ? createRoot(rootOrInstances) : rootOrInstances;
   const states = resolveStates(root);
@@ -164,7 +172,7 @@ export function compileProjection(
   return finalizeSections(sections, compileHistory(root, options, states));
 }
 
-function assertActivationCompileOptions(options: CompileProjectionOptions): void {
+function assertActivationCompileOptions(options: CompileProjectionOptions<any>): void {
   if (options.activationId === undefined) {
     return;
   }
@@ -177,8 +185,8 @@ function assertActivationCompileOptions(options: CompileProjectionOptions): void
 }
 
 export function inspectCompiledProjectionTree(
-  rootOrInstances: SyntheticRoot | Instance | Instance[],
-  options: Omit<CompileProjectionOptions, "targetGenerator"> = {},
+  rootOrInstances: SyntheticRoot<any> | Instance<any> | Instance<any>[],
+  options: Omit<CompileProjectionOptions<any>, "targetGenerator"> = {},
 ): CompiledProjectionTree {
   const root = Array.isArray(rootOrInstances) ? createRoot(rootOrInstances) : rootOrInstances;
   const states = resolveStates(root);
@@ -195,15 +203,15 @@ export function inspectCompiledProjectionTree(
   };
 }
 
-function visitProjectionFrame(
+function visitProjectionFrame<TActorMessage extends AnyActorMessage>(
   sections: ProjectionSections,
-  frame: ProjectionFrame,
-  options: CompileProjectionOptions,
+  frame: ProjectionFrame<TActorMessage>,
+  options: CompileProjectionOptions<TActorMessage>,
   stateByFrame: Map<string, ResolvedState[]>,
 ): void {
   if (isRuntimeBoundary(frame) && !belongsToGenerator(frame, options.targetGenerator)) {
     const exported = compileGeneratorProjection(frame, options, stateByFrame);
-    const runtime = frame.node.runtime as PrimaryRuntime | WorkerRuntime;
+    const runtime = frame.node.runtime as PrimaryRuntime<TActorMessage> | WorkerRuntime<TActorMessage>;
     applyProjectionAggregate(sections, exported, runtime.boundaryProjection, frame, options);
     return;
   }
@@ -214,9 +222,9 @@ function visitProjectionFrame(
   }
 }
 
-function compileGeneratorProjection(
-  frame: ProjectionFrame,
-  options: CompileProjectionOptions,
+function compileGeneratorProjection<TActorMessage extends AnyActorMessage>(
+  frame: ProjectionFrame<TActorMessage>,
+  options: CompileProjectionOptions<TActorMessage>,
   stateByFrame: Map<string, ResolvedState[]>,
 ): ProjectionSections {
   const sections = emptySections();
@@ -236,11 +244,11 @@ function compileGeneratorProjection(
   return sections;
 }
 
-function collectCompiledProjectionChildren(
-  root: SyntheticRoot | Instance,
-  frame: ProjectionFrame,
+function collectCompiledProjectionChildren<TActorMessage extends AnyActorMessage>(
+  root: SyntheticRoot<TActorMessage> | Instance<TActorMessage>,
+  frame: ProjectionFrame<TActorMessage>,
   parentRuntimeInstanceId: string | undefined,
-  options: Omit<CompileProjectionOptions, "targetGenerator">,
+  options: Omit<CompileProjectionOptions<TActorMessage>, "targetGenerator">,
   stateByFrame: Map<string, ResolvedState[]>,
 ): CompiledProjectionNode[] {
   const nodes: CompiledProjectionNode[] = [];
@@ -254,14 +262,14 @@ function collectCompiledProjectionChildren(
   return nodes;
 }
 
-function createCompiledProjectionNode(
-  root: SyntheticRoot | Instance,
-  frame: ProjectionFrame,
+function createCompiledProjectionNode<TActorMessage extends AnyActorMessage>(
+  root: SyntheticRoot<TActorMessage> | Instance<TActorMessage>,
+  frame: ProjectionFrame<TActorMessage>,
   parentRuntimeInstanceId: string | undefined,
-  options: Omit<CompileProjectionOptions, "targetGenerator">,
+  options: Omit<CompileProjectionOptions<TActorMessage>, "targetGenerator">,
   stateByFrame: Map<string, ResolvedState[]>,
 ): CompiledProjectionNode {
-  const runtime = frame.node.runtime as PrimaryRuntime | WorkerRuntime;
+  const runtime = frame.node.runtime as PrimaryRuntime<TActorMessage> | WorkerRuntime<TActorMessage>;
   const kind = runtime.type === "worker" ? "worker" : "primary";
   const targetGenerator = {
     id: frame.runtimeInstanceId,
@@ -314,8 +322,8 @@ function createCompiledProjectionNode(
 }
 
 function collectOwnedProjectionFrames(
-  frame: ProjectionFrame,
-  options: Omit<CompileProjectionOptions, "targetGenerator">,
+  frame: ProjectionFrame<any>,
+  options: Omit<CompileProjectionOptions<any>, "targetGenerator">,
   stateByFrame: Map<string, ResolvedState[]>,
 ): CompiledProjectionFrameView[] {
   const views: CompiledProjectionFrameView[] = [projectionFrameView(frame, options, stateByFrame)];
@@ -330,8 +338,8 @@ function collectOwnedProjectionFrames(
 }
 
 function collectOwnedProjectionDescendantFrames(
-  frame: ProjectionFrame,
-  options: Omit<CompileProjectionOptions, "targetGenerator">,
+  frame: ProjectionFrame<any>,
+  options: Omit<CompileProjectionOptions<any>, "targetGenerator">,
   stateByFrame: Map<string, ResolvedState[]>,
 ): CompiledProjectionFrameView[] {
   const views: CompiledProjectionFrameView[] = [];
@@ -346,8 +354,8 @@ function collectOwnedProjectionDescendantFrames(
 }
 
 function projectionFrameView(
-  frame: ProjectionFrame,
-  options: Omit<CompileProjectionOptions, "targetGenerator">,
+  frame: ProjectionFrame<any>,
+  options: Omit<CompileProjectionOptions<any>, "targetGenerator">,
   stateByFrame: Map<string, ResolvedState[]>,
 ): CompiledProjectionFrameView {
   return {
@@ -376,7 +384,7 @@ function actionMeta(action: AnyAction): ActionMeta {
   };
 }
 
-function outputMeta(output: ProjectionFrame["node"]["output"]): OutputMeta | undefined {
+function outputMeta(output: ProjectionFrame<any>["node"]["output"]): OutputMeta | undefined {
   if (!output) {
     return undefined;
   }
@@ -387,11 +395,11 @@ function outputMeta(output: ProjectionFrame["node"]["output"]): OutputMeta | und
   };
 }
 
-function applyProjectionFrame(
+function applyProjectionFrame<TActorMessage extends AnyActorMessage>(
   sections: ProjectionSections,
-  frame: ProjectionFrame,
-  projection: Projection,
-  options: CompileProjectionOptions,
+  frame: ProjectionFrame<TActorMessage>,
+  projection: Projection<TActorMessage>,
+  options: CompileProjectionOptions<TActorMessage>,
   stateByFrame: Map<string, ResolvedState[]>,
 ): void {
   const resolved = resolveProjection(projection, frame, options.charter);
@@ -437,12 +445,12 @@ function applyProjectionFrame(
   }
 }
 
-function applyProjectionAggregate(
+function applyProjectionAggregate<TActorMessage extends AnyActorMessage>(
   sections: ProjectionSections,
   aggregate: ProjectionSections,
-  projection: Projection,
-  frame: ProjectionFrame,
-  options: CompileProjectionOptions,
+  projection: Projection<TActorMessage>,
+  frame: ProjectionFrame<TActorMessage>,
+  options: CompileProjectionOptions<TActorMessage>,
 ): void {
   const resolved = resolveProjection(projection, frame, options.charter);
   if (resolved.mode === "hidden") {
@@ -512,10 +520,10 @@ function addStateProjection(
   }
 }
 
-function finalizeSections(
+function finalizeSections<TActorMessage extends AnyActorMessage>(
   sections: ProjectionSections,
-  history: ActorMessage[],
-): CompiledInference {
+  history: FrameMessage<TActorMessage>[],
+): CompiledInference<TActorMessage> {
   const aliases = buildAliases(sections.states);
   const retrievableStates: RetrievableState[] = [];
   const retrievalKeys = new Set<string>();
@@ -549,19 +557,22 @@ function finalizeSections(
   };
 }
 
-function compileHistory(
-  root: SyntheticRoot | Instance,
-  options: CompileProjectionOptions,
+function compileHistory<TActorMessage extends AnyActorMessage>(
+  root: SyntheticRoot<TActorMessage> | Instance<TActorMessage>,
+  options: CompileProjectionOptions<TActorMessage>,
   states: ResolvedState[],
-): ActorMessage[] {
+): FrameMessage<TActorMessage>[] {
   const ctx = historyProjectionContext(root, options, states);
   if (!ctx) {
     return options.frameHistory
-      ? actorMessagesFromFrameHistory(options.frameHistory)
+      ? frameMessagesFromFrameHistory(options.frameHistory)
       : options.history ?? [];
   }
 
   const projection = resolveHistoryProjection(ctx.projection, options.charter);
+  if (isMessageHistoryProjection(projection)) {
+    return messages(ctx.context);
+  }
   if (isActorHistoryProjection(projection)) {
     return actorMessages(ctx.context);
   }
@@ -569,14 +580,14 @@ function compileHistory(
   return projection(ctx.context);
 }
 
-function historyProjectionContext(
-  root: SyntheticRoot | Instance,
-  options: CompileProjectionOptions,
+function historyProjectionContext<TActorMessage extends AnyActorMessage>(
+  root: SyntheticRoot<TActorMessage> | Instance<TActorMessage>,
+  options: CompileProjectionOptions<TActorMessage>,
   states: ResolvedState[],
 ):
   | {
-      context: HistoryProjectionContext;
-      projection: HistoryProjection;
+      context: HistoryProjectionContext<TActorMessage>;
+      projection: HistoryProjection<TActorMessage>;
     }
   | undefined {
   const target = options.targetGenerator;
@@ -595,12 +606,12 @@ function historyProjectionContext(
         history: visibleHistoryForTarget(
           root,
           target,
-          syntheticRootRuntime(),
+          syntheticRootRuntime<TActorMessage>(),
           options,
         ),
         states: stateValues(states),
       },
-      projection: { type: "actor" },
+      projection: { type: "messages" },
     };
   }
 
@@ -608,7 +619,7 @@ function historyProjectionContext(
     return undefined;
   }
 
-  const runtime = frame.node.runtime as PrimaryRuntime | WorkerRuntime;
+  const runtime = frame.node.runtime as PrimaryRuntime<TActorMessage> | WorkerRuntime<TActorMessage>;
   return {
     context: {
       target,
@@ -618,54 +629,70 @@ function historyProjectionContext(
       history: visibleHistoryForTarget(root, target, runtime, options),
       states: stateValues(states),
     },
-    projection: runtime.historyProjection ?? { type: "actor" },
+    projection: runtime.historyProjection ?? { type: "messages" },
   };
 }
 
-function visibleHistoryForTarget(
-  _root: SyntheticRoot | Instance,
+function visibleHistoryForTarget<TActorMessage extends AnyActorMessage>(
+  _root: SyntheticRoot<TActorMessage> | Instance<TActorMessage>,
   target: Generator,
-  runtime: PrimaryRuntime | WorkerRuntime,
-  options: CompileProjectionOptions,
-): Frame[] {
+  runtime: PrimaryRuntime<TActorMessage> | WorkerRuntime<TActorMessage>,
+  options: CompileProjectionOptions<TActorMessage>,
+): Frame<TActorMessage>[] {
   if (options.activationId !== undefined && options.frameHistory === undefined) {
     throw new Error("compileProjection activationId requires frameHistory");
   }
 
-  const rawHistory = options.frameHistory ?? framesFromActorMessages(options.history ?? [], target);
+  const rawHistory = options.frameHistory ?? framesFromMessages(options.history ?? [], target);
   const activationFrameIndex = activationFrameIndexFor(rawHistory, options.activationId, {
     requireActivationFrame: options.activationId !== undefined,
   });
 
-  return rawHistory
-    .map((frame, frameIndex) => ({
-      ...frame,
-      messages: frame.messages.filter((message): message is ActorMessage =>
-        isActorMessage(message) &&
+  return rawHistory.flatMap((frame, frameIndex) => {
+    if (!frameVisibleByActivationHistory(
+      frame,
+      frameIndex,
+      activationFrameIndex,
+      runtime,
+      options.activationId,
+    )) {
+      return [];
+    }
+
+    const frameMessages = frame.messages.filter((message) => {
+      if (!isActorMessage(message)) {
+        return true;
+      }
+      return (
         actorMessageVisibleToGenerator(message, frame, target) &&
-        actorMessageVisibleByDelivery(message, frameIndex, activationFrameIndex) &&
-        actorMessageVisibleByActivationHistory(frame, frameIndex, activationFrameIndex, runtime, options.activationId),
-      ),
-    }))
-    .filter((frame) => frame.messages.length > 0);
+        actorMessageVisibleByDelivery(message, frameIndex, activationFrameIndex)
+      );
+    });
+
+    return frameMessages.length > 0 ? [{ ...frame, messages: frameMessages }] : [];
+  });
 }
 
-function syntheticRootRuntime(): PrimaryRuntime {
+function syntheticRootRuntime<TActorMessage extends AnyActorMessage>(): PrimaryRuntime<TActorMessage> {
   return {
     type: "primary",
     trigger: { type: "actor-frame" },
     concurrency: "serial",
     activationHistory: "live",
-    historyProjection: { type: "actor" },
+    historyProjection: { type: "messages" },
     boundaryProjection: { mode: "hidden" },
   };
 }
 
-function resolveHistoryProjection(
-  projection: HistoryProjection,
-  charter: Charter | undefined,
-): ActorHistoryProjection | HistoryProjectionFunction {
-  if (isActorHistoryProjection(projection) || typeof projection === "function") {
+function resolveHistoryProjection<TActorMessage extends AnyActorMessage>(
+  projection: HistoryProjection<TActorMessage>,
+  charter: Charter<TActorMessage> | undefined,
+): ActorHistoryProjection | MessageHistoryProjection | HistoryProjectionFunction<TActorMessage> {
+  if (
+    isActorHistoryProjection(projection) ||
+    isMessageHistoryProjection(projection) ||
+    typeof projection === "function"
+  ) {
     return projection;
   }
 
@@ -679,14 +706,22 @@ function resolveHistoryProjection(
   return fn;
 }
 
-function isActorHistoryProjection(
-  projection: HistoryProjection,
+function isActorHistoryProjection<TActorMessage extends AnyActorMessage>(
+  projection: HistoryProjection<TActorMessage>,
 ): projection is ActorHistoryProjection {
   return typeof projection === "object" && projection !== null && projection.type === "actor";
 }
 
-function actorMessagesFromFrameHistory(history: Frame[]): ActorMessage[] {
-  return actorMessages({
+function isMessageHistoryProjection<TActorMessage extends AnyActorMessage>(
+  projection: HistoryProjection<TActorMessage>,
+): projection is MessageHistoryProjection {
+  return typeof projection === "object" && projection !== null && projection.type === "messages";
+}
+
+function frameMessagesFromFrameHistory<TActorMessage extends AnyActorMessage>(
+  history: Frame<TActorMessage>[],
+): FrameMessage<TActorMessage>[] {
+  return messages({
     target: {
       id: "",
       kind: "primary",
@@ -700,8 +735,11 @@ function actorMessagesFromFrameHistory(history: Frame[]): ActorMessage[] {
   });
 }
 
-function framesFromActorMessages(messages: ActorMessage[], target?: Generator): Frame[] {
-  return messages.map((message, index) => ({
+function framesFromMessages<TActorMessage extends AnyActorMessage>(
+  frameMessages: FrameMessage<TActorMessage>[],
+  target?: Generator,
+): Frame<TActorMessage>[] {
+  return frameMessages.map((message, index) => ({
     id: `synthetic-history-${index}`,
     generatorId: target?.id ?? "synthetic-history",
     messages: [message],
@@ -784,10 +822,10 @@ function groupStatesByFrame(states: ResolvedState[]): Map<string, ResolvedState[
   return grouped;
 }
 
-function resolveProjection(
-  projection: Projection,
-  frame: ProjectionFrame,
-  charter: Charter | undefined,
+function resolveProjection<TActorMessage extends AnyActorMessage>(
+  projection: Projection<TActorMessage>,
+  frame: ProjectionFrame<TActorMessage>,
+  charter: Charter<TActorMessage> | undefined,
 ): Required<StaticProjection> {
   if (typeof projection === "function") {
     return normalizeStaticProjection(projection(projectionContext(frame)));
@@ -807,7 +845,9 @@ function resolveProjection(
   return normalizeStaticProjection(projection);
 }
 
-function projectionContext(frame: ProjectionFrame): ProjectionContext {
+function projectionContext<TActorMessage extends AnyActorMessage>(
+  frame: ProjectionFrame<TActorMessage>,
+): ProjectionContext<TActorMessage> {
   return {
     runtimeInstanceId: frame.runtimeInstanceId,
     instanceId: frame.concreteInstance.id,
@@ -815,7 +855,7 @@ function projectionContext(frame: ProjectionFrame): ProjectionContext {
   };
 }
 
-function stateAddressForFrame(frame: ProjectionFrame): StateAddress | undefined {
+function stateAddressForFrame(frame: ProjectionFrame<any>): StateAddress | undefined {
   const descriptor = frame.node.state;
   if (!descriptor) {
     return undefined;
@@ -838,15 +878,17 @@ function clearSections(sections: ProjectionSections): void {
   sections.states.length = 0;
 }
 
-function isRuntimeBoundary(frame: ProjectionFrame): boolean {
+function isRuntimeBoundary(frame: ProjectionFrame<any>): boolean {
   return frame.node.runtime.type === "primary" || frame.node.runtime.type === "worker";
 }
 
-function belongsToGenerator(frame: ProjectionFrame, generator: Generator | undefined): boolean {
+function belongsToGenerator(frame: ProjectionFrame<any>, generator: Generator | undefined): boolean {
   return Boolean(generator && generator.runtimeInstanceId === frame.runtimeInstanceId);
 }
 
-function directRootFrame(instance: Instance): ProjectionFrame {
+function directRootFrame<TActorMessage extends AnyActorMessage>(
+  instance: Instance<TActorMessage>,
+): ProjectionFrame<TActorMessage> {
   const root = createRoot([instance]);
   const frame = traversalFrames(root)[0];
   if (!frame) {
@@ -855,6 +897,8 @@ function directRootFrame(instance: Instance): ProjectionFrame {
   return frame;
 }
 
-function isSyntheticRoot(root: SyntheticRoot | Instance): root is SyntheticRoot {
+function isSyntheticRoot<TActorMessage extends AnyActorMessage>(
+  root: SyntheticRoot<TActorMessage> | Instance<TActorMessage>,
+): root is SyntheticRoot<TActorMessage> {
   return "type" in root && root.type === "synthetic-root";
 }

@@ -1,5 +1,6 @@
 import type {
   AnyAction,
+  AnyActorMessage,
   Charter,
   HistoryProjectionFunction,
   Node,
@@ -19,7 +20,7 @@ export function parseRef(refValue: string): { key: string } {
   return { key: refValue };
 }
 
-export function hydrateRef(refValue: Ref, charter: Charter): unknown {
+export function hydrateRef(refValue: Ref, charter: Charter<any>): unknown {
   return (
     charter.nodes[refValue] ??
     charter.tools[refValue] ??
@@ -31,36 +32,39 @@ export function hydrateRef(refValue: Ref, charter: Charter): unknown {
   );
 }
 
-export function hydrateNodeRef(refValue: Ref, charter: Charter): Node {
+export function hydrateNodeRef<TActorMessage extends AnyActorMessage>(
+  refValue: Ref,
+  charter: Charter<TActorMessage>,
+): Node<TActorMessage> {
   return expectRegistryValue(charter.nodes[refValue], refValue, "node");
 }
 
-export function hydrateToolRef(refValue: Ref, charter: Charter): AnyAction {
+export function hydrateToolRef(refValue: Ref, charter: Charter<any>): AnyAction {
   return expectRegistryValue(charter.tools[refValue], refValue, "tool");
 }
 
-export function hydrateCommandRef(refValue: Ref, charter: Charter): AnyAction {
+export function hydrateCommandRef(refValue: Ref, charter: Charter<any>): AnyAction {
   return expectRegistryValue(charter.commands[refValue], refValue, "command");
 }
 
 export function hydrateStateRef(
   refValue: Ref,
-  charter: Charter,
+  charter: Charter<any>,
 ): NormalizedStateDescriptor {
   return expectRegistryValue(charter.states[refValue], refValue, "state");
 }
 
-export function hydrateProjectionRef(
+export function hydrateProjectionRef<TActorMessage extends AnyActorMessage>(
   refValue: Ref,
-  charter: Charter,
-): ProjectionFunction {
+  charter: Charter<TActorMessage>,
+): ProjectionFunction<TActorMessage> {
   return expectRegistryValue(charter.projections[refValue], refValue, "projection");
 }
 
-export function hydrateHistoryProjectionRef(
+export function hydrateHistoryProjectionRef<TActorMessage extends AnyActorMessage>(
   refValue: Ref,
-  charter: Charter,
-): HistoryProjectionFunction {
+  charter: Charter<TActorMessage>,
+): HistoryProjectionFunction<TActorMessage> {
   return expectRegistryValue(
     charter.historyProjections?.[refValue],
     refValue,

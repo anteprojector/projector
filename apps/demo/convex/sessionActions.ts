@@ -85,7 +85,7 @@ export const sendMessage = action({
 
     machine.enqueueFrame({
       metadata: { mode: "text", transport: "convex" },
-      messages: [{ type: "user", text: content }],
+      messages: [{ type: "user", content: content, text: content }],
     });
 
     let lastFrameId: Id<"machineFrames"> | undefined;

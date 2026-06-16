@@ -1,5 +1,6 @@
 import type {
   ActionContext,
+  AnyActorMessage,
   AnyAction,
   CompiledInference,
   CompletionReason,
@@ -12,6 +13,7 @@ import type {
   ProjectorExecutor,
   RetrievableState,
   RuntimeSyncContext,
+  DefaultActorMessage,
 } from "@projectors/core";
 
 export type {
@@ -108,7 +110,7 @@ export type LiveKitEventNames = {
   dataReceived: string;
 };
 
-export type RunActionInput = {
+export type RunActionInput<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   action: AnyAction;
   input: unknown;
   context: ActionContext<unknown>;
@@ -137,14 +139,15 @@ export type LiveKitUserTranscriptUpdate = {
   error?: string;
 };
 
-export type LiveKitExecutorConfig = {
+export type LiveKitExecutorConfig<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   debug?: boolean;
   session: LiveKitSessionLike;
   agent?: LiveKitAgentLike;
   room?: LiveKitRoomLike;
-  discreteExecutor: ProjectorExecutor;
+  discreteExecutor: ProjectorExecutor<TActorMessage>;
+  messageToText?: (message: TActorMessage) => string | undefined;
   realtime?: {
-    enabled?: boolean | ((context: RuntimeSyncContext) => boolean);
+    enabled?: boolean | ((context: RuntimeSyncContext<TActorMessage>) => boolean);
   };
   input?: {
     messageTopic?: string;
@@ -155,7 +158,7 @@ export type LiveKitExecutorConfig = {
     }) => string | undefined;
   };
   eventNames?: Partial<LiveKitEventNames>;
-  runAction?: (input: RunActionInput) => unknown | Promise<unknown>;
+  runAction?: (input: RunActionInput<TActorMessage>) => unknown | Promise<unknown>;
   getState?: (input: StateGetterInput) => unknown | Promise<unknown>;
   onAssistantTranscriptUpdate?: (update: LiveKitAssistantTranscriptUpdate) => unknown | Promise<unknown>;
   onUserTranscriptUpdate?: (update: LiveKitUserTranscriptUpdate) => unknown | Promise<unknown>;

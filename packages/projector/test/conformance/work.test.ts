@@ -20,7 +20,7 @@ describe("conformance: work scheduling", () => {
       charter: charter({ executor }),
     });
     const userFrame = machine.enqueueFrame({
-      messages: [{ type: "user", text: "remember my name" }],
+      messages: [{ type: "user", content: "remember my name", text: "remember my name" }],
     });
 
     const iterator = runMachine(machine)[Symbol.asyncIterator]();
@@ -79,7 +79,7 @@ describe("conformance: work scheduling", () => {
     });
 
     await expect(iterator.next()).resolves.toMatchObject({ done: true });
-    await expect(drain(runMachine(machine, { startWork: false }))).resolves.toEqual([]);
+    await expect(drain(runMachine(machine, { scheduleWork: false }))).resolves.toEqual([]);
   });
 
   it("does not let actor output from a runtime trigger that same runtime again", async () => {
@@ -96,14 +96,14 @@ describe("conformance: work scheduling", () => {
       generatorId: "instance:r",
       runtimeInstanceId: "instance:r",
       activationId: "activation-existing",
-      messages: [{ type: "assistant", text: "self output" }],
+      messages: [{ type: "assistant", content: "self output", text: "self output" }],
     });
 
-    await expect(drain(runMachine(machine, { startWork: false }))).resolves.toEqual([assistantFrame]);
+    await expect(drain(runMachine(machine, { scheduleWork: false }))).resolves.toEqual([assistantFrame]);
   });
 
   it("matches actor-frame triggers with default and explicit runtime address audiences", async () => {
-    await expect(activationRuntimeIdsFor({ type: "user", text: "broadcast" })).resolves.toEqual([
+    await expect(activationRuntimeIdsFor({ type: "user", content: "broadcast", text: "broadcast" })).resolves.toEqual([
       "member:r/first",
       "member:r/second",
     ]);
@@ -111,6 +111,7 @@ describe("conformance: work scheduling", () => {
     await expect(
       activationRuntimeIdsFor({
         type: "assistant",
+        content: "runtime target",
         text: "runtime target",
         audience: { type: "member", ownerInstanceId: "r", memberPath: ["first"] },
       }),
@@ -119,13 +120,14 @@ describe("conformance: work scheduling", () => {
     await expect(
       activationRuntimeIdsFor({
         type: "assistant",
+        content: "runtime target list",
         text: "runtime target list",
         audience: [{ type: "member", ownerInstanceId: "r", memberPath: ["second"] }],
       }),
     ).resolves.toEqual(["member:r/second"]);
 
     await expect(
-      activationRuntimeIdsFor({ type: "assistant", text: "default self without producer" }),
+      activationRuntimeIdsFor({ type: "assistant", content: "default self without producer", text: "default self without producer" }),
     ).resolves.toEqual([]);
   });
 
@@ -140,9 +142,9 @@ describe("conformance: work scheduling", () => {
       root: { id: "r", node: root },
       charter: charter(),
     });
-    machine.enqueueFrame({ messages: [{ type: "user", text: "visible but wrong trigger" }] });
+    machine.enqueueFrame({ messages: [{ type: "user", content: "visible but wrong trigger", text: "visible but wrong trigger" }] });
 
-    const frames = await drain(runMachine(machine, { startWork: false }));
+    const frames = await drain(runMachine(machine, { scheduleWork: false }));
     expect(workActivationRuntimeIds(frames)).toEqual([]);
   });
 });
@@ -167,7 +169,7 @@ async function activationRuntimeIdsFor(message: FrameMessage): Promise<string[]>
   });
   machine.enqueueFrame({ messages: [message] });
 
-  return workActivationRuntimeIds(await drain(runMachine(machine, { startWork: false })));
+  return workActivationRuntimeIds(await drain(runMachine(machine, { scheduleWork: false })));
 }
 
 function workActivationRuntimeIds(frames: readonly Frame[]): string[] {

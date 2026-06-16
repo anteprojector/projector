@@ -1,10 +1,21 @@
 import type {
   ActorMessage,
+  AnyActorMessage,
   CompletionReason,
+  DefaultActorMessage,
   Frame,
   FrameDraft,
+  FrameMessage,
   GeneratorId,
   HistoryProjectionContext,
+  UserContentOf,
+  UserMessage,
+  UserMessageOf,
+  AssistantContentOf,
+  AssistantMessage,
+  AssistantMessageOf,
+  Audience,
+  MessageDelivery,
   RuntimeConcurrency,
   RuntimeInstanceId,
   WorkActivationMessage,
@@ -138,30 +149,90 @@ export function isWorkCompletionMessage(message: unknown): message is WorkComple
   );
 }
 
-export function actorMessages(ctx: HistoryProjectionContext): ActorMessage[] {
-  return actorMessagesFromFrames(ctx.history);
+export function userMessage<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  content: UserContentOf<TActorMessage>,
+  options: {
+    text?: string;
+    audience?: Audience;
+    delivery?: MessageDelivery;
+  } = {},
+): UserMessageOf<TActorMessage> {
+  return {
+    type: "user",
+    content,
+    ...options,
+  } as UserMessageOf<TActorMessage>;
 }
 
-export function messagesSinceLastCompletion(
-  ctx: HistoryProjectionContext,
-): ActorMessage[] {
+export function assistantMessage<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  content: AssistantContentOf<TActorMessage>,
+  options: {
+    text?: string;
+    audience?: Audience;
+    delivery?: MessageDelivery;
+  } = {},
+): AssistantMessageOf<TActorMessage> {
+  return {
+    type: "assistant",
+    content,
+    ...options,
+  } as AssistantMessageOf<TActorMessage>;
+}
+
+export function textUserMessage(text: string): UserMessage<string> {
+  return { type: "user", content: text, text };
+}
+
+export function textAssistantMessage(text: string): AssistantMessage<string> {
+  return { type: "assistant", content: text, text };
+}
+
+export function actorMessages<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  ctx: HistoryProjectionContext<TActorMessage>,
+): TActorMessage[] {
+  return actorMessagesFromFrames<TActorMessage>(ctx.history);
+}
+
+export function messages<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  ctx: HistoryProjectionContext<TActorMessage>,
+): FrameMessage<TActorMessage>[] {
+  return messagesFromFrames<TActorMessage>(ctx.history);
+}
+
+export function messagesSinceLastCompletion<
+  TActorMessage extends AnyActorMessage = DefaultActorMessage,
+>(
+  ctx: HistoryProjectionContext<TActorMessage>,
+): TActorMessage[] {
   const index = lastCompletionIndex(ctx.history, ctx.runtimeInstanceId);
-  return actorMessagesFromFrames(index === -1 ? ctx.history : ctx.history.slice(index + 1));
+  return actorMessagesFromFrames<TActorMessage>(index === -1 ? ctx.history : ctx.history.slice(index + 1));
 }
 
-export function messagesBeforeLastCompletion(
-  ctx: HistoryProjectionContext,
-): ActorMessage[] {
+export function messagesBeforeLastCompletion<
+  TActorMessage extends AnyActorMessage = DefaultActorMessage,
+>(
+  ctx: HistoryProjectionContext<TActorMessage>,
+): TActorMessage[] {
   const index = lastCompletionIndex(ctx.history, ctx.runtimeInstanceId);
-  return index === -1 ? [] : actorMessagesFromFrames(ctx.history.slice(0, index));
+  return index === -1 ? [] : actorMessagesFromFrames<TActorMessage>(ctx.history.slice(0, index));
 }
 
-export function actorMessagesFromFrames(frames: readonly Frame[]): ActorMessage[] {
-  return frames.flatMap((frame) => frame.messages.flatMap(actorMessageFromUnknown));
+export function actorMessagesFromFrames<
+  TActorMessage extends AnyActorMessage = DefaultActorMessage,
+>(frames: readonly Frame<TActorMessage>[]): TActorMessage[] {
+  return frames.flatMap((frame) =>
+    frame.messages.flatMap((message) => actorMessageFromUnknown<TActorMessage>(message))
+  );
 }
 
-function lastCompletionIndex(
-  frames: readonly Frame[],
+export function messagesFromFrames<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  frames: readonly Frame<TActorMessage>[],
+): FrameMessage<TActorMessage>[] {
+  return frames.flatMap((frame) => frame.messages);
+}
+
+function lastCompletionIndex<TActorMessage extends AnyActorMessage>(
+  frames: readonly Frame<TActorMessage>[],
   runtimeInstanceId: RuntimeInstanceId,
 ): number {
   const activationRuntimeIds = new Map<string, RuntimeInstanceId>();
@@ -188,7 +259,7 @@ function lastCompletionIndex(
 }
 
 function readCompletionMetadata(
-  frame: Pick<Frame, "metadata"> | undefined,
+  frame: Pick<Frame<any>, "metadata"> | undefined,
   runtimeInstanceId: RuntimeInstanceId | undefined,
 ): RuntimeCompletionFrameMetadata | undefined {
   const metadata = frame?.metadata;
@@ -222,20 +293,22 @@ function readCompletionMetadata(
   };
 }
 
-function actorMessageFromUnknown(value: unknown): ActorMessage[] {
+function actorMessageFromUnknown<TActorMessage extends AnyActorMessage>(
+  value: unknown,
+): TActorMessage[] {
   if (!value || typeof value !== "object") {
     return [];
   }
 
   const record = value as Record<string, unknown>;
-  if (record.type === "user" && typeof record.text === "string") {
-    return [{ ...record, type: "user", text: record.text } as ActorMessage];
+  if (record.type === "user") {
+    return [{ ...record, type: "user" } as TActorMessage];
   }
-  if (record.type === "assistant" && typeof record.text === "string") {
-    return [{ ...record, type: "assistant", text: record.text } as ActorMessage];
+  if (record.type === "assistant") {
+    return [{ ...record, type: "assistant" } as TActorMessage];
   }
   if (record.type === "tool" && typeof record.name === "string") {
-    return [{ ...record, type: "tool", name: record.name } as ActorMessage];
+    return [{ ...record, type: "tool", name: record.name } as TActorMessage];
   }
 
   return [];

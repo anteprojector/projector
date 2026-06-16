@@ -12,36 +12,49 @@ export type Ref = string;
 export type ProjectionFunctionRef = Ref;
 export type StateDescriptorRef = Ref;
 
-export type ProjectionContext = {
+export type ProjectionContext<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   runtimeInstanceId: RuntimeInstanceId;
   instanceId: InstanceId;
-  node: Node;
+  node: Node<TActorMessage>;
 };
 
-export type ProjectionFunction = (ctx: ProjectionContext) => StaticProjection;
+export type ProjectionFunction<
+  TActorMessage extends AnyActorMessage = DefaultActorMessage,
+> = (ctx: ProjectionContext<TActorMessage>) => StaticProjection;
 
-export type Projection = StaticProjection | ProjectionFunctionRef | ProjectionFunction;
+export type Projection<TActorMessage extends AnyActorMessage = DefaultActorMessage> =
+  | StaticProjection
+  | ProjectionFunctionRef
+  | ProjectionFunction<TActorMessage>;
 
 export type HistoryProjectionFunctionRef = Ref;
 
-export type HistoryProjectionContext = {
+export type HistoryProjectionContext<
+  TActorMessage extends AnyActorMessage = DefaultActorMessage,
+> = {
   target: Generator;
   runtimeInstanceId: RuntimeInstanceId;
   activationId: string;
   trigger: RuntimeTrigger;
-  history: Frame[];
+  history: Frame<TActorMessage>[];
   states: Record<StateKey, unknown>;
 };
 
-export type HistoryProjectionFunction = (
-  ctx: HistoryProjectionContext,
-) => ActorMessage[];
+export type HistoryProjectionFunction<
+  TActorMessage extends AnyActorMessage = DefaultActorMessage,
+> = {
+  bivarianceHack(
+    ctx: HistoryProjectionContext<TActorMessage>,
+  ): FrameMessage<TActorMessage>[];
+}["bivarianceHack"];
 
 export type ActorHistoryProjection = { type: "actor" };
-export type HistoryProjection =
+export type MessageHistoryProjection = { type: "messages" };
+export type HistoryProjection<TActorMessage extends AnyActorMessage = DefaultActorMessage> =
   | ActorHistoryProjection
+  | MessageHistoryProjection
   | HistoryProjectionFunctionRef
-  | HistoryProjectionFunction;
+  | HistoryProjectionFunction<TActorMessage>;
 
 export type GeneratorId = string;
 export type RuntimeInstanceId = string;
@@ -64,6 +77,54 @@ export type AudienceTarget = RuntimeAddress;
 
 export type Audience = "self" | "broadcast" | AudienceTarget | AudienceTarget[];
 
+export type MessageDelivery = "immediate" | "queued";
+
+export type UserMessage<TContent = string> = {
+  type: "user";
+  content?: TContent;
+  text?: string;
+  audience?: Audience;
+  delivery?: MessageDelivery;
+};
+
+export type AssistantMessage<TContent = string> = {
+  type: "assistant";
+  content?: TContent;
+  text?: string;
+  audience?: Audience;
+  delivery?: MessageDelivery;
+};
+
+export type ToolMessage = {
+  type: "tool";
+  name: string;
+  text?: string;
+  value?: unknown;
+  audience?: Audience;
+  delivery?: MessageDelivery;
+};
+
+export type ActorMessage<
+  TAssistantContent = string,
+  TUserContent = string,
+> = UserMessage<TUserContent> | AssistantMessage<TAssistantContent> | ToolMessage;
+
+export type AnyActorMessage = ActorMessage<any, any>;
+
+export type DefaultActorMessage = ActorMessage<string>;
+
+export type AssistantMessageOf<TActorMessage> =
+  Extract<TActorMessage, { type: "assistant" }>;
+
+export type UserMessageOf<TActorMessage> =
+  Extract<TActorMessage, { type: "user" }>;
+
+export type AssistantContentOf<TActorMessage> =
+  AssistantMessageOf<TActorMessage> extends { content?: infer C } ? C : never;
+
+export type UserContentOf<TActorMessage> =
+  UserMessageOf<TActorMessage> extends { content?: infer C } ? C : never;
+
 export type RuntimeTrigger =
   | { type: "spawn" }
   | { type: "actor-frame" }
@@ -72,37 +133,41 @@ export type RuntimeTrigger =
 
 export type RuntimeConcurrency = "serial" | "parallel";
 export type ActivationHistory = "live" | "snapshot";
-export type MessageDelivery = "immediate" | "queued";
 
-export type TriggeredRuntimeOptions = {
+export type TriggeredRuntimeOptions<
+  TActorMessage extends AnyActorMessage = DefaultActorMessage,
+> = {
   trigger: RuntimeTrigger;
   concurrency?: RuntimeConcurrency;
   activationHistory?: ActivationHistory;
-  historyProjection?: HistoryProjection;
+  historyProjection?: HistoryProjection<TActorMessage>;
 };
 
 export type ComponentRuntime = { type: "component" };
-export type PrimaryRuntime = {
+export type PrimaryRuntime<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   type: "primary";
-  boundaryProjection: Projection;
-} & TriggeredRuntimeOptions;
-export type WorkerRuntime = {
+  boundaryProjection: Projection<TActorMessage>;
+} & TriggeredRuntimeOptions<TActorMessage>;
+export type WorkerRuntime<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   type: "worker";
-  boundaryProjection: Projection;
-} & TriggeredRuntimeOptions;
+  boundaryProjection: Projection<TActorMessage>;
+} & TriggeredRuntimeOptions<TActorMessage>;
 
-export type Runtime =
+export type Runtime<TActorMessage extends AnyActorMessage = DefaultActorMessage> =
   | { type?: "component" }
   | ({
       type: "primary";
-      boundaryProjection?: Projection;
-    } & TriggeredRuntimeOptions)
+      boundaryProjection?: Projection<TActorMessage>;
+    } & TriggeredRuntimeOptions<TActorMessage>)
   | ({
       type: "worker";
-      boundaryProjection?: Projection;
-    } & TriggeredRuntimeOptions);
+      boundaryProjection?: Projection<TActorMessage>;
+    } & TriggeredRuntimeOptions<TActorMessage>);
 
-export type NormalizedRuntime = ComponentRuntime | PrimaryRuntime | WorkerRuntime;
+export type NormalizedRuntime<TActorMessage extends AnyActorMessage = DefaultActorMessage> =
+  | ComponentRuntime
+  | PrimaryRuntime<TActorMessage>
+  | WorkerRuntime<TActorMessage>;
 
 type DryTriggeredRuntimeOptions = Omit<
   TriggeredRuntimeOptions,
@@ -113,7 +178,7 @@ type DryTriggeredRuntimeOptions = Omit<
 
 export type DryProjection = StaticProjection | Ref;
 
-export type DryHistoryProjection = ActorHistoryProjection | Ref;
+export type DryHistoryProjection = ActorHistoryProjection | MessageHistoryProjection | Ref;
 
 export type DryRuntime =
   | { type?: "component" }
@@ -204,7 +269,7 @@ export type ActionRef = string;
 export type ActionConfigEntry = AnyAction | ActionRef;
 export type ActionBindings = Record<string, AnyAction>;
 
-export type NodeConfig = {
+export type NodeConfig<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   key?: string;
   sourceNodeKey?: string;
   name?: string;
@@ -212,13 +277,13 @@ export type NodeConfig = {
   tools?: ActionConfigEntry[];
   commands?: ActionConfigEntry[];
   state?: StateDescriptor;
-  members?: Node[];
-  output?: AnyOutputConfig;
-  projection?: Projection;
-  runtime?: Runtime;
+  members?: Node<TActorMessage>[];
+  output?: OutputConfig<TActorMessage>;
+  projection?: Projection<TActorMessage>;
+  runtime?: Runtime<TActorMessage>;
 };
 
-export type Node = {
+export type Node<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   key: string;
   sourceNodeKey?: string;
   name?: string;
@@ -228,17 +293,17 @@ export type Node = {
   commandBindings: ActionBindings;
   commandRefs: ActionRef[];
   state?: NormalizedStateDescriptor;
-  members: Node[];
-  output?: AnyOutputConfig;
-  projection: Projection;
-  runtime: NormalizedRuntime;
+  members: Node<TActorMessage>[];
+  output?: OutputConfig<TActorMessage>;
+  projection: Projection<TActorMessage>;
+  runtime: NormalizedRuntime<TActorMessage>;
 };
 
-export type Instance = {
+export type Instance<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   id: string;
-  node: Node;
+  node: Node<TActorMessage>;
   states?: Record<string, StateContainer>;
-  children?: Instance[];
+  children?: Instance<TActorMessage>[];
 };
 
 export type CompletionReason = "done" | "cancelled" | "delegated" | "error";
@@ -266,20 +331,22 @@ export type WorkCompletionMessage = {
 
 export type WorkMessage = WorkActivationMessage | WorkCompletionMessage;
 
-export type SerializedNodeRef = DryNode | Ref;
+export type SerializedNodeRef<TActorMessage extends AnyActorMessage = DefaultActorMessage> =
+  | DryNode<TActorMessage>
+  | Ref;
 
 /**
  * Durable instance messages use serialized node refs. Hydrated Node objects belong
  * in the live machine tree, not in frames that may be persisted and resumed.
  */
-export type SpawnChild = {
+export type SpawnChild<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   id?: InstanceId;
-  node: SerializedNodeRef;
+  node: SerializedNodeRef<TActorMessage>;
   states?: Record<StateKey, unknown>;
-  children?: SpawnChild[];
+  children?: SpawnChild<TActorMessage>[];
 };
 
-export type InstanceMessage =
+export type InstanceMessage<TActorMessage extends AnyActorMessage = DefaultActorMessage> =
   | {
       type: "instance";
       kind: "state.patch";
@@ -298,20 +365,20 @@ export type InstanceMessage =
       type: "instance";
       kind: "transition";
       instanceId: InstanceId;
-      node: SerializedNodeRef;
+      node: SerializedNodeRef<TActorMessage>;
       states?: Record<StateKey, unknown>;
     }
   | {
       type: "instance";
       kind: "spawn";
       parentInstanceId: InstanceId;
-      children: SpawnChild[];
+      children: SpawnChild<TActorMessage>[];
     }
   | {
       type: "instance";
       kind: "attach";
       parentInstanceId: InstanceId;
-      children: SerializedInstance[];
+      children: SerializedInstance<TActorMessage>[];
     }
   | {
       type: "instance";
@@ -328,104 +395,84 @@ export type CommandMessage = {
   clientId?: string;
 };
 
-export type FrameMessage = (
-  | ActorMessage
+export type FrameMessage<TActorMessage extends AnyActorMessage = DefaultActorMessage> = (
+  | TActorMessage
   | CommandMessage
-  | InstanceMessage
+  | InstanceMessage<TActorMessage>
   | WorkMessage
 ) &
   Record<string, unknown>;
 
-export type FrameDraft = {
+export type FrameDraft<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   generatorId?: string;
   runtimeInstanceId?: RuntimeInstanceId;
   activationId?: string;
   inert?: boolean;
-  messages: FrameMessage[];
+  messages: FrameMessage<TActorMessage>[];
   metadata?: Record<string, unknown>;
 };
 
-export type Frame = FrameDraft & {
+export type Frame<TActorMessage extends AnyActorMessage = DefaultActorMessage> = FrameDraft<TActorMessage> & {
   id: string;
 };
 
 /**
  * Output configuration for implicit LLM text responses.
- * @typeParam M - The application message type this output maps to.
+ * @typeParam TActorMessage - The application actor message type this output maps to.
  */
-export type OutputConfig<M = AssistantMessage> = {
+export type OutputConfig<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   audience?: Audience;
-  schema?: z.ZodType<M>;
-  mapTextBlock?: (text: string) => M;
+  schema?: z.ZodType<AssistantContentOf<TActorMessage>>;
+  mapTextBlock?: (text: string) => AssistantContentOf<TActorMessage>;
 };
 
 export type AnyOutputConfig = OutputConfig<any>;
 
-export type EnqueueFrame = (frame: FrameDraft) => Frame | Promise<Frame>;
+export type EnqueueFrame<TActorMessage extends AnyActorMessage = DefaultActorMessage> = (
+  frame: FrameDraft<TActorMessage>,
+) => Frame<TActorMessage> | Promise<Frame<TActorMessage>>;
 
-export type ExecutorRunRequest = {
+export type ExecutorRunRequest<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   generatorId: string;
   activationId: string;
   runtimeInstanceId: RuntimeInstanceId;
-  inference: CompiledInference;
-  enqueueFrame: EnqueueFrame;
+  inference: CompiledInference<TActorMessage>;
+  enqueueFrame: EnqueueFrame<TActorMessage>;
   createActionContext?: (action: AnyAction) => ActionContext<unknown>;
-  output?: AnyOutputConfig;
+  output?: OutputConfig<TActorMessage>;
   signal?: AbortSignal;
 };
 
-export type ExecutorRunResult = {
+export type ExecutorRunResult<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   completionReason: CompletionReason;
   value?: string;
-  frames?: Array<FrameDraft | Frame>;
+  frames?: Array<FrameDraft<TActorMessage> | Frame<TActorMessage>>;
 };
 
-export type ProjectorExecutor = {
-  run(request: ExecutorRunRequest): ExecutorRunResult | Promise<ExecutorRunResult>;
+export type ProjectorExecutor<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
+  run(
+    request: ExecutorRunRequest<TActorMessage>,
+  ): ExecutorRunResult<TActorMessage> | Promise<ExecutorRunResult<TActorMessage>>;
 };
 
-export type Executor = ProjectorExecutor;
+export type Executor<TActorMessage extends AnyActorMessage = DefaultActorMessage> =
+  ProjectorExecutor<TActorMessage>;
 
-export type Charter = {
+export type Charter<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   key?: string;
   version?: string;
-  executor: ProjectorExecutor;
-  nodes: Record<string, Node>;
+  executor: ProjectorExecutor<TActorMessage>;
+  nodes: Record<string, Node<TActorMessage>>;
   tools: Record<string, AnyAction>;
   commands: Record<string, AnyAction>;
   states: Record<string, NormalizedStateDescriptor>;
-  projections: Record<string, ProjectionFunction>;
-  historyProjections?: Record<string, HistoryProjectionFunction>;
+  projections: Record<string, ProjectionFunction<TActorMessage>>;
+  historyProjections?: Record<string, HistoryProjectionFunction<TActorMessage>>;
 };
 
-export type UserMessage = {
-  type: "user";
-  text: string;
-  audience?: Audience;
-  delivery?: MessageDelivery;
-};
-
-export type AssistantMessage = {
-  type: "assistant";
-  text: string;
-  audience?: Audience;
-  delivery?: MessageDelivery;
-};
-
-export type ToolMessage = {
-  type: "tool";
-  name: string;
-  text?: string;
-  value?: unknown;
-  audience?: Audience;
-  delivery?: MessageDelivery;
-};
-
-export type ActorMessage = UserMessage | AssistantMessage | ToolMessage;
-
-export type CompiledInference = {
+export type CompiledInference<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   systemParts: string[];
-  history: ActorMessage[];
+  history: FrameMessage<TActorMessage>[];
   dynamicParts: string[];
   tools: AnyAction[];
   retrievableStates: RetrievableState[];
@@ -454,7 +501,7 @@ export type SerializedStateDescriptor = {
 
 export type DryAction = Ref;
 
-export type DryNode = {
+export type DryNode<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   key: string;
   sourceNodeKey?: string;
   name?: string;
@@ -462,17 +509,17 @@ export type DryNode = {
   tools?: DryAction[];
   commands?: DryAction[];
   state?: SerializedStateDescriptor | Ref;
-  members?: Array<DryNode | Ref>;
+  members?: Array<DryNode<TActorMessage> | Ref>;
   output?: SerializedOutputConfig;
   projection?: DryProjection;
   runtime?: DryRuntime;
 };
 
-export type SerializedInstance = {
+export type SerializedInstance<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   id: InstanceId;
-  node: DryNode | Ref;
+  node: DryNode<TActorMessage> | Ref;
   states?: Record<StateKey, StateContainer>;
-  children?: SerializedInstance[];
+  children?: SerializedInstance<TActorMessage>[];
 };
 
 export type SerializedOutputConfig = {

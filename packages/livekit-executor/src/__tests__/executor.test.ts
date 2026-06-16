@@ -137,7 +137,7 @@ describe("LiveKitExecutor", () => {
     const compiled = inference({
       systemParts: ["You are concise."],
       dynamicParts: ["Current mode: voice."],
-      history: [{ type: "user", text: "hello" }],
+      history: [{ type: "user", content: "hello", text: "hello" }],
     });
     const executor = new LiveKitExecutor({
       session,
@@ -146,7 +146,7 @@ describe("LiveKitExecutor", () => {
     });
     await executor.syncRuntime(syncContext({
       inference: compiled,
-      visibleFrames: [{ id: "user-1", messages: [{ type: "user", text: "hello" }] }],
+      visibleFrames: [{ id: "user-1", messages: [{ type: "user", content: "hello", text: "hello" }] }],
     }, frames));
 
     const result = await executor.run(request({ inference: compiled }));
@@ -167,7 +167,7 @@ describe("LiveKitExecutor", () => {
       discreteExecutor: fakeDiscreteExecutor(),
       realtime: { enabled: true },
     });
-    const visibleFrames = [{ id: "user-1", messages: [{ type: "user", text: "hello" }] }] as Frame[];
+    const visibleFrames = [{ id: "user-1", messages: [{ type: "user", content: "hello", text: "hello" }] }] as Frame[];
 
     await executor.syncRuntime(syncContext({ visibleFrames }));
     await executor.syncRuntime(syncContext({ visibleFrames }));
@@ -208,6 +208,7 @@ describe("LiveKitExecutor", () => {
       messages: [
         {
           type: "user",
+          content: "what is the plan?",
           text: "what is the plan?",
           audience: "broadcast",
           source: { external: true },
@@ -221,6 +222,7 @@ describe("LiveKitExecutor", () => {
       messages: [
         {
           type: "assistant",
+          content: "Here is the plan.",
           text: "Here is the plan.",
           audience: "self",
           source: { external: true },
@@ -275,6 +277,7 @@ describe("LiveKitExecutor", () => {
     ]);
     expect(message).toMatchObject({
       type: "user",
+      content: "what is the plan?",
       text: "what is the plan?",
       messageId,
       streamState: "complete",
@@ -314,6 +317,7 @@ describe("LiveKitExecutor", () => {
       messages: [
         {
           type: "user",
+          content: "hello",
           text: "hello",
           audience: "broadcast",
           source: { external: true, transport: "livekit" },
@@ -459,6 +463,7 @@ describe("LiveKitExecutor", () => {
     expect(frames).toHaveLength(1);
     expect(frames[0]?.messages[0]).toMatchObject({
       type: "assistant",
+      content: "Hello",
       text: "Hello",
       streamState: "complete",
     });
@@ -619,9 +624,17 @@ describe("LiveKit prompt and tool rendering", () => {
         systemParts: ["System A"],
         dynamicParts: ["Dynamic B"],
         history: [
-          { type: "user", text: "Hi" },
-          { type: "assistant", text: "Hello" },
+          { type: "user", content: "Hi", text: "Hi" },
+          {
+            type: "instance",
+            kind: "state.patch",
+            instanceId: "root",
+            stateKey: "status",
+            patch: { ready: true },
+          },
+          { type: "assistant", content: "Hello", text: "Hello" },
           { type: "tool", name: "lookup", value: { ok: true } },
+          { type: "work", kind: "completion", activationId: "a", reason: "done" },
         ],
       }),
     );
@@ -630,6 +643,8 @@ describe("LiveKit prompt and tool rendering", () => {
     expect(rendered).toContain("## Dynamic Context\n\nDynamic B");
     expect(rendered).toContain("User: Hi");
     expect(rendered).toContain('Tool lookup: {"ok":true}');
+    expect(rendered).not.toContain("state.patch");
+    expect(rendered).not.toContain("activationId");
   });
 
   it("exports last-wins LiveKit tool definitions", () => {

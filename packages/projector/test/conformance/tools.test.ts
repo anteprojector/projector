@@ -19,7 +19,7 @@ describe("conformance: projected tools", () => {
       root: { id: "r", node: root },
       charter: charter({ executor }),
     });
-    machine.enqueueFrame({ messages: [{ type: "user", text: "search" }] });
+    machine.enqueueFrame({ messages: [{ type: "user", content: "search", text: "search" }] });
 
     await drain(runMachine(machine));
 
@@ -47,7 +47,7 @@ describe("conformance: projected tools", () => {
       charter: charter({ executor, nodes: { source }, tools: { search: charterSearch } }),
     });
 
-    machine.enqueueFrame({ messages: [{ type: "user", text: "search" }] });
+    machine.enqueueFrame({ messages: [{ type: "user", content: "search", text: "search" }] });
 
     await drain(runMachine(machine));
 
@@ -76,7 +76,7 @@ describe("conformance: projected tools", () => {
       charter: charter({ executor, tools: { search: baseSearch } }),
     });
 
-    machine.enqueueFrame({ messages: [{ type: "user", text: "search" }] });
+    machine.enqueueFrame({ messages: [{ type: "user", content: "search", text: "search" }] });
 
     await drain(runMachine(machine));
 
@@ -101,7 +101,7 @@ describe("conformance: projected tools", () => {
       charter: charter({ executor, tools: { search: baseSearch } }),
     });
 
-    machine.enqueueFrame({ messages: [{ type: "user", text: "search" }] });
+    machine.enqueueFrame({ messages: [{ type: "user", content: "search", text: "search" }] });
 
     await drain(runMachine(machine));
 

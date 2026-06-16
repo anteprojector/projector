@@ -1,6 +1,7 @@
 import type { ProjectionFrame, SyntheticRoot } from "./frames.ts";
 import { traversalFrames } from "./frames.ts";
 import type {
+  AnyActorMessage,
   Instance,
   NormalizedStateDescriptor,
   StateAddress,
@@ -8,25 +9,27 @@ import type {
   StateKey,
 } from "./types.ts";
 
-export type ResolvedState = {
+export type ResolvedState<TActorMessage extends AnyActorMessage = any> = {
   address: StateAddress;
-  targetInstance: Instance;
+  targetInstance: Instance<TActorMessage>;
   descriptor: NormalizedStateDescriptor;
   container: StateContainer;
-  sourceFrame: ProjectionFrame;
+  sourceFrame: ProjectionFrame<TActorMessage>;
 };
 
-type StateGroup = {
-  targetInstance: Instance;
+type StateGroup<TActorMessage extends AnyActorMessage = any> = {
+  targetInstance: Instance<TActorMessage>;
   stateKey: StateKey;
   entries: Array<{
     descriptor: NormalizedStateDescriptor;
-    frame: ProjectionFrame;
+    frame: ProjectionFrame<TActorMessage>;
   }>;
 };
 
-export function resolveStates(root: SyntheticRoot | Instance): ResolvedState[] {
-  const groups = new Map<string, StateGroup>();
+export function resolveStates<TActorMessage extends AnyActorMessage>(
+  root: SyntheticRoot<TActorMessage> | Instance<TActorMessage>,
+): ResolvedState<TActorMessage>[] {
+  const groups = new Map<string, StateGroup<TActorMessage>>();
 
   for (const frame of traversalFrames(root)) {
     const descriptor = frame.node.state;
@@ -43,12 +46,12 @@ export function resolveStates(root: SyntheticRoot | Instance): ResolvedState[] {
         targetInstance,
         stateKey: descriptor.key,
         entries: [],
-      } satisfies StateGroup);
+      } satisfies StateGroup<TActorMessage>);
     group.entries.push({ descriptor, frame });
     groups.set(groupKey, group);
   }
 
-  const resolved: ResolvedState[] = [];
+  const resolved: ResolvedState<TActorMessage>[] = [];
   for (const group of groups.values()) {
     resolved.push(resolveStateGroup(group));
   }
@@ -56,7 +59,9 @@ export function resolveStates(root: SyntheticRoot | Instance): ResolvedState[] {
   return resolved;
 }
 
-function resolveStateGroup(group: StateGroup): ResolvedState {
+function resolveStateGroup<TActorMessage extends AnyActorMessage>(
+  group: StateGroup<TActorMessage>,
+): ResolvedState<TActorMessage> {
   const scope = group.entries[0]?.descriptor.scope;
   if (!scope) {
     throw new Error("State group has no descriptors");
@@ -136,15 +141,15 @@ function mergeDescriptors(
   };
 }
 
-function allSchemasValidate(
-  entries: StateGroup["entries"],
+function allSchemasValidate<TActorMessage extends AnyActorMessage>(
+  entries: StateGroup<TActorMessage>["entries"],
   value: unknown,
 ): boolean {
   return entries.every((entry) => entry.descriptor.schema.safeParse(value).success);
 }
 
 function validateAllSchemas(
-  entries: StateGroup["entries"],
+  entries: StateGroup<any>["entries"],
   value: unknown,
   stateKey: string,
 ): void {

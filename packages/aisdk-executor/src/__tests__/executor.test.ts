@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createGetStateAction,
+  type ActorMessage,
+  type AnyActorMessage,
   type CompiledInference,
+  type DefaultActorMessage,
   type ExecutorRunRequest,
   type Frame,
   type FrameDraft,
@@ -44,9 +47,17 @@ describe("AI SDK prompt rendering", () => {
       buildAiSdkMessages(
         inference({
           history: [
-            { type: "user", text: "hello" },
-            { type: "assistant", text: "hi" },
+            { type: "user", content: "hello", text: "hello" },
+            { type: "assistant", content: "hi", text: "hi" },
+            {
+              type: "instance",
+              kind: "state.patch",
+              instanceId: "root",
+              stateKey: "status",
+              patch: { ready: true },
+            },
             { type: "tool", name: "lookup", value: { ok: true } },
+            { type: "work", kind: "completion", activationId: "a", reason: "done" },
             { type: "tool", name: "search", text: "done" },
           ],
         }),
@@ -65,12 +76,12 @@ describe("AiSdkExecutor", () => {
     const model = fakeModel();
     const signal = new AbortController().signal;
     const generate = vi.fn(async () => result({ text: "hello" }));
-    const requestInput = request({
+    const requestInput = request<DefaultActorMessage>({
       signal,
-      inference: inference({
+      inference: inference<DefaultActorMessage>({
         systemParts: ["system"],
         dynamicParts: ["dynamic"],
-        history: [{ type: "user", text: "hi" }],
+        history: [{ type: "user", content: "hi", text: "hi" }],
         tools: [{ state: null, name: "lookup", inputSchema: z.object({ query: z.string() }) }],
       }),
     });
@@ -134,16 +145,17 @@ describe("AiSdkExecutor", () => {
   });
 
   it("passes request output schema to generateText", async () => {
-    const frames: FrameDraft[] = [];
+    type StructuredActorMessage = ActorMessage<{ answer: string }>;
+    const frames: FrameDraft<StructuredActorMessage>[] = [];
     const generate = vi.fn(async () => result({ text: "Structured answer." }));
-    const schema = z.object({ type: z.literal("assistant"), text: z.string() });
-    const executor = new AiSdkExecutor({
+    const schema = z.object({ answer: z.string() });
+    const executor = new AiSdkExecutor<StructuredActorMessage>({
       model: fakeModel(),
       generateText: generate as never,
     });
 
     await executor.run(
-      request({
+      request<StructuredActorMessage>({
         output: { schema },
         enqueueFrame: enqueueTo(frames),
       }),
@@ -190,6 +202,7 @@ describe("AiSdkExecutor", () => {
         messages: [
           {
             type: "assistant",
+            content: "Hello",
             text: "Hello",
             messageId,
             streamState: "complete",
@@ -270,7 +283,7 @@ describe("AiSdkExecutor", () => {
             {
               state: null,
               name: "announce",
-              run: () => ({ type: "assistant", text: "from tool", audience: "broadcast" }),
+              run: () => ({ type: "assistant", content: "from tool", text: "from tool", audience: "broadcast" }),
             },
           ],
         }),
@@ -285,7 +298,7 @@ describe("AiSdkExecutor", () => {
         generatorId: "generator-1",
         runtimeInstanceId: "runtime-1",
         activationId: "activation-1",
-        messages: [{ type: "assistant", text: "from tool", audience: "broadcast" }],
+        messages: [{ type: "assistant", content: "from tool", text: "from tool", audience: "broadcast" }],
       },
     ]);
   });
@@ -379,7 +392,9 @@ describe("AiSdkExecutor", () => {
   });
 });
 
-function inference(overrides: Partial<CompiledInference> = {}): CompiledInference {
+function inference<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  overrides: Partial<CompiledInference<TActorMessage>> = {},
+): CompiledInference<TActorMessage> {
   return {
     systemParts: [],
     history: [],
@@ -390,21 +405,25 @@ function inference(overrides: Partial<CompiledInference> = {}): CompiledInferenc
   };
 }
 
-function request(overrides: Partial<ExecutorRunRequest> = {}): ExecutorRunRequest {
+function request<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  overrides: Partial<ExecutorRunRequest<TActorMessage>> = {},
+): ExecutorRunRequest<TActorMessage> {
   return {
     generatorId: "generator-1",
     activationId: "activation-1",
     runtimeInstanceId: "runtime-1",
-    inference: inference({
-      history: [{ type: "user", text: "hello" }],
+    inference: inference<TActorMessage>({
+      history: [{ type: "user", content: "hello", text: "hello" }] as CompiledInference<TActorMessage>["history"],
     }),
     enqueueFrame: enqueueTo([]),
     ...overrides,
   };
 }
 
-function enqueueTo(frames: FrameDraft[]) {
-  return async (frame: FrameDraft): Promise<Frame> => {
+function enqueueTo<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  frames: FrameDraft<TActorMessage>[],
+) {
+  return async (frame: FrameDraft<TActorMessage>): Promise<Frame<TActorMessage>> => {
     frames.push(frame);
     return { id: `frame-${frames.length}`, ...frame };
   };

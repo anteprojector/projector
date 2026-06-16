@@ -1,26 +1,30 @@
 import { Output, generateText, streamText, stepCountIs, tool, type ModelMessage, type ToolSet } from "ai";
+import { isActorMessage } from "@projectors/core";
 import type {
   ActionContext,
-  ActorMessage,
-  AnyOutputConfig,
+  AnyActorMessage,
   AnyAction,
   CompiledInference,
+  DefaultActorMessage,
   ExecutorRunRequest,
   ExecutorRunResult,
   FrameMessage,
   ProjectorExecutor,
+  Audience,
 } from "@projectors/core";
 import { z } from "zod";
-import type { AiSdkExecutorConfig } from "./types.ts";
+import type { AiSdkExecutorConfig, AiSdkStreamUpdate } from "./types.ts";
 
 const DEFAULT_MAX_STEPS = 5;
 
-export class AiSdkExecutor implements ProjectorExecutor {
+export class AiSdkExecutor<
+  TActorMessage extends AnyActorMessage = DefaultActorMessage,
+> implements ProjectorExecutor<TActorMessage> {
   readonly type = "aisdk";
 
-  constructor(readonly config: AiSdkExecutorConfig) {}
+  constructor(readonly config: AiSdkExecutorConfig<TActorMessage>) {}
 
-  async run(request: ExecutorRunRequest): Promise<ExecutorRunResult> {
+  async run(request: ExecutorRunRequest<TActorMessage>): Promise<ExecutorRunResult<TActorMessage>> {
     if (request.signal?.aborted) {
       return { completionReason: "cancelled" };
     }
@@ -32,7 +36,7 @@ export class AiSdkExecutor implements ProjectorExecutor {
     const input = {
       model: this.config.model,
       system: buildAiSdkSystem(request.inference),
-      messages: buildAiSdkMessages(request.inference),
+      messages: buildAiSdkMessages(request.inference, this.config.messageToModelMessage),
       tools: hasTools ? tools : undefined,
       abortSignal: request.signal,
       maxOutputTokens: this.config.maxOutputTokens,
@@ -71,10 +75,10 @@ export class AiSdkExecutor implements ProjectorExecutor {
   }
 
   private async runStreaming(
-    request: ExecutorRunRequest,
-    stream: NonNullable<AiSdkExecutorConfig["streamText"]>,
-    input: Parameters<NonNullable<AiSdkExecutorConfig["streamText"]>>[0],
-  ): Promise<ExecutorRunResult> {
+    request: ExecutorRunRequest<TActorMessage>,
+    stream: NonNullable<AiSdkExecutorConfig<TActorMessage>["streamText"]>,
+    input: Parameters<NonNullable<AiSdkExecutorConfig<TActorMessage>["streamText"]>>[0],
+  ): Promise<ExecutorRunResult<TActorMessage>> {
     const messageId = crypto.randomUUID();
     let seq = 0;
     let text = "";
@@ -125,7 +129,7 @@ export class AiSdkExecutor implements ProjectorExecutor {
             frames: [
               {
                 messages: [
-                  outputMessageFromText(finalText, request.output, {
+                  outputMessageFromText<TActorMessage>(finalText, request.output, {
                     messageId,
                     streamState: "complete",
                     streamSeq: finalSeq,
@@ -139,9 +143,9 @@ export class AiSdkExecutor implements ProjectorExecutor {
   }
 }
 
-function emitStreamUpdate(
-  config: AiSdkExecutorConfig,
-  update: Parameters<NonNullable<AiSdkExecutorConfig["onStreamUpdate"]>>[0],
+function emitStreamUpdate<TActorMessage extends AnyActorMessage>(
+  config: AiSdkExecutorConfig<TActorMessage>,
+  update: AiSdkStreamUpdate<TActorMessage>,
 ): void {
   if (!config.onStreamUpdate) return;
   void Promise.resolve()
@@ -153,15 +157,15 @@ function emitStreamUpdate(
     });
 }
 
-function shouldStream(
-  stream: AiSdkExecutorConfig["stream"],
-  request: ExecutorRunRequest,
+function shouldStream<TActorMessage extends AnyActorMessage>(
+  stream: AiSdkExecutorConfig<TActorMessage>["stream"],
+  request: ExecutorRunRequest<TActorMessage>,
 ): boolean {
   if (typeof stream === "function") return stream(request);
   return stream === true;
 }
 
-export function buildAiSdkSystem(inference: CompiledInference): string {
+export function buildAiSdkSystem(inference: CompiledInference<any>): string {
   return [
     renderSection("System", inference.systemParts),
     renderSection("Dynamic Context", inference.dynamicParts),
@@ -170,13 +174,21 @@ export function buildAiSdkSystem(inference: CompiledInference): string {
     .join("\n\n");
 }
 
-export function buildAiSdkMessages(inference: CompiledInference): ModelMessage[] {
-  return inference.history.map(actorMessageToModelMessage);
+export function buildAiSdkMessages<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  inference: CompiledInference<TActorMessage>,
+  messageToModelMessage?: (message: TActorMessage) => ModelMessage | undefined,
+): ModelMessage[] {
+  return inference.history
+    .filter(isActorMessage<TActorMessage>)
+    .flatMap((message) => {
+      const rendered = messageToModelMessage?.(message);
+      return rendered ? [rendered] : [actorMessageToModelMessage(message)];
+    });
 }
 
-export function buildAiSdkTools(
-  request: ExecutorRunRequest,
-  config: AiSdkExecutorConfig,
+export function buildAiSdkTools<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  request: ExecutorRunRequest<TActorMessage>,
+  config: AiSdkExecutorConfig<TActorMessage>,
 ): ToolSet {
   const tools: ToolSet = {};
 
@@ -185,18 +197,19 @@ export function buildAiSdkTools(
       description: action.description ?? "",
       inputSchema: action.inputSchema ?? z.object({}),
       strict: config.toolStrict ?? false,
-      execute: (input, aiSdkContext) => executeAction(action, input, request, config, aiSdkContext),
+      execute: (input, aiSdkContext) =>
+        executeAction(action, input, request, config, aiSdkContext),
     });
   }
 
   return tools;
 }
 
-async function executeAction(
+async function executeAction<TActorMessage extends AnyActorMessage>(
   action: AnyAction,
   input: unknown,
-  request: ExecutorRunRequest,
-  config: AiSdkExecutorConfig,
+  request: ExecutorRunRequest<TActorMessage>,
+  config: AiSdkExecutorConfig<TActorMessage>,
   aiSdkContext: unknown,
 ): Promise<unknown> {
   const context: ActionContext<unknown> = request.createActionContext?.(action) ?? {};
@@ -206,7 +219,7 @@ async function executeAction(
   } else {
     output = await action.run?.(input as never, context as never);
   }
-  const messages = actionResultMessages(output);
+  const messages = actionResultMessages<TActorMessage>(output);
   if (messages.length > 0) {
     await request.enqueueFrame({
       generatorId: request.generatorId,
@@ -218,11 +231,13 @@ async function executeAction(
   return output;
 }
 
-function actionResultMessages(value: unknown): FrameMessage[] {
+function actionResultMessages<TActorMessage extends AnyActorMessage>(
+  value: unknown,
+): FrameMessage<TActorMessage>[] {
   if (Array.isArray(value)) {
-    return value.filter(isFrameMessageLike) as FrameMessage[];
+    return value.filter(isFrameMessageLike) as FrameMessage<TActorMessage>[];
   }
-  return isFrameMessageLike(value) ? [value as FrameMessage] : [];
+  return isFrameMessageLike(value) ? [value as FrameMessage<TActorMessage>] : [];
 }
 
 function isFrameMessageLike(value: unknown): value is { type: string } {
@@ -233,29 +248,44 @@ function isFrameMessageLike(value: unknown): value is { type: string } {
   );
 }
 
-function actorMessageToModelMessage(message: ActorMessage): ModelMessage {
+function actorMessageToModelMessage(message: AnyActorMessage): ModelMessage {
   if (message.type === "user") {
-    return { role: "user", content: message.text };
+    return { role: "user", content: renderActorContent(message) };
   }
   if (message.type === "assistant") {
-    return { role: "assistant", content: message.text };
+    return { role: "assistant", content: renderActorContent(message) };
   }
   return { role: "user", content: renderToolMessage(message) };
 }
 
-function outputMessageFromText(
+function renderActorContent(
+  message: Extract<AnyActorMessage, { type: "user" | "assistant" }>,
+): string {
+  if (typeof message.content === "string") {
+    return message.content;
+  }
+  if (message.text !== undefined) {
+    return message.text;
+  }
+  throw new Error(
+    `Cannot render ${message.type} message with non-string content. Provide messageToModelMessage or text.`,
+  );
+}
+
+function outputMessageFromText<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
   text: string,
-  output: AnyOutputConfig | undefined,
+  output: ExecutorRunRequest<TActorMessage>["output"],
   metadata: Record<string, unknown>,
-): FrameMessage {
-  const mapped = output?.mapTextBlock
+): FrameMessage<TActorMessage> {
+  const mappedContent = output?.mapTextBlock
     ? output.mapTextBlock(text)
-    : {
-        type: "assistant",
-        text,
-      };
-  const parsed = output?.schema ? output.schema.parse(mapped) : mapped;
-  const withAudience = applyOutputAudience(parsed, output?.audience);
+    : text;
+  const content = output?.schema ? output.schema.parse(mappedContent) : mappedContent;
+  const withAudience = applyOutputAudience({
+    type: "assistant",
+    content,
+    text,
+  }, output?.audience);
   if (!isFrameMessageLike(withAudience)) {
     throw new Error("Output mapper must return a frame message");
   }
@@ -263,12 +293,12 @@ function outputMessageFromText(
   return {
     ...withAudience,
     ...metadata,
-  } as FrameMessage;
+  } as FrameMessage<TActorMessage>;
 }
 
 function applyOutputAudience(
   message: unknown,
-  audience: AnyOutputConfig["audience"],
+  audience: Audience | undefined,
 ): unknown {
   if (!audience || !message || typeof message !== "object") {
     return message;
@@ -286,7 +316,7 @@ function applyOutputAudience(
   return message;
 }
 
-function renderToolMessage(message: Extract<ActorMessage, { type: "tool" }>): string {
+function renderToolMessage(message: Extract<AnyActorMessage, { type: "tool" }>): string {
   const value = message.text ?? stringifyValue(message.value);
   return value ? `Tool ${message.name}: ${value}` : `Tool ${message.name}`;
 }

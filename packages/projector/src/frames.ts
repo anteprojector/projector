@@ -1,29 +1,39 @@
 import { encodeRuntimeAddress } from "./runtime-address.ts";
-import type { Instance, Node, RuntimeAddress } from "./types.ts";
+import type {
+  AnyActorMessage,
+  DefaultActorMessage,
+  Instance,
+  Node,
+  RuntimeAddress,
+} from "./types.ts";
 
-export type SyntheticRoot = {
+export type SyntheticRoot<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   type: "synthetic-root";
-  instances: Instance[];
+  instances: Instance<TActorMessage>[];
 };
 
-export type ProjectionFrame = {
-  node: Node;
-  instance: Instance;
-  concreteInstance: Instance;
-  topInstance: Instance;
+export type ProjectionFrame<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
+  node: Node<TActorMessage>;
+  instance: Instance<TActorMessage>;
+  concreteInstance: Instance<TActorMessage>;
+  topInstance: Instance<TActorMessage>;
   address: RuntimeAddress;
   runtimeInstanceId: string;
   memberPath: string[];
-  parent?: ProjectionFrame;
+  parent?: ProjectionFrame<TActorMessage>;
   isMember: boolean;
 };
 
-export function createRoot(instances: Instance[]): SyntheticRoot {
+export function createRoot<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  instances: Instance<TActorMessage>[],
+): SyntheticRoot<TActorMessage> {
   return { type: "synthetic-root", instances };
 }
 
-export function traversalFrames(root: SyntheticRoot | Instance): ProjectionFrame[] {
-  const frames: ProjectionFrame[] = [];
+export function traversalFrames<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  root: SyntheticRoot<TActorMessage> | Instance<TActorMessage>,
+): ProjectionFrame<TActorMessage>[] {
+  const frames: ProjectionFrame<TActorMessage>[] = [];
   const instances = isSyntheticRoot(root) ? root.instances : [root];
 
   for (const instance of instances) {
@@ -33,19 +43,23 @@ export function traversalFrames(root: SyntheticRoot | Instance): ProjectionFrame
   return frames;
 }
 
-export function collectProjectionFrames(root: SyntheticRoot | Instance): ProjectionFrame[] {
+export function collectProjectionFrames<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  root: SyntheticRoot<TActorMessage> | Instance<TActorMessage>,
+): ProjectionFrame<TActorMessage>[] {
   return traversalFrames(root);
 }
 
-export function findFrameByRuntimeId(
-  root: SyntheticRoot | Instance,
+export function findFrameByRuntimeId<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  root: SyntheticRoot<TActorMessage> | Instance<TActorMessage>,
   runtimeInstanceId: string,
-): ProjectionFrame | undefined {
+): ProjectionFrame<TActorMessage> | undefined {
   return traversalFrames(root).find((frame) => frame.runtimeInstanceId === runtimeInstanceId);
 }
 
-export function directProjectionChildren(frame: ProjectionFrame): ProjectionFrame[] {
-  const children: ProjectionFrame[] = [];
+export function directProjectionChildren<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  frame: ProjectionFrame<TActorMessage>,
+): ProjectionFrame<TActorMessage>[] {
+  const children: ProjectionFrame<TActorMessage>[] = [];
 
   for (const member of frame.node.members) {
     const memberPath = [...frame.memberPath, member.key];
@@ -54,7 +68,7 @@ export function directProjectionChildren(frame: ProjectionFrame): ProjectionFram
       ownerInstanceId: frame.concreteInstance.id,
       memberPath,
     };
-    const memberFrame: ProjectionFrame = {
+    const memberFrame: ProjectionFrame<TActorMessage> = {
       node: member,
       instance: frame.concreteInstance,
       concreteInstance: frame.concreteInstance,
@@ -88,14 +102,14 @@ export function directProjectionChildren(frame: ProjectionFrame): ProjectionFram
   return children;
 }
 
-function collectInstanceFrame(
-  frames: ProjectionFrame[],
-  instance: Instance,
-  parent: ProjectionFrame | undefined,
-  topInstance: Instance,
+function collectInstanceFrame<TActorMessage extends AnyActorMessage>(
+  frames: ProjectionFrame<TActorMessage>[],
+  instance: Instance<TActorMessage>,
+  parent: ProjectionFrame<TActorMessage> | undefined,
+  topInstance: Instance<TActorMessage>,
 ): void {
   const address: RuntimeAddress = { type: "instance", instanceId: instance.id };
-  const frame: ProjectionFrame = {
+  const frame: ProjectionFrame<TActorMessage> = {
     node: instance.node,
     instance,
     concreteInstance: instance,
@@ -110,13 +124,18 @@ function collectInstanceFrame(
   collectDescendants(frames, frame);
 }
 
-function collectDescendants(frames: ProjectionFrame[], frame: ProjectionFrame): void {
+function collectDescendants<TActorMessage extends AnyActorMessage>(
+  frames: ProjectionFrame<TActorMessage>[],
+  frame: ProjectionFrame<TActorMessage>,
+): void {
   for (const child of directProjectionChildren(frame)) {
     frames.push(child);
     collectDescendants(frames, child);
   }
 }
 
-function isSyntheticRoot(root: SyntheticRoot | Instance): root is SyntheticRoot {
+function isSyntheticRoot<TActorMessage extends AnyActorMessage>(
+  root: SyntheticRoot<TActorMessage> | Instance<TActorMessage>,
+): root is SyntheticRoot<TActorMessage> {
   return "type" in root && root.type === "synthetic-root";
 }

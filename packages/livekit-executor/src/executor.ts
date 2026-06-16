@@ -1,6 +1,13 @@
 import { llm } from "@livekit/agents";
-import { GET_STATE_ACTION_NAME, SYNTHETIC_ROOT_RUNTIME_ID } from "@projectors/core";
-import type { ActionContext, ActorMessage, AnyAction, CompiledInference, RuntimeSyncContext } from "@projectors/core";
+import { GET_STATE_ACTION_NAME, SYNTHETIC_ROOT_RUNTIME_ID, isActorMessage } from "@projectors/core";
+import type {
+  ActionContext,
+  AnyActorMessage,
+  AnyAction,
+  CompiledInference,
+  DefaultActorMessage,
+  RuntimeSyncContext,
+} from "@projectors/core";
 import { z } from "zod";
 import type {
   ExecutorRunRequest,
@@ -33,14 +40,14 @@ const DEFAULT_EVENT_NAMES: LiveKitEventNames = {
   dataReceived: "data_received",
 };
 
-let frameIdCounter = 0;
-
-export class LiveKitExecutor implements ProjectorExecutor {
+export class LiveKitExecutor<
+  TActorMessage extends AnyActorMessage = DefaultActorMessage,
+> implements ProjectorExecutor<TActorMessage> {
   readonly type = "livekit";
 
-  readonly connection: LiveKitConnection;
+  readonly connection: LiveKitConnection<TActorMessage>;
 
-  constructor(readonly config: LiveKitExecutorConfig) {
+  constructor(readonly config: LiveKitExecutorConfig<TActorMessage>) {
     this.connection = new LiveKitConnection(this, config);
   }
 
@@ -48,7 +55,7 @@ export class LiveKitExecutor implements ProjectorExecutor {
     this.connection.disconnect();
   }
 
-  async run(request: ExecutorRunRequest): Promise<ExecutorRunResult> {
+  async run(request: ExecutorRunRequest<TActorMessage>): Promise<ExecutorRunResult<TActorMessage>> {
     if (request.runtimeInstanceId !== SYNTHETIC_ROOT_RUNTIME_ID) {
       return this.config.discreteExecutor.run(request);
     }
@@ -60,7 +67,7 @@ export class LiveKitExecutor implements ProjectorExecutor {
     return { completionReason: "delegated" };
   }
 
-  async syncRuntime(context: RuntimeSyncContext): Promise<void> {
+  async syncRuntime(context: RuntimeSyncContext<TActorMessage>): Promise<void> {
     if (context.runtimeInstanceId !== SYNTHETIC_ROOT_RUNTIME_ID) return;
     await this.connection.syncRuntime(context);
   }
@@ -83,7 +90,7 @@ export class LiveKitExecutor implements ProjectorExecutor {
   }
 }
 
-export class LiveKitConnection {
+export class LiveKitConnection<TActorMessage extends AnyActorMessage = DefaultActorMessage> {
   private readonly eventNames: LiveKitEventNames;
   private readonly handlers: Array<{
     target: "session" | "room";
@@ -92,18 +99,18 @@ export class LiveKitConnection {
   }> = [];
   private disconnected = false;
   private syncTail: Promise<void> = Promise.resolve();
-  private currentSyncContext?: RuntimeSyncContext;
-  private currentInference?: CompiledInference;
+  private currentSyncContext?: RuntimeSyncContext<TActorMessage>;
+  private currentInference?: CompiledInference<TActorMessage>;
   private currentInstructions = "";
   private currentTools: LiveKitToolContext = {};
   private toolRegistry = new Map<string, AnyAction>();
   private readonly forwardedInputFrameIds = new Set<string>();
-  private readonly assistantTranscripts = new AssistantTranscriptStream(this);
-  private readonly userTranscripts = new UserTranscriptEnvelope(this);
+  private readonly assistantTranscripts = new AssistantTranscriptStream<TActorMessage>(this);
+  private readonly userTranscripts = new UserTranscriptEnvelope<TActorMessage>(this);
 
   constructor(
-    private readonly executor: LiveKitExecutor,
-    readonly config: LiveKitExecutorConfig,
+    private readonly executor: LiveKitExecutor<TActorMessage>,
+    readonly config: LiveKitExecutorConfig<TActorMessage>,
   ) {
     this.eventNames = {
       ...DEFAULT_EVENT_NAMES,
@@ -112,7 +119,7 @@ export class LiveKitConnection {
     this.installEventHandlers();
   }
 
-  get inference(): CompiledInference | undefined {
+  get inference(): CompiledInference<TActorMessage> | undefined {
     return this.currentInference;
   }
 
@@ -138,7 +145,7 @@ export class LiveKitConnection {
     }
   }
 
-  isRealtimeActive(context: RuntimeSyncContext | undefined = this.currentSyncContext): boolean {
+  isRealtimeActive(context: RuntimeSyncContext<TActorMessage> | undefined = this.currentSyncContext): boolean {
     const enabled = this.executor.config.realtime?.enabled;
     if (typeof enabled === "function") {
       return context ? enabled(context) : false;
@@ -148,7 +155,7 @@ export class LiveKitConnection {
     return !!this.getRealtimeSession();
   }
 
-  syncRuntime(context: RuntimeSyncContext): Promise<void> {
+  syncRuntime(context: RuntimeSyncContext<TActorMessage>): Promise<void> {
     const job = this.syncTail
       .catch(() => undefined)
       .then(async () => {
@@ -180,7 +187,7 @@ export class LiveKitConnection {
       context.getState ??= (address) => this.getRetrievableState(address);
     }
     const runAction = this.config.runAction;
-    const runInput: RunActionInput = { action, input, context, liveKitContext };
+    const runInput: RunActionInput<TActorMessage> = { action, input, context, liveKitContext };
     const value = runAction
       ? await runAction(runInput)
       : action.run
@@ -209,7 +216,7 @@ export class LiveKitConnection {
   async enqueueAssistantTranscript(
     text: string,
     metadata: Record<string, unknown> = {},
-  ): Promise<Frame> {
+  ): Promise<Frame<TActorMessage>> {
     return this.enqueueFrame({
       generatorId: SYNTHETIC_ROOT_GENERATOR_ID,
       runtimeInstanceId: SYNTHETIC_ROOT_RUNTIME_ID,
@@ -218,11 +225,12 @@ export class LiveKitConnection {
       messages: [
         {
           type: "assistant",
+          content: text,
           text,
           audience: "self",
           source: { external: true },
           ...metadata,
-        } as FrameMessage,
+        } as FrameMessage<TActorMessage>,
       ],
     });
   }
@@ -230,7 +238,7 @@ export class LiveKitConnection {
   async enqueueUserTranscript(
     text: string,
     metadata: Record<string, unknown> = {},
-  ): Promise<Frame> {
+  ): Promise<Frame<TActorMessage>> {
     return this.enqueueFrame({
       generatorId: SYNTHETIC_ROOT_GENERATOR_ID,
       runtimeInstanceId: SYNTHETIC_ROOT_RUNTIME_ID,
@@ -239,19 +247,20 @@ export class LiveKitConnection {
       messages: [
         {
           type: "user",
+          content: text,
           text,
           audience: "broadcast",
           source: { external: true },
           ...metadata,
-        } as FrameMessage,
+        } as FrameMessage<TActorMessage>,
       ],
     });
   }
 
-  private async syncNow(input: CompiledInference | RuntimeSyncContext): Promise<void> {
+  private async syncNow(input: CompiledInference<TActorMessage> | RuntimeSyncContext<TActorMessage>): Promise<void> {
     if (this.disconnected) return;
 
-    let nextInference: CompiledInference | undefined;
+    let nextInference: CompiledInference<TActorMessage> | undefined;
     if (isRuntimeSyncContext(input)) {
       this.currentSyncContext = input;
       nextInference = input.inference;
@@ -261,7 +270,7 @@ export class LiveKitConnection {
     if (!nextInference) return;
 
     this.currentInference = nextInference;
-    this.currentInstructions = buildLiveKitInstructions(nextInference);
+    this.currentInstructions = buildLiveKitInstructions(nextInference, this.config.messageToText);
     this.toolRegistry = buildToolRegistry(nextInference.tools);
     this.currentTools = buildLiveKitToolContext(nextInference, this);
 
@@ -278,9 +287,9 @@ export class LiveKitConnection {
     this.assistantTranscripts.install();
   }
 
-  private async forwardVisibleInput(context: RuntimeSyncContext): Promise<void> {
+  private async forwardVisibleInput(context: RuntimeSyncContext<TActorMessage>): Promise<void> {
     if (!this.isRealtimeActive(context)) return;
-    for (const { frameId, text } of userTextsFromFrames(context.visibleFrames)) {
+    for (const { frameId, text } of userTextsFromFrames(context.visibleFrames, this.config.messageToText)) {
       if (this.forwardedInputFrameIds.has(frameId)) continue;
       this.forwardedInputFrameIds.add(frameId);
       await this.sendTextToRealtimeSession(text);
@@ -432,21 +441,22 @@ export class LiveKitConnection {
     this.handlers.push({ target: "room", event, handler });
   }
 
-  private async enqueueExternalUserMessage(text: string): Promise<Frame> {
+  private async enqueueExternalUserMessage(text: string): Promise<Frame<TActorMessage>> {
     return this.enqueueFrame({
       metadata: { mode: "text", transport: "livekit" },
       messages: [
         {
           type: "user",
+          content: text,
           text,
           audience: "broadcast",
           source: { external: true, transport: "livekit" },
-        } as FrameMessage,
+        } as FrameMessage<TActorMessage>,
       ],
     });
   }
 
-  private async enqueueToolFrame(name: string, value: unknown): Promise<Frame> {
+  private async enqueueToolFrame(name: string, value: unknown): Promise<Frame<TActorMessage>> {
     return this.enqueueFrame({
       generatorId: SYNTHETIC_ROOT_GENERATOR_ID,
       runtimeInstanceId: SYNTHETIC_ROOT_RUNTIME_ID,
@@ -458,26 +468,26 @@ export class LiveKitConnection {
           value,
           audience: "self",
           source: { external: true },
-        } as FrameMessage,
+        } as FrameMessage<TActorMessage>,
       ],
     });
   }
 
-  private async enqueueFrame(frame: FrameDraft): Promise<Frame> {
+  private async enqueueFrame(frame: FrameDraft<TActorMessage>): Promise<Frame<TActorMessage>> {
     const result = this.currentSyncContext?.machine.enqueueFrame(frame);
     if (!result) {
       throw new Error("LiveKitConnection cannot enqueue a frame before runtime sync");
     }
-    return result.id ? result : { ...result, id: nextFrameId() };
+    return result;
   }
 }
 
-class AssistantTranscriptStream {
+class AssistantTranscriptStream<TActorMessage extends AnyActorMessage> {
   private messageId?: string;
   private text = "";
   private seq = 0;
 
-  constructor(private readonly connection: LiveKitConnection) {}
+  constructor(private readonly connection: LiveKitConnection<TActorMessage>) {}
 
   install(): void {
     const output = this.connection.config.session.output;
@@ -552,11 +562,11 @@ class AssistantTranscriptStream {
   }
 }
 
-class UserTranscriptEnvelope {
+class UserTranscriptEnvelope<TActorMessage extends AnyActorMessage> {
   private messageId?: string;
   private seq = 0;
 
-  constructor(private readonly connection: LiveKitConnection) {}
+  constructor(private readonly connection: LiveKitConnection<TActorMessage>) {}
 
   begin(): void {
     if (this.messageId) return;
@@ -595,10 +605,10 @@ class UserTranscriptEnvelope {
 }
 
 class AssistantTranscriptOutputWrapper implements LiveKitTextOutputLike {
-  readonly [ASSISTANT_TRANSCRIPT_OUTPUT_OWNER]: AssistantTranscriptStream;
+  readonly [ASSISTANT_TRANSCRIPT_OUTPUT_OWNER]: AssistantTranscriptStream<any>;
 
   constructor(
-    owner: AssistantTranscriptStream,
+    owner: AssistantTranscriptStream<any>,
     readonly inner: LiveKitTextOutputLike,
   ) {
     this[ASSISTANT_TRANSCRIPT_OUTPUT_OWNER] = owner;
@@ -631,26 +641,29 @@ class AssistantTranscriptOutputWrapper implements LiveKitTextOutputLike {
 
 function isAssistantTranscriptOutputWrapper(
   output: LiveKitTextOutputLike,
-  owner: AssistantTranscriptStream,
+  owner: AssistantTranscriptStream<any>,
 ): output is AssistantTranscriptOutputWrapper {
-  return (output as Partial<Record<typeof ASSISTANT_TRANSCRIPT_OUTPUT_OWNER, AssistantTranscriptStream>>)[
+  return (output as Partial<Record<typeof ASSISTANT_TRANSCRIPT_OUTPUT_OWNER, AssistantTranscriptStream<any>>>)[
     ASSISTANT_TRANSCRIPT_OUTPUT_OWNER
   ] === owner;
 }
 
-export function buildLiveKitInstructions(inference: CompiledInference): string {
+export function buildLiveKitInstructions<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  inference: CompiledInference<TActorMessage>,
+  messageToText?: (message: TActorMessage) => string | undefined,
+): string {
   return [
     renderSection("System", inference.systemParts),
     renderSection("Dynamic Context", inference.dynamicParts),
-    renderHistory(inference.history),
+    renderHistory(inference.history, messageToText),
   ]
     .filter(Boolean)
     .join("\n\n");
 }
 
-function isRuntimeSyncContext(
-  input: CompiledInference | RuntimeSyncContext,
-): input is RuntimeSyncContext {
+function isRuntimeSyncContext<TActorMessage extends AnyActorMessage>(
+  input: CompiledInference<TActorMessage> | RuntimeSyncContext<TActorMessage>,
+): input is RuntimeSyncContext<TActorMessage> {
   return Boolean(
     input &&
       typeof input === "object" &&
@@ -660,7 +673,7 @@ function isRuntimeSyncContext(
 }
 
 export function buildLiveKitToolDefinitions(
-  inference: CompiledInference,
+  inference: CompiledInference<any>,
 ): LiveKitToolDefinition[] {
   const definitions = new Map<string, LiveKitToolDefinition>();
 
@@ -678,9 +691,9 @@ export function buildLiveKitToolDefinitions(
   return [...definitions.values()];
 }
 
-export function buildLiveKitToolContext(
-  inference: CompiledInference,
-  connection: LiveKitConnection,
+export function buildLiveKitToolContext<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  inference: CompiledInference<TActorMessage>,
+  connection: LiveKitConnection<TActorMessage>,
 ): LiveKitToolContext {
   const tools: LiveKitToolContext = {};
 
@@ -724,28 +737,62 @@ function renderSection(title: string, parts: string[]): string {
   return body ? `## ${title}\n\n${body}` : "";
 }
 
-function renderHistory(history: ActorMessage[]): string {
-  const lines = history.map(renderHistoryMessage).filter(Boolean);
+function renderHistory<TActorMessage extends AnyActorMessage>(
+  history: FrameMessage<TActorMessage>[],
+  messageToText?: (message: TActorMessage) => string | undefined,
+): string {
+  const lines = history
+    .filter(isActorMessage<TActorMessage>)
+    .map((message) => renderHistoryMessage(message, messageToText))
+    .filter(Boolean);
   return lines.length > 0 ? `## Conversation\n\n${lines.join("\n")}` : "";
 }
 
-function renderHistoryMessage(message: ActorMessage): string {
-  if (message.type === "user") return `User: ${message.text}`;
-  if (message.type === "assistant") return `Assistant: ${message.text}`;
+function renderHistoryMessage<TActorMessage extends AnyActorMessage>(
+  message: TActorMessage,
+  messageToText?: (message: TActorMessage) => string | undefined,
+): string {
+  if (message.type === "user") return `User: ${renderActorText(message, messageToText)}`;
+  if (message.type === "assistant") return `Assistant: ${renderActorText(message, messageToText)}`;
   const value = message.text ?? stringifyValue(message.value);
   return value ? `Tool ${message.name}: ${value}` : "";
 }
 
-function userTextsFromFrames(frames: readonly Frame[]): Array<{ frameId: string; text: string }> {
+function userTextsFromFrames<TActorMessage extends AnyActorMessage>(
+  frames: readonly Frame<TActorMessage>[],
+  messageToText?: (message: TActorMessage) => string | undefined,
+): Array<{ frameId: string; text: string }> {
   const texts: Array<{ frameId: string; text: string }> = [];
   for (const frame of frames) {
     for (const message of frame.messages) {
-      if (message.type !== "user") continue;
-      if (!message.text.trim()) continue;
-      texts.push({ frameId: frame.id, text: message.text });
+      if (!isActorMessage<TActorMessage>(message) || message.type !== "user") continue;
+      const text = renderActorText(message, messageToText);
+      if (!text.trim()) continue;
+      texts.push({ frameId: frame.id, text });
     }
   }
   return texts;
+}
+
+function renderActorText<TActorMessage extends AnyActorMessage>(
+  message: TActorMessage,
+  messageToText?: (message: TActorMessage) => string | undefined,
+): string {
+  const rendered = messageToText?.(message);
+  if (rendered !== undefined) return rendered;
+  if (message.type === "tool") {
+    const value = message.text ?? stringifyValue(message.value);
+    return value ? `Tool ${message.name}: ${value}` : `Tool ${message.name}`;
+  }
+  if (typeof message.content === "string") {
+    return message.content;
+  }
+  if (message.text !== undefined) {
+    return message.text;
+  }
+  throw new Error(
+    `Cannot render ${message.type} message with non-string content. Provide messageToText or text.`,
+  );
 }
 
 function extractConversationItemText(item: Record<string, unknown>): string | undefined {
@@ -810,9 +857,4 @@ function stringifyValue(value: unknown): string {
   } catch {
     return String(value);
   }
-}
-
-function nextFrameId(): string {
-  frameIdCounter += 1;
-  return `frame_${Date.now()}_${frameIdCounter}`;
 }

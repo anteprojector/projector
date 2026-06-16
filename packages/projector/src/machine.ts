@@ -1,5 +1,5 @@
 import { assertNodeActionStateCompatibility, getActionBinding } from "./actions.ts";
-import { findFrameByRuntimeId, traversalFrames, type SyntheticRoot } from "./frames.ts";
+import { findFrameByRuntimeId, traversalFrames, type ProjectionFrame, type SyntheticRoot } from "./frames.ts";
 import {
   createActivationFrame,
   createCompletionFrame,
@@ -13,10 +13,13 @@ import { resolveStates } from "./state.ts";
 import { actorMessageVisibleToRuntime, isActorMessage } from "./visibility.ts";
 import type {
   ActionContext,
+  ActorMessage,
+  AnyActorMessage,
   AnyAction,
   AssistantMessage,
   Charter,
   CompiledInference,
+  DefaultActorMessage,
   CommandMessage,
   ExecutorRunRequest,
   ExecutorRunResult,
@@ -29,6 +32,7 @@ import type {
   InstanceMessage,
   NormalizedRuntime,
   AnyOutputConfig,
+  OutputConfig,
   PrimaryRuntime,
   RetrievableState,
   RuntimeConcurrency,
@@ -46,21 +50,21 @@ import type {
 } from "./types.ts";
 import { compileProjection } from "./compile.ts";
 
-export type Machine = {
+export type Machine<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   id: string;
-  root: SyntheticRoot | Instance;
-  charter: Charter;
-  frames: Frame[];
-  enqueueFrame(frame: FrameDraft | Frame): Frame;
-  ingestInertFrame(frame: Frame): void;
-  subscribe(listener: (frame: Frame) => void): () => void;
+  root: SyntheticRoot<TActorMessage> | Instance<TActorMessage>;
+  charter: Charter<TActorMessage>;
+  frames: Frame<TActorMessage>[];
+  enqueueFrame(frame: FrameDraft<TActorMessage> | Frame<TActorMessage>): Frame<TActorMessage>;
+  ingestInertFrame(frame: Frame<TActorMessage>): void;
+  subscribe(listener: (frame: Frame<TActorMessage>) => void): () => void;
 };
 
-export type MachineOptions = {
+export type MachineOptions<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   id?: string;
-  root: SyntheticRoot | Instance;
-  charter: Charter;
-  frames?: Frame[];
+  root: SyntheticRoot<TActorMessage> | Instance<TActorMessage>;
+  charter: Charter<TActorMessage>;
+  frames?: Frame<TActorMessage>[];
 };
 
 export type Activation = WorkActivationMessage & {
@@ -71,43 +75,45 @@ export type Activation = WorkActivationMessage & {
 };
 
 export type RunMachineOptions = {
-  startWork?: boolean;
+  scheduleWork?: boolean;
 };
 
 export type ExecuteCommandResult<T = unknown> =
   | { success: true; value?: T; clientId?: string }
   | { success: false; error: string; clientId?: string };
 
-export type MachineRun = AsyncIterable<Frame> & {
-  stopAndDrainFrames(): Promise<Frame[]>;
+export type MachineRun<TActorMessage extends AnyActorMessage = DefaultActorMessage> =
+AsyncIterable<Frame<TActorMessage>> & {
+  stopSchedulingWork(): void;
   hasStarted(): boolean;
   isDraining(): boolean;
 };
 
-export type RuntimeSyncContext = {
-  machine: Machine;
+export type RuntimeSyncContext<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
+  machine: Machine<TActorMessage>;
   runtimeInstanceId: RuntimeInstanceId;
   generator: Generator;
-  inference: CompiledInference;
-  visibleFrames: Frame[];
+  inference: CompiledInference<TActorMessage>;
+  visibleFrames: Frame<TActorMessage>[];
   createActionContext(action: AnyAction): ActionContext<unknown>;
-  enqueueFrame(frame: FrameDraft | Frame): Frame;
+  enqueueFrame(frame: FrameDraft<TActorMessage> | Frame<TActorMessage>): Frame<TActorMessage>;
 };
 
-export type SyncableExecutor = {
-  syncRuntime?: (context: RuntimeSyncContext) => unknown | Promise<unknown>;
+export type SyncableExecutor<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
+  syncRuntime?: (context: RuntimeSyncContext<TActorMessage>) => unknown | Promise<unknown>;
 };
 
-export type SyncMachineRuntimeOptions = {
+export type SyncMachineRuntimeOptions<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
   runtimeInstanceId: RuntimeInstanceId;
   generatorId?: GeneratorId;
-  visibleFrames?: Frame[];
+  visibleFrames?: Frame<TActorMessage>[];
 };
 
-type ProjectorMachine = Machine & {
-  pendingFrames: Frame[];
+type ProjectorMachine<TActorMessage extends AnyActorMessage = DefaultActorMessage> =
+Machine<TActorMessage> & {
+  pendingFrames: Frame<TActorMessage>[];
   nextFrameIndex: number;
-  listeners: Set<(frame: Frame) => void>;
+  listeners: Set<(frame: Frame<TActorMessage>) => void>;
 };
 
 type WorkState = {
@@ -125,15 +131,15 @@ type RuntimeCandidate = {
   generatorId: GeneratorId;
 };
 
-type HydratableNodeRef = SerializedNodeRef | Instance["node"];
+type HydratableNodeRef = SerializedNodeRef<any> | Instance<any>["node"];
 
-export function createMachine({
+export function createMachine<TActorMessage extends AnyActorMessage = DefaultActorMessage>({
   id = "machine",
   root,
   charter,
   frames = [],
-}: MachineOptions): Machine {
-  const machine: ProjectorMachine = {
+}: MachineOptions<TActorMessage>): Machine<TActorMessage> {
+  const machine: ProjectorMachine<TActorMessage> = {
     id,
     root,
     charter,
@@ -159,10 +165,9 @@ export function createMachine({
       if (this.frames.some((existing) => existing.id === frame.id)) {
         return;
       }
-      const canonical = canonicalizeFrameDraft(frame, this.charter) as Frame;
+      const canonical = canonicalizeFrameDraft(frame, this.charter) as Frame<TActorMessage>;
       foldFrameIntoMachine(this, canonical);
       this.frames.push(canonical);
-      notifyFrame(this, canonical);
     },
     subscribe(listener) {
       this.listeners.add(listener);
@@ -175,14 +180,19 @@ export function createMachine({
   return machine;
 }
 
-export function runMachine(machine: Machine, options: RunMachineOptions = {}): MachineRun {
-  return new MachineRunImpl(machine as ProjectorMachine, {
-    startWork: options.startWork ?? true,
+export function runMachine<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  machine: Machine<TActorMessage>,
+  options: RunMachineOptions = {},
+): MachineRun<TActorMessage> {
+  return new MachineRunImpl<TActorMessage>(machine as ProjectorMachine<TActorMessage>, {
+    scheduleWork: options.scheduleWork ?? true,
   });
 }
 
-export function reconcileWork(machine: Machine): Frame[] {
-  const projectorMachine = machine as ProjectorMachine;
+export function reconcileWork<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  machine: Machine<TActorMessage>,
+): Frame<TActorMessage>[] {
+  const projectorMachine = machine as ProjectorMachine<TActorMessage>;
   const before = projectorMachine.frames.length;
 
   while (true) {
@@ -193,11 +203,11 @@ export function reconcileWork(machine: Machine): Frame[] {
   return projectorMachine.frames.slice(before);
 }
 
-export async function syncMachineRuntime(
-  machine: Machine,
-  options: SyncMachineRuntimeOptions,
-): Promise<RuntimeSyncContext | undefined> {
-  const syncRuntime = (machine.charter.executor as SyncableExecutor).syncRuntime;
+export async function syncMachineRuntime<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  machine: Machine<TActorMessage>,
+  options: SyncMachineRuntimeOptions<TActorMessage>,
+): Promise<RuntimeSyncContext<TActorMessage> | undefined> {
+  const syncRuntime = (machine.charter.executor as SyncableExecutor<TActorMessage>).syncRuntime;
   if (!syncRuntime) return undefined;
 
   const generator = generatorForRuntime(machine.root, options.runtimeInstanceId, options.generatorId);
@@ -213,7 +223,7 @@ export async function syncMachineRuntime(
     generatorId: generator.id,
     runtimeInstanceId: generator.runtimeInstanceId,
   };
-  const context: RuntimeSyncContext = {
+  const context: RuntimeSyncContext<TActorMessage> = {
     machine,
     runtimeInstanceId: options.runtimeInstanceId,
     generator,
@@ -233,7 +243,9 @@ export async function syncMachineRuntime(
   return context;
 }
 
-function reconcileYieldedWork(machine: ProjectorMachine): Frame[] {
+function reconcileYieldedWork<TActorMessage extends AnyActorMessage>(
+  machine: ProjectorMachine<TActorMessage>,
+): Frame<TActorMessage>[] {
   const before = machine.frames.length;
 
   while (true) {
@@ -244,14 +256,17 @@ function reconcileYieldedWork(machine: ProjectorMachine): Frame[] {
   return machine.frames.slice(before);
 }
 
-function notifyFrame(machine: ProjectorMachine, frame: Frame): void {
+function notifyFrame<TActorMessage extends AnyActorMessage>(
+  machine: ProjectorMachine<TActorMessage>,
+  frame: Frame<TActorMessage>,
+): void {
   for (const listener of machine.listeners) {
     listener(frame);
   }
 }
 
-function generatorForRuntime(
-  root: SyntheticRoot | Instance,
+function generatorForRuntime<TActorMessage extends AnyActorMessage>(
+  root: SyntheticRoot<TActorMessage> | Instance<TActorMessage>,
   runtimeInstanceId: RuntimeInstanceId,
   generatorId: GeneratorId | undefined,
 ): Generator {
@@ -275,7 +290,9 @@ function generatorForRuntime(
   };
 }
 
-export function collectRunnableActivations(machine: Machine): Activation[] {
+export function collectRunnableActivations<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  machine: Machine<TActorMessage>,
+): Activation[] {
   const state = foldWork(machine);
   const candidates = [...state.activations.values()]
     .filter((activation) => !state.completions.has(activation.activationId))
@@ -301,10 +318,10 @@ export function collectRunnableActivations(machine: Machine): Activation[] {
   return runnable.sort((a, b) => a.frameIndex - b.frameIndex);
 }
 
-export async function runActivation(
-  machine: Machine,
+export async function runActivation<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+  machine: Machine<TActorMessage>,
   activationId: string,
-): Promise<ExecutorRunResult | undefined> {
+): Promise<ExecutorRunResult<TActorMessage> | undefined> {
   const initialState = foldWork(machine);
   const activation = initialState.activations.get(activationId);
   if (!activation) return undefined;
@@ -342,7 +359,7 @@ export async function runActivation(
   const getState = inference.retrievableStates.length > 0
     ? createRetrievableStateGetter(machine, inference.retrievableStates)
     : undefined;
-  const request: ExecutorRunRequest = {
+  const request: ExecutorRunRequest<TActorMessage> = {
     generatorId: activation.generatorId,
     runtimeInstanceId: activation.runtimeInstanceId,
     activationId,
@@ -372,9 +389,9 @@ export async function runActivation(
 }
 
 async function runSyntheticRootActivation(
-  machine: Machine,
+  machine: Machine<any>,
   activation: Activation,
-): Promise<ExecutorRunResult | undefined> {
+): Promise<ExecutorRunResult<any> | undefined> {
   const inference = compileProjection(machine.root, {
     charter: machine.charter,
     targetGenerator: {
@@ -393,7 +410,7 @@ async function runSyntheticRootActivation(
     runtimeInstanceId: SYNTHETIC_ROOT_RUNTIME_ID,
     activationId: activation.activationId,
   };
-  const request: ExecutorRunRequest = {
+  const request: ExecutorRunRequest<any> = {
     generatorId: activation.generatorId,
     runtimeInstanceId: SYNTHETIC_ROOT_RUNTIME_ID,
     activationId: activation.activationId,
@@ -421,8 +438,11 @@ async function runSyntheticRootActivation(
   return result;
 }
 
-export async function executeCommand<T = unknown>(
-  machine: Machine,
+export async function executeCommand<
+  T = unknown,
+  TActorMessage extends AnyActorMessage = DefaultActorMessage,
+>(
+  machine: Machine<TActorMessage>,
   message: CommandMessage,
 ): Promise<ExecuteCommandResult<T>> {
   const resolved = resolveCommand(machine, message);
@@ -463,10 +483,10 @@ export async function executeCommand<T = unknown>(
   }
 }
 
-function resolveCommand(
-  machine: Machine,
+function resolveCommand<TActorMessage extends AnyActorMessage>(
+  machine: Machine<TActorMessage>,
   message: CommandMessage,
-): { command: AnyAction; frame: ReturnType<typeof traversalFrames>[number] } | undefined {
+): { command: AnyAction; frame: ProjectionFrame<TActorMessage> } | undefined {
   const frames = traversalFrames(machine.root);
   if (message.target) {
     const targetRuntimeId = encodeRuntimeAddress(message.target);
@@ -480,7 +500,7 @@ function resolveCommand(
     return frame && command ? { command, frame } : undefined;
   }
 
-  let resolved: { command: AnyAction; frame: ReturnType<typeof traversalFrames>[number] } | undefined;
+  let resolved: { command: AnyAction; frame: ProjectionFrame<TActorMessage> } | undefined;
   for (const frame of frames) {
     const command = resolveFrameCommands(frame, machine.charter).find((candidate) => candidate.name === message.name);
     if (command) {
@@ -491,7 +511,10 @@ function resolveCommand(
   return resolved;
 }
 
-function validateMachineActionStateCompatibility(root: SyntheticRoot | Instance, charter: Charter): void {
+function validateMachineActionStateCompatibility<TActorMessage extends AnyActorMessage>(
+  root: SyntheticRoot<TActorMessage> | Instance<TActorMessage>,
+  charter: Charter<TActorMessage>,
+): void {
   for (const frame of traversalFrames(root)) {
     for (const tool of resolveFrameTools(frame, charter)) {
       assertNodeActionStateCompatibility(tool, frame.node, "tool");
@@ -502,10 +525,10 @@ function validateMachineActionStateCompatibility(root: SyntheticRoot | Instance,
   }
 }
 
-function createMachineActionContext(
-  machine: Machine,
+function createMachineActionContext<TActorMessage extends AnyActorMessage>(
+  machine: Machine<TActorMessage>,
   action: AnyAction,
-  frameDefaults: Partial<Pick<FrameDraft, "generatorId" | "runtimeInstanceId" | "activationId">>,
+  frameDefaults: Partial<Pick<FrameDraft<TActorMessage>, "generatorId" | "runtimeInstanceId" | "activationId">>,
   getState?: ActionContext["getState"],
 ): ActionContext<unknown> {
   const binding = getActionBinding(action);
@@ -522,8 +545,8 @@ function createMachineActionContext(
   return context;
 }
 
-function createRetrievableStateGetter(
-  machine: Machine,
+function createRetrievableStateGetter<TActorMessage extends AnyActorMessage>(
+  machine: Machine<TActorMessage>,
   retrievableStates: RetrievableState[],
 ): NonNullable<ActionContext["getState"]> {
   const retrievalTargets = new Map(
@@ -538,10 +561,10 @@ function createRetrievableStateGetter(
   };
 }
 
-function createFrameActionContext(
-  machine: Machine,
-  frame: ReturnType<typeof traversalFrames>[number],
-  frameDefaults: Partial<Pick<FrameDraft, "generatorId" | "runtimeInstanceId" | "activationId">>,
+function createFrameActionContext<TActorMessage extends AnyActorMessage>(
+  machine: Machine<TActorMessage>,
+  frame: ProjectionFrame<TActorMessage>,
+  frameDefaults: Partial<Pick<FrameDraft<TActorMessage>, "generatorId" | "runtimeInstanceId" | "activationId">>,
 ): ActionContext<unknown> {
   const stateAddress = stateAddressForFrame(frame);
   if (!stateAddress) {
@@ -588,18 +611,21 @@ function createFrameActionContext(
   return context;
 }
 
-function enqueueActionResult(machine: Machine, value: unknown): void {
-  const messages = actionResultMessages(value);
+function enqueueActionResult<TActorMessage extends AnyActorMessage>(
+  machine: Machine<TActorMessage>,
+  value: unknown,
+): void {
+  const messages = actionResultMessages<TActorMessage>(value);
   if (messages.length > 0) {
     machine.enqueueFrame({ messages });
   }
 }
 
-function enqueueExecutorResult(
-  machine: Machine,
-  result: ExecutorRunResult,
-  output: AnyOutputConfig | undefined,
-  frameDefaults: Partial<Pick<FrameDraft, "generatorId" | "runtimeInstanceId" | "activationId">>,
+function enqueueExecutorResult<TActorMessage extends AnyActorMessage>(
+  machine: Machine<TActorMessage>,
+  result: ExecutorRunResult<TActorMessage>,
+  output: OutputConfig<TActorMessage> | undefined,
+  frameDefaults: Partial<Pick<FrameDraft<TActorMessage>, "generatorId" | "runtimeInstanceId" | "activationId">>,
 ): void {
   for (const frame of result.frames ?? []) {
     enqueueFrameWithDefaults(machine, frame, frameDefaults);
@@ -614,11 +640,11 @@ function enqueueExecutorResult(
   }
 }
 
-function enqueueFrameWithDefaults(
-  machine: Machine,
-  frame: FrameDraft | Frame,
-  defaults: Partial<Pick<FrameDraft, "generatorId" | "runtimeInstanceId" | "activationId">>,
-): Frame {
+function enqueueFrameWithDefaults<TActorMessage extends AnyActorMessage>(
+  machine: Machine<TActorMessage>,
+  frame: FrameDraft<TActorMessage> | Frame<TActorMessage>,
+  defaults: Partial<Pick<FrameDraft<TActorMessage>, "generatorId" | "runtimeInstanceId" | "activationId">>,
+): Frame<TActorMessage> {
   return machine.enqueueFrame({
     ...frame,
     generatorId: frame.generatorId ?? defaults.generatorId,
@@ -627,20 +653,25 @@ function enqueueFrameWithDefaults(
   });
 }
 
-function outputMessageFromText(text: string, output: AnyOutputConfig | undefined): FrameMessage {
-  const mapped = output?.mapTextBlock
+function outputMessageFromText<TActorMessage extends AnyActorMessage>(
+  text: string,
+  output: OutputConfig<TActorMessage> | undefined,
+): FrameMessage<TActorMessage> {
+  const mappedContent = output?.mapTextBlock
     ? output.mapTextBlock(text)
-    : ({
-        type: "assistant",
-        text,
-      } satisfies AssistantMessage);
-  const parsed = output?.schema ? output.schema.parse(mapped) : mapped;
-  const withAudience = applyOutputAudience(parsed, output?.audience);
+    : text;
+  const content = output?.schema ? output.schema.parse(mappedContent) : mappedContent;
+  const message = {
+    type: "assistant",
+    content,
+    text,
+  } satisfies AssistantMessage<unknown>;
+  const withAudience = applyOutputAudience(message, output?.audience);
 
   if (!isFrameMessageLike(withAudience)) {
     throw new Error("Output mapper must return a frame message");
   }
-  return withAudience as FrameMessage;
+  return withAudience as FrameMessage<TActorMessage>;
 }
 
 function applyOutputAudience(
@@ -663,20 +694,25 @@ function applyOutputAudience(
   return message;
 }
 
-function actionResultMessages(value: unknown): FrameMessage[] {
+function actionResultMessages<TActorMessage extends AnyActorMessage>(
+  value: unknown,
+): FrameMessage<TActorMessage>[] {
   if (Array.isArray(value)) {
-    return value.filter(isFrameMessageLike) as FrameMessage[];
+    return value.filter(isFrameMessageLike) as FrameMessage<TActorMessage>[];
   }
-  return isFrameMessageLike(value) ? [value as FrameMessage] : [];
+  return isFrameMessageLike(value) ? [value as FrameMessage<TActorMessage>] : [];
 }
 
 function isFrameMessageLike(value: unknown): value is { type: string } {
   return Boolean(value && typeof value === "object" && typeof (value as { type?: unknown }).type === "string");
 }
 
-function canonicalizeFrameDraft<TFrame extends FrameDraft | Frame>(
+function canonicalizeFrameDraft<
+  TActorMessage extends AnyActorMessage,
+  TFrame extends FrameDraft<TActorMessage> | Frame<TActorMessage>,
+>(
   frame: TFrame,
-  charter: Charter,
+  charter: Charter<TActorMessage>,
 ): TFrame {
   return {
     ...frame,
@@ -684,7 +720,10 @@ function canonicalizeFrameDraft<TFrame extends FrameDraft | Frame>(
   };
 }
 
-function canonicalizeMessage(message: FrameMessage, charter: Charter): FrameMessage {
+function canonicalizeMessage<TActorMessage extends AnyActorMessage>(
+  message: FrameMessage<TActorMessage>,
+  charter: Charter<TActorMessage>,
+): FrameMessage<TActorMessage> {
   if (!isInstanceMessage(message)) {
     return message;
   }
@@ -693,27 +732,30 @@ function canonicalizeMessage(message: FrameMessage, charter: Charter): FrameMess
     return ({
       ...message,
       node: canonicalizeNodeRef(message.node, charter),
-    } satisfies InstanceMessage) as FrameMessage;
+    } satisfies InstanceMessage<TActorMessage>) as FrameMessage<TActorMessage>;
   }
 
   if (message.kind === "spawn") {
     return ({
       ...message,
       children: message.children.map((child) => canonicalizeSpawnChild(child, charter)),
-    } satisfies InstanceMessage) as FrameMessage;
+    } satisfies InstanceMessage<TActorMessage>) as FrameMessage<TActorMessage>;
   }
 
   if (message.kind === "attach") {
     return ({
       ...message,
       children: message.children.map((child) => canonicalizeSerializedInstance(child, charter)),
-    } satisfies InstanceMessage) as FrameMessage;
+    } satisfies InstanceMessage<TActorMessage>) as FrameMessage<TActorMessage>;
   }
 
   return message;
 }
 
-function canonicalizeSpawnChild(child: SpawnChild, charter: Charter): SpawnChild {
+function canonicalizeSpawnChild<TActorMessage extends AnyActorMessage>(
+  child: SpawnChild<TActorMessage>,
+  charter: Charter<TActorMessage>,
+): SpawnChild<TActorMessage> {
   return {
     ...child,
     id: child.id ?? crypto.randomUUID(),
@@ -723,16 +765,16 @@ function canonicalizeSpawnChild(child: SpawnChild, charter: Charter): SpawnChild
 }
 
 function canonicalizeSerializedInstance(
-  instance: SerializedInstance,
-  charter: Charter,
-): SerializedInstance {
+  instance: SerializedInstance<any>,
+  charter: Charter<any>,
+): SerializedInstance<any> {
   return serializeInstance(hydrateInstance(instance, charter), charter);
 }
 
 function canonicalizeNodeRef(
   node: HydratableNodeRef,
-  charter: Charter,
-): SerializedNodeRef {
+  charter: Charter<any>,
+): SerializedNodeRef<any> {
   if (typeof node === "string") {
     return node;
   }
@@ -742,7 +784,10 @@ function canonicalizeNodeRef(
   return serializeNode(hydrateNode(node as SerializedNodeRef, charter), charter);
 }
 
-function foldFrameIntoMachine(machine: Machine, frame: Frame): void {
+function foldFrameIntoMachine<TActorMessage extends AnyActorMessage>(
+  machine: Machine<TActorMessage>,
+  frame: Frame<TActorMessage>,
+): void {
   for (const message of frame.messages) {
     if (isInstanceMessage(message)) {
       applyInstanceMessage(machine.root, message, machine.charter);
@@ -752,9 +797,9 @@ function foldFrameIntoMachine(machine: Machine, frame: Frame): void {
 }
 
 function applyInstanceMessage(
-  root: SyntheticRoot | Instance,
-  message: InstanceMessage,
-  charter: Charter,
+  root: SyntheticRoot<any> | Instance<any>,
+  message: InstanceMessage<any>,
+  charter: Charter<any>,
 ): void {
   if (message.kind === "state.patch") {
     const address = { instanceId: message.instanceId, stateKey: message.stateKey };
@@ -820,7 +865,7 @@ function applyInstanceMessage(
   }
 }
 
-function spawnChildToInstance(child: SpawnChild, charter: Charter): Instance {
+function spawnChildToInstance(child: SpawnChild<any>, charter: Charter<any>): Instance<any> {
   if (!child.id) {
     throw new Error("Spawn child must have an id before folding");
   }
@@ -833,9 +878,9 @@ function spawnChildToInstance(child: SpawnChild, charter: Charter): Instance {
 }
 
 function applySpawnStateOverrides(
-  root: SyntheticRoot | Instance,
-  instance: Instance,
-  child: SpawnChild,
+  root: SyntheticRoot<any> | Instance<any>,
+  instance: Instance<any>,
+  child: SpawnChild<any>,
 ): void {
   if (child.states) {
     applyStateValueOverrides(root, instance, child.states);
@@ -849,8 +894,8 @@ function applySpawnStateOverrides(
 }
 
 function applyStateValueOverrides(
-  root: SyntheticRoot | Instance,
-  instance: Instance,
+  root: SyntheticRoot<any> | Instance<any>,
+  instance: Instance<any>,
   values: Record<StateKey, unknown>,
 ): void {
   for (const [stateKey, value] of Object.entries(values)) {
@@ -861,10 +906,10 @@ function applyStateValueOverrides(
 }
 
 function stateOverrideTarget(
-  root: SyntheticRoot | Instance,
-  instance: Instance,
+  root: SyntheticRoot<any> | Instance<any>,
+  instance: Instance<any>,
   stateKey: string,
-): Instance {
+): Instance<any> {
   const frame = traversalFrames(root).find(
     (candidate) => !candidate.isMember && candidate.concreteInstance === instance,
   );
@@ -875,12 +920,12 @@ function stateOverrideTarget(
   return descriptor.scope === "local" ? frame.concreteInstance : frame.topInstance;
 }
 
-function readStateValue(root: SyntheticRoot | Instance, address: StateAddress): unknown {
+function readStateValue(root: SyntheticRoot<any> | Instance<any>, address: StateAddress): unknown {
   return findResolvedState(root, address).container.value;
 }
 
 function validateStateValue(
-  root: SyntheticRoot | Instance,
+  root: SyntheticRoot<any> | Instance<any>,
   address: StateAddress,
   value: unknown,
 ): void {
@@ -888,7 +933,7 @@ function validateStateValue(
   state.descriptor.schema.parse(value);
 }
 
-function findResolvedState(root: SyntheticRoot | Instance, address: StateAddress) {
+function findResolvedState(root: SyntheticRoot<any> | Instance<any>, address: StateAddress) {
   const state = resolveStates(root).find(
     (candidate) =>
       candidate.address.instanceId === address.instanceId &&
@@ -901,7 +946,7 @@ function findResolvedState(root: SyntheticRoot | Instance, address: StateAddress
 }
 
 function stateAddressForFrame(
-  frame: ReturnType<typeof traversalFrames>[number],
+  frame: ProjectionFrame<any>,
 ): StateAddress | undefined {
   const descriptor = frame.node.state;
   if (!descriptor) {
@@ -921,7 +966,7 @@ function patchObject(value: unknown, patch: Record<string, unknown>): unknown {
   };
 }
 
-function findInstance(root: SyntheticRoot | Instance, instanceId: string): Instance | undefined {
+function findInstance(root: SyntheticRoot<any> | Instance<any>, instanceId: string): Instance<any> | undefined {
   for (const instance of rootInstances(root)) {
     const found = findInstanceInTree(instance, instanceId);
     if (found) return found;
@@ -929,7 +974,7 @@ function findInstance(root: SyntheticRoot | Instance, instanceId: string): Insta
   return undefined;
 }
 
-function findInstanceInTree(instance: Instance, instanceId: string): Instance | undefined {
+function findInstanceInTree(instance: Instance<any>, instanceId: string): Instance<any> | undefined {
   if (instance.id === instanceId) {
     return instance;
   }
@@ -940,7 +985,7 @@ function findInstanceInTree(instance: Instance, instanceId: string): Instance | 
   return undefined;
 }
 
-function removeInstance(root: SyntheticRoot | Instance, instanceId: string): void {
+function removeInstance(root: SyntheticRoot<any> | Instance<any>, instanceId: string): void {
   if (isSyntheticRoot(root)) {
     const index = root.instances.findIndex((instance) => instance.id === instanceId);
     if (index >= 0) {
@@ -958,7 +1003,7 @@ function removeInstance(root: SyntheticRoot | Instance, instanceId: string): voi
   }
 }
 
-function removeChildInstance(parent: Instance, instanceId: string): boolean {
+function removeChildInstance(parent: Instance<any>, instanceId: string): boolean {
   const children = parent.children ?? [];
   const index = children.findIndex((child) => child.id === instanceId);
   if (index >= 0) {
@@ -968,15 +1013,15 @@ function removeChildInstance(parent: Instance, instanceId: string): boolean {
   return children.some((child) => removeChildInstance(child, instanceId));
 }
 
-function rootInstances(root: SyntheticRoot | Instance): Instance[] {
+function rootInstances(root: SyntheticRoot<any> | Instance<any>): Instance<any>[] {
   return isSyntheticRoot(root) ? root.instances : [root];
 }
 
-function isSyntheticRoot(root: SyntheticRoot | Instance): root is SyntheticRoot {
+function isSyntheticRoot(root: SyntheticRoot<any> | Instance<any>): root is SyntheticRoot<any> {
   return "type" in root && root.type === "synthetic-root";
 }
 
-function containsHydratedNodeData(value: unknown): value is Instance["node"] {
+function containsHydratedNodeData(value: unknown): value is Instance<any>["node"] {
   if (!value || typeof value !== "object") return false;
   const record = value as {
     toolBindings?: unknown;
@@ -1037,7 +1082,7 @@ function containsHydratedMembers(members: unknown): boolean {
     );
 }
 
-function isInstanceMessage(message: unknown): message is InstanceMessage {
+function isInstanceMessage(message: unknown): message is InstanceMessage<any> {
   if (!message || typeof message !== "object") return false;
   const record = message as Record<string, unknown>;
   if (record.type !== "instance" || typeof record.kind !== "string") return false;
@@ -1051,15 +1096,15 @@ function isInstanceMessage(message: unknown): message is InstanceMessage {
   );
 }
 
-class MachineRunImpl implements MachineRun {
+class MachineRunImpl<TActorMessage extends AnyActorMessage> implements MachineRun<TActorMessage> {
   private started = false;
   private draining = false;
-  private stopped = false;
+  private schedulingStopped = false;
   private activeActivations = new Map<string, Promise<void>>();
   private activationErrors: unknown[] = [];
 
   constructor(
-    private readonly machine: ProjectorMachine,
+    private readonly machine: ProjectorMachine<TActorMessage>,
     private readonly options: Required<RunMachineOptions>,
   ) {}
 
@@ -1071,21 +1116,19 @@ class MachineRunImpl implements MachineRun {
     return this.draining;
   }
 
-  async stopAndDrainFrames(): Promise<Frame[]> {
-    this.stopped = true;
-    const drained = this.machine.pendingFrames.splice(0);
-    return drained;
+  stopSchedulingWork(): void {
+    this.schedulingStopped = true;
   }
 
-  [Symbol.asyncIterator](): AsyncIterator<Frame> {
+  [Symbol.asyncIterator](): AsyncIterator<Frame<TActorMessage>> {
     return this.drain();
   }
 
-  private async *drain(): AsyncGenerator<Frame> {
+  private async *drain(): AsyncGenerator<Frame<TActorMessage>> {
     this.started = true;
     this.draining = true;
     try {
-      while (!this.stopped) {
+      while (true) {
         if (this.activationErrors.length > 0) {
           throw this.activationErrors.shift();
         }
@@ -1101,11 +1144,10 @@ class MachineRunImpl implements MachineRun {
           continue;
         }
 
-        if (!this.options.startWork) {
-          return;
+        if (this.shouldScheduleWork()) {
+          this.startRunnableActivations();
         }
 
-        this.startRunnableActivations();
         if (this.machine.pendingFrames.length > 0) {
           continue;
         }
@@ -1116,6 +1158,10 @@ class MachineRunImpl implements MachineRun {
 
         if (this.activationErrors.length > 0) {
           throw this.activationErrors.shift();
+        }
+
+        if (!this.shouldScheduleWork()) {
+          return;
         }
 
         if (collectRunnableActivations(this.machine).length === 0) {
@@ -1137,7 +1183,7 @@ class MachineRunImpl implements MachineRun {
   }
 
   private startRunnableActivation(activation: Activation): void {
-    if (this.stopped) return;
+    if (!this.shouldScheduleWork()) return;
 
     const run = (async () => {
       try {
@@ -1151,14 +1197,18 @@ class MachineRunImpl implements MachineRun {
 
     this.activeActivations.set(activation.activationId, run);
   }
+
+  private shouldScheduleWork(): boolean {
+    return this.options.scheduleWork && !this.schedulingStopped;
+  }
 }
 
-function reconcileWorkOnce(
-  machine: ProjectorMachine,
+function reconcileWorkOnce<TActorMessage extends AnyActorMessage>(
+  machine: ProjectorMachine<TActorMessage>,
   options: { skipPendingSources?: boolean } = {},
-): Frame[] {
+): Frame<TActorMessage>[] {
   const state = foldWork(machine);
-  const appended: Frame[] = [];
+  const appended: Frame<TActorMessage>[] = [];
   const pendingFrameIds = options.skipPendingSources
     ? new Set(machine.pendingFrames.map((frame) => frame.id))
     : undefined;
@@ -1230,9 +1280,9 @@ function reconcileWorkOnce(
   return appended;
 }
 
-function runtimeCandidatesForSource(
-  machine: Machine,
-  sourceFrame: Frame,
+function runtimeCandidatesForSource<TActorMessage extends AnyActorMessage>(
+  machine: Machine<TActorMessage>,
+  sourceFrame: Frame<TActorMessage>,
   state: WorkState,
 ): RuntimeCandidate[] {
   const candidates: RuntimeCandidate[] = [];
@@ -1271,7 +1321,7 @@ function runtimeCandidatesForSource(
       continue;
     }
 
-    const runtime = frame.node.runtime as PrimaryRuntime | WorkerRuntime;
+    const runtime = frame.node.runtime as PrimaryRuntime<TActorMessage> | WorkerRuntime<TActorMessage>;
     if (sourceFrameProducedByRuntime(sourceFrame, frame.runtimeInstanceId, state)) {
       continue;
     }
@@ -1307,11 +1357,11 @@ function runtimeCandidatesForSource(
   return candidates;
 }
 
-function triggerMatches(
-  machine: Machine,
+function triggerMatches<TActorMessage extends AnyActorMessage>(
+  machine: Machine<TActorMessage>,
   runtimeInstanceId: RuntimeInstanceId,
   trigger: RuntimeTrigger,
-  sourceFrame: Frame,
+  sourceFrame: Frame<TActorMessage>,
   state: WorkState,
 ): boolean {
   if (trigger.type === "actor-frame") {
@@ -1350,7 +1400,7 @@ function triggerMatches(
   return false;
 }
 
-function foldWork(machine: Machine): WorkState {
+function foldWork<TActorMessage extends AnyActorMessage>(machine: Machine<TActorMessage>): WorkState {
   const activations = new Map<string, Activation>();
   const completions = new Map<string, WorkCompletionMessage & { frameId: string; frameIndex: number }>();
   const generatorRuntimeIds = new Map<GeneratorId, RuntimeInstanceId>();
@@ -1383,7 +1433,7 @@ function foldWork(machine: Machine): WorkState {
 }
 
 function runtimeCreatedByFrame(
-  frame: Frame,
+  frame: Frame<any>,
   runtimeInstanceId: RuntimeInstanceId,
 ): boolean {
   const createdInstanceIds = new Set<string>();
@@ -1411,7 +1461,7 @@ function runtimeCreatedByFrame(
   return Boolean(address && createdInstanceIds.has(address));
 }
 
-function collectSpawnedIds(children: readonly SpawnChild[], ids: Set<string>): void {
+function collectSpawnedIds(children: readonly SpawnChild<any>[], ids: Set<string>): void {
   for (const child of children) {
     if (child.id) {
       ids.add(child.id);
@@ -1420,7 +1470,7 @@ function collectSpawnedIds(children: readonly SpawnChild[], ids: Set<string>): v
   }
 }
 
-function collectAttachedIds(children: readonly SerializedInstance[], ids: Set<string>): void {
+function collectAttachedIds(children: readonly SerializedInstance<any>[], ids: Set<string>): void {
   for (const child of children) {
     ids.add(child.id);
     collectAttachedIds(child.children ?? [], ids);
@@ -1428,7 +1478,7 @@ function collectAttachedIds(children: readonly SerializedInstance[], ids: Set<st
 }
 
 function sourceFrameProducedByRuntime(
-  frame: Frame,
+  frame: Frame<any>,
   runtimeInstanceId: RuntimeInstanceId,
   state: WorkState,
 ): boolean {
@@ -1449,7 +1499,7 @@ function serialRuntimeIdFromGeneratorId(generatorId: GeneratorId): RuntimeInstan
 }
 
 function nearestAncestorRuntimeId(
-  root: SyntheticRoot | Instance,
+  root: SyntheticRoot<any> | Instance<any>,
   runtimeInstanceId: RuntimeInstanceId,
 ): RuntimeInstanceId | undefined {
   const frame = findFrameByRuntimeId(root, runtimeInstanceId);
@@ -1499,7 +1549,7 @@ function triggerKey(trigger: RuntimeTrigger): string {
 }
 
 function completionReasonForRuntime(
-  runtime: NormalizedRuntime,
+  runtime: NormalizedRuntime<any>,
   reason: ExecutorRunResult["completionReason"],
 ): WorkCompletionReason {
   if (reason === "cancelled" || reason === "delegated") return reason;
@@ -1507,13 +1557,13 @@ function completionReasonForRuntime(
   return runtime.type === "primary" ? "end-turn" : "done";
 }
 
-function syntheticRootRuntime(): PrimaryRuntime {
+function syntheticRootRuntime(): PrimaryRuntime<any> {
   return {
     type: "primary",
     trigger: { type: "actor-frame" },
     concurrency: "serial",
     activationHistory: "live",
-    historyProjection: { type: "actor" },
+    historyProjection: { type: "messages" },
     boundaryProjection: { mode: "hidden" },
   };
 }
@@ -1527,7 +1577,7 @@ function hashString(value: string): string {
   return (hash >>> 0).toString(36);
 }
 
-function nextFrameIndex(frames: Frame[]): number {
+function nextFrameIndex(frames: Frame<any>[]): number {
   let max = -1;
   for (const frame of frames) {
     const match = /^frame-(\d+)$/.exec(frame.id);

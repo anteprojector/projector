@@ -210,29 +210,31 @@ export const memoryHistoryProjection: HistoryProjectionFunction = (ctx) => {
   const memories = memoriesStateSchema.safeParse(ctx.states.memories).success
     ? (ctx.states.memories as MemoriesState)
     : [];
+  const prompt = [
+    "Below is a conversation log between a user and an agent.",
+    "Analyze the new messages and call saveMemories with any durable new memories.",
+    "",
+    "Rules:",
+    "- Save stable user facts, preferences, names, and recurring context.",
+    "- Ignore one-off tasks, temporary details, and assistant claims.",
+    "- Do not duplicate current memories.",
+    "- If there are no new durable memories, call saveMemories with an empty memories array.",
+    "",
+    "Current memories:",
+    renderMemories(memories),
+    "",
+    "Conversation history before the last memory update:",
+    renderActorMessages(previousMessages),
+    "",
+    "New messages since the last memory update:",
+    renderActorMessages(newMessages),
+  ].join("\n");
 
   return [
     {
       type: "user",
-      text: [
-        "Below is a conversation log between a user and an agent.",
-        "Analyze the new messages and call saveMemories with any durable new memories.",
-        "",
-        "Rules:",
-        "- Save stable user facts, preferences, names, and recurring context.",
-        "- Ignore one-off tasks, temporary details, and assistant claims.",
-        "- Do not duplicate current memories.",
-        "- If there are no new durable memories, call saveMemories with an empty memories array.",
-        "",
-        "Current memories:",
-        renderMemories(memories),
-        "",
-        "Conversation history before the last memory update:",
-        renderActorMessages(previousMessages),
-        "",
-        "New messages since the last memory update:",
-        renderActorMessages(newMessages),
-      ].join("\n"),
+      content: prompt,
+      text: prompt,
     },
   ];
 };

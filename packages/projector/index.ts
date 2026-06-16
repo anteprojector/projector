@@ -10,3 +10,4 @@ export * from "./src/runtime-address.ts";
 export * from "./src/serialization.ts";
 export * from "./src/state.ts";
 export * from "./src/types.ts";
+export * from "./src/visibility.ts";
