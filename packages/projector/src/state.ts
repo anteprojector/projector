@@ -1,7 +1,6 @@
-import type { ProjectionFrame, SyntheticRoot } from "./frames.ts";
-import { traversalFrames } from "./frames.ts";
+import type { ProjectionFrame } from "./frames.ts";
+import { topStateInstance, traversalFrames } from "./frames.ts";
 import type {
-  AnyActorMessage,
   Instance,
   NormalizedStateDescriptor,
   StateAddress,
@@ -9,27 +8,27 @@ import type {
   StateKey,
 } from "./types.ts";
 
-export type ResolvedState<TActorMessage extends AnyActorMessage = any> = {
+export type ResolvedState<TDataContent = any> = {
   address: StateAddress;
-  targetInstance: Instance<TActorMessage>;
+  targetInstance: Instance<TDataContent>;
   descriptor: NormalizedStateDescriptor;
   container: StateContainer;
-  sourceFrame: ProjectionFrame<TActorMessage>;
+  sourceFrame: ProjectionFrame<TDataContent>;
 };
 
-type StateGroup<TActorMessage extends AnyActorMessage = any> = {
-  targetInstance: Instance<TActorMessage>;
+type StateGroup<TDataContent = any> = {
+  targetInstance: Instance<TDataContent>;
   stateKey: StateKey;
   entries: Array<{
     descriptor: NormalizedStateDescriptor;
-    frame: ProjectionFrame<TActorMessage>;
+    frame: ProjectionFrame<TDataContent>;
   }>;
 };
 
-export function resolveStates<TActorMessage extends AnyActorMessage>(
-  root: SyntheticRoot<TActorMessage> | Instance<TActorMessage>,
-): ResolvedState<TActorMessage>[] {
-  const groups = new Map<string, StateGroup<TActorMessage>>();
+export function resolveStates<TDataContent>(
+  root: Instance<TDataContent>,
+): ResolvedState<TDataContent>[] {
+  const groups = new Map<string, StateGroup<TDataContent>>();
 
   for (const frame of traversalFrames(root)) {
     const descriptor = frame.node.state;
@@ -38,7 +37,7 @@ export function resolveStates<TActorMessage extends AnyActorMessage>(
     }
 
     const targetInstance =
-      descriptor.scope === "local" ? frame.concreteInstance : frame.topInstance;
+      descriptor.scope === "local" ? frame.concreteInstance : topStateInstance(frame);
     const groupKey = `${targetInstance.id}\u0000${descriptor.key}`;
     const group =
       groups.get(groupKey) ??
@@ -46,12 +45,12 @@ export function resolveStates<TActorMessage extends AnyActorMessage>(
         targetInstance,
         stateKey: descriptor.key,
         entries: [],
-      } satisfies StateGroup<TActorMessage>);
+      } satisfies StateGroup<TDataContent>);
     group.entries.push({ descriptor, frame });
     groups.set(groupKey, group);
   }
 
-  const resolved: ResolvedState<TActorMessage>[] = [];
+  const resolved: ResolvedState<TDataContent>[] = [];
   for (const group of groups.values()) {
     resolved.push(resolveStateGroup(group));
   }
@@ -59,9 +58,9 @@ export function resolveStates<TActorMessage extends AnyActorMessage>(
   return resolved;
 }
 
-function resolveStateGroup<TActorMessage extends AnyActorMessage>(
-  group: StateGroup<TActorMessage>,
-): ResolvedState<TActorMessage> {
+function resolveStateGroup<TDataContent>(
+  group: StateGroup<TDataContent>,
+): ResolvedState<TDataContent> {
   const scope = group.entries[0]?.descriptor.scope;
   if (!scope) {
     throw new Error("State group has no descriptors");
@@ -141,8 +140,8 @@ function mergeDescriptors(
   };
 }
 
-function allSchemasValidate<TActorMessage extends AnyActorMessage>(
-  entries: StateGroup<TActorMessage>["entries"],
+function allSchemasValidate<TDataContent>(
+  entries: StateGroup<TDataContent>["entries"],
   value: unknown,
 ): boolean {
   return entries.every((entry) => entry.descriptor.schema.safeParse(value).success);

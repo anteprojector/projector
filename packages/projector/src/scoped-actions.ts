@@ -1,31 +1,31 @@
 import type { ProjectionFrame } from "./frames.ts";
-import type { AnyAction, AnyActorMessage, Charter, Node } from "./types.ts";
+import type { AnyAction, Charter, Node } from "./types.ts";
 
 export type ActionKind = "tool" | "command";
 
-export function resolveFrameTools<TActorMessage extends AnyActorMessage>(
-  frame: ProjectionFrame<TActorMessage>,
-  charter: Charter<TActorMessage> | undefined,
+export function resolveFrameTools<TDataContent>(
+  frame: ProjectionFrame<TDataContent>,
+  charter: Charter<TDataContent> | undefined,
 ): AnyAction[] {
   return frame.node.toolRefs.map((name) =>
     resolveScopedAction(frame, name, "tool", charter)
   );
 }
 
-export function resolveFrameCommands<TActorMessage extends AnyActorMessage>(
-  frame: ProjectionFrame<TActorMessage>,
-  charter: Charter<TActorMessage> | undefined,
+export function resolveFrameCommands<TDataContent>(
+  frame: ProjectionFrame<TDataContent>,
+  charter: Charter<TDataContent> | undefined,
 ): AnyAction[] {
   return frame.node.commandRefs.map((name) =>
     resolveScopedAction(frame, name, "command", charter)
   );
 }
 
-export function resolveScopedAction(
-  frame: ProjectionFrame<any>,
+export function resolveScopedAction<TDataContent>(
+  frame: ProjectionFrame<TDataContent>,
   name: string,
   kind: ActionKind,
-  charter: Charter<any> | undefined,
+  charter: Charter<TDataContent> | undefined,
 ): AnyAction {
   const selfBinding = actionBinding(frame.node, name, kind);
   if (selfBinding) {

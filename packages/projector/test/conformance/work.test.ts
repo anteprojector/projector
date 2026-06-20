@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { createMachine, createNode, runMachine, type Frame, type FrameMessage } from "../../index.ts";
+import {
+  createMachine,
+  createNode,
+  runMachine,
+  textAssistantMessage,
+  textUserMessage,
+  type Frame,
+  type FrameMessage,
+} from "../../index.ts";
 import { charter, createRecordingExecutor, drain } from "./helpers.ts";
 
 describe("conformance: work scheduling", () => {
@@ -20,7 +28,7 @@ describe("conformance: work scheduling", () => {
       charter: charter({ executor }),
     });
     const userFrame = machine.enqueueFrame({
-      messages: [{ type: "user", content: "remember my name", text: "remember my name" }],
+      messages: [{ ...textUserMessage("remember my name") }],
     });
 
     const iterator = runMachine(machine)[Symbol.asyncIterator]();
@@ -96,38 +104,34 @@ describe("conformance: work scheduling", () => {
       generatorId: "instance:r",
       runtimeInstanceId: "instance:r",
       activationId: "activation-existing",
-      messages: [{ type: "assistant", content: "self output", text: "self output" }],
+      messages: [{ ...textAssistantMessage("self output") }],
     });
 
     await expect(drain(runMachine(machine, { scheduleWork: false }))).resolves.toEqual([assistantFrame]);
   });
 
   it("matches actor-frame triggers with default and explicit runtime address audiences", async () => {
-    await expect(activationRuntimeIdsFor({ type: "user", content: "broadcast", text: "broadcast" })).resolves.toEqual([
+    await expect(activationRuntimeIdsFor({ ...textUserMessage("broadcast") })).resolves.toEqual([
       "member:r/first",
       "member:r/second",
     ]);
 
     await expect(
       activationRuntimeIdsFor({
-        type: "assistant",
-        content: "runtime target",
-        text: "runtime target",
+        ...textAssistantMessage("runtime target"),
         audience: { type: "member", ownerInstanceId: "r", memberPath: ["first"] },
       }),
     ).resolves.toEqual(["member:r/first"]);
 
     await expect(
       activationRuntimeIdsFor({
-        type: "assistant",
-        content: "runtime target list",
-        text: "runtime target list",
+        ...textAssistantMessage("runtime target list"),
         audience: [{ type: "member", ownerInstanceId: "r", memberPath: ["second"] }],
       }),
     ).resolves.toEqual(["member:r/second"]);
 
     await expect(
-      activationRuntimeIdsFor({ type: "assistant", content: "default self without producer", text: "default self without producer" }),
+      activationRuntimeIdsFor({ ...textAssistantMessage("default self without producer") }),
     ).resolves.toEqual([]);
   });
 
@@ -142,10 +146,37 @@ describe("conformance: work scheduling", () => {
       root: { id: "r", node: root },
       charter: charter(),
     });
-    machine.enqueueFrame({ messages: [{ type: "user", content: "visible but wrong trigger", text: "visible but wrong trigger" }] });
+    machine.enqueueFrame({ messages: [{ ...textUserMessage("visible but wrong trigger") }] });
 
     const frames = await drain(runMachine(machine, { scheduleWork: false }));
     expect(workActivationRuntimeIds(frames)).toEqual([]);
+  });
+
+  it("does not reschedule historical activations when frame history is forked into a new machine", async () => {
+    const { executor } = createRecordingExecutor();
+    const root = createNode({
+      key: "root",
+      runtime: { type: "primary", trigger: { type: "actor-frame" } },
+    });
+    const source = createMachine({
+      id: "source-session",
+      root: { id: "r", node: root },
+      charter: charter({ executor }),
+    });
+    source.enqueueFrame({
+      id: "user-1",
+      messages: [{ ...textUserMessage("hi") }],
+    } as Frame);
+
+    await drain(runMachine(source));
+    const fork = createMachine({
+      id: "forked-session",
+      root: { id: "r", node: root },
+      charter: charter({ executor }),
+      frames: source.frames.map((frame) => ({ ...frame, messages: [...frame.messages] })),
+    });
+
+    await expect(drain(runMachine(fork, { scheduleWork: false }))).resolves.toEqual([]);
   });
 });
 

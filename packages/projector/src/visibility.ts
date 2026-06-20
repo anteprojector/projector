@@ -1,10 +1,10 @@
 import { isWorkActivationMessage } from "./history.ts";
 import { encodeRuntimeAddress } from "./runtime-address.ts";
 import type {
+  ActorMessage,
   AnyActorMessage,
   Audience,
   AudienceTarget,
-  DefaultActorMessage,
   Frame,
   Generator,
   GeneratorId,
@@ -21,9 +21,9 @@ export type RuntimeVisibilityTarget = {
   runtimeInstanceId: RuntimeInstanceId;
 };
 
-export function isActorMessage<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
+export function isActorMessage<TDataContent = never>(
   message: unknown,
-): message is TActorMessage {
+): message is ActorMessage<TDataContent> {
   if (!message || typeof message !== "object") return false;
   const record = message as Record<string, unknown>;
   if (record.type === "user" || record.type === "assistant") {
@@ -36,9 +36,9 @@ export function defaultAudienceForActorMessage(message: AnyActorMessage): Audien
   return message.type === "user" ? "broadcast" : "self";
 }
 
-export function actorMessageVisibleToGenerator<TActorMessage extends AnyActorMessage>(
-  message: TActorMessage,
-  frame: Frame<TActorMessage>,
+export function actorMessageVisibleToGenerator<TDataContent>(
+  message: ActorMessage<TDataContent>,
+  frame: Frame<TDataContent>,
   target: Generator,
 ): boolean {
   const audience = message.audience ?? defaultAudienceForActorMessage(message);
@@ -53,9 +53,9 @@ export function actorMessageVisibleToGenerator<TActorMessage extends AnyActorMes
   );
 }
 
-export function actorMessageVisibleToRuntime<TActorMessage extends AnyActorMessage>(
-  message: TActorMessage,
-  frame: Frame<TActorMessage>,
+export function actorMessageVisibleToRuntime<TDataContent>(
+  message: ActorMessage<TDataContent>,
+  frame: Frame<TDataContent>,
   target: RuntimeVisibilityTarget,
   resolveGeneratorRuntimeId: ResolveGeneratorRuntimeId,
 ): boolean {
@@ -78,8 +78,8 @@ function audienceTargets(audience: Exclude<Audience, "self" | "broadcast">): Aud
   return Array.isArray(audience) ? audience : [audience];
 }
 
-export function activationFrameIndexFor<TActorMessage extends AnyActorMessage>(
-  frames: readonly Frame<TActorMessage>[],
+export function activationFrameIndexFor<TDataContent>(
+  frames: readonly Frame<TDataContent>[],
   activationId: string | undefined,
   options: { requireActivationFrame?: boolean } = {},
 ): number {

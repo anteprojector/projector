@@ -1,65 +1,72 @@
+import { createNode } from "./create.ts";
 import { encodeRuntimeAddress } from "./runtime-address.ts";
+import { ROOT_INSTANCE_ID } from "./runtime-address.ts";
 import type {
-  AnyActorMessage,
-  DefaultActorMessage,
   Instance,
   Node,
   RuntimeAddress,
 } from "./types.ts";
 
-export type SyntheticRoot<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
-  type: "synthetic-root";
-  instances: Instance<TActorMessage>[];
-};
-
-export type ProjectionFrame<TActorMessage extends AnyActorMessage = DefaultActorMessage> = {
-  node: Node<TActorMessage>;
-  instance: Instance<TActorMessage>;
-  concreteInstance: Instance<TActorMessage>;
-  topInstance: Instance<TActorMessage>;
+export type ProjectionFrame<TDataContent = never> = {
+  node: Node<TDataContent>;
+  instance: Instance<TDataContent>;
+  concreteInstance: Instance<TDataContent>;
+  topInstance: Instance<TDataContent>;
   address: RuntimeAddress;
   runtimeInstanceId: string;
   memberPath: string[];
-  parent?: ProjectionFrame<TActorMessage>;
+  parent?: ProjectionFrame<TDataContent>;
   isMember: boolean;
 };
 
-export function createRoot<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
-  instances: Instance<TActorMessage>[],
-): SyntheticRoot<TActorMessage> {
-  return { type: "synthetic-root", instances };
+const rootNode = createNode({
+  key: "root",
+  name: "Root",
+  stateless: true,
+  runtime: {
+    type: "primary",
+    trigger: { type: "actor-frame" },
+  },
+  projection: { mode: "hidden" },
+});
+
+export function createRoot<TDataContent = never>(
+  instances: Instance<TDataContent>[],
+): Instance<TDataContent> {
+  const root = {
+    id: ROOT_INSTANCE_ID,
+    node: rootNode as unknown as Instance<TDataContent>["node"],
+    children: instances,
+  } satisfies Instance<TDataContent>;
+  assertUniqueInstanceIds(root);
+  return root;
 }
 
-export function traversalFrames<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
-  root: SyntheticRoot<TActorMessage> | Instance<TActorMessage>,
-): ProjectionFrame<TActorMessage>[] {
-  const frames: ProjectionFrame<TActorMessage>[] = [];
-  const instances = isSyntheticRoot(root) ? root.instances : [root];
-
-  for (const instance of instances) {
-    collectInstanceFrame(frames, instance, undefined, instance);
-  }
-
+export function traversalFrames<TDataContent = never>(
+  root: Instance<TDataContent>,
+): ProjectionFrame<TDataContent>[] {
+  const frames: ProjectionFrame<TDataContent>[] = [];
+  collectInstanceFrame(frames, root, undefined, root);
   return frames;
 }
 
-export function collectProjectionFrames<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
-  root: SyntheticRoot<TActorMessage> | Instance<TActorMessage>,
-): ProjectionFrame<TActorMessage>[] {
+export function collectProjectionFrames<TDataContent = never>(
+  root: Instance<TDataContent>,
+): ProjectionFrame<TDataContent>[] {
   return traversalFrames(root);
 }
 
-export function findFrameByRuntimeId<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
-  root: SyntheticRoot<TActorMessage> | Instance<TActorMessage>,
+export function findFrameByRuntimeId<TDataContent = never>(
+  root: Instance<TDataContent>,
   runtimeInstanceId: string,
-): ProjectionFrame<TActorMessage> | undefined {
+): ProjectionFrame<TDataContent> | undefined {
   return traversalFrames(root).find((frame) => frame.runtimeInstanceId === runtimeInstanceId);
 }
 
-export function directProjectionChildren<TActorMessage extends AnyActorMessage = DefaultActorMessage>(
-  frame: ProjectionFrame<TActorMessage>,
-): ProjectionFrame<TActorMessage>[] {
-  const children: ProjectionFrame<TActorMessage>[] = [];
+export function directProjectionChildren<TDataContent = never>(
+  frame: ProjectionFrame<TDataContent>,
+): ProjectionFrame<TDataContent>[] {
+  const children: ProjectionFrame<TDataContent>[] = [];
 
   for (const member of frame.node.members) {
     const memberPath = [...frame.memberPath, member.key];
@@ -68,7 +75,7 @@ export function directProjectionChildren<TActorMessage extends AnyActorMessage =
       ownerInstanceId: frame.concreteInstance.id,
       memberPath,
     };
-    const memberFrame: ProjectionFrame<TActorMessage> = {
+    const memberFrame: ProjectionFrame<TDataContent> = {
       node: member,
       instance: frame.concreteInstance,
       concreteInstance: frame.concreteInstance,
@@ -102,14 +109,32 @@ export function directProjectionChildren<TActorMessage extends AnyActorMessage =
   return children;
 }
 
-function collectInstanceFrame<TActorMessage extends AnyActorMessage>(
-  frames: ProjectionFrame<TActorMessage>[],
-  instance: Instance<TActorMessage>,
-  parent: ProjectionFrame<TActorMessage> | undefined,
-  topInstance: Instance<TActorMessage>,
+export function topStateInstance<TDataContent>(
+  frame: ProjectionFrame<TDataContent>,
+): Instance<TDataContent> {
+  let current = frame;
+  let target = frame.concreteInstance;
+
+  while (current.parent && !current.parent.node.stateless) {
+    current = current.parent;
+    target = current.concreteInstance;
+  }
+
+  if (target.node.stateless) {
+    throw new Error(`Cannot resolve top state for stateless instance "${target.id}"`);
+  }
+
+  return target;
+}
+
+function collectInstanceFrame<TDataContent>(
+  frames: ProjectionFrame<TDataContent>[],
+  instance: Instance<TDataContent>,
+  parent: ProjectionFrame<TDataContent> | undefined,
+  topInstance: Instance<TDataContent>,
 ): void {
   const address: RuntimeAddress = { type: "instance", instanceId: instance.id };
-  const frame: ProjectionFrame<TActorMessage> = {
+  const frame: ProjectionFrame<TDataContent> = {
     node: instance.node,
     instance,
     concreteInstance: instance,
@@ -124,9 +149,9 @@ function collectInstanceFrame<TActorMessage extends AnyActorMessage>(
   collectDescendants(frames, frame);
 }
 
-function collectDescendants<TActorMessage extends AnyActorMessage>(
-  frames: ProjectionFrame<TActorMessage>[],
-  frame: ProjectionFrame<TActorMessage>,
+function collectDescendants<TDataContent>(
+  frames: ProjectionFrame<TDataContent>[],
+  frame: ProjectionFrame<TDataContent>,
 ): void {
   for (const child of directProjectionChildren(frame)) {
     frames.push(child);
@@ -134,8 +159,17 @@ function collectDescendants<TActorMessage extends AnyActorMessage>(
   }
 }
 
-function isSyntheticRoot<TActorMessage extends AnyActorMessage>(
-  root: SyntheticRoot<TActorMessage> | Instance<TActorMessage>,
-): root is SyntheticRoot<TActorMessage> {
-  return "type" in root && root.type === "synthetic-root";
+export function assertUniqueInstanceIds(root: Instance<any>): void {
+  const seen = new Set<string>();
+  visitInstanceIds(root, seen);
+}
+
+function visitInstanceIds(instance: Instance<any>, seen: Set<string>): void {
+  if (seen.has(instance.id)) {
+    throw new Error(`Duplicate instance id "${instance.id}"`);
+  }
+  seen.add(instance.id);
+  for (const child of instance.children ?? []) {
+    visitInstanceIds(child, seen);
+  }
 }

@@ -1,6 +1,5 @@
 import type {
   AnyAction,
-  AnyActorMessage,
   Charter,
   HistoryProjectionFunction,
   Node,
@@ -13,60 +12,45 @@ export function ref(value: string): Ref {
   return value;
 }
 
-export function parseRef(refValue: string): { key: string } {
-  if (!refValue) {
-    throw new Error("Malformed empty ref");
-  }
-  return { key: refValue };
-}
-
-export function hydrateRef(refValue: Ref, charter: Charter<any>): unknown {
-  return (
-    charter.nodes[refValue] ??
-    charter.tools[refValue] ??
-    charter.commands[refValue] ??
-    charter.states[refValue] ??
-    charter.projections[refValue] ??
-    charter.historyProjections?.[refValue] ??
-    missingRef(refValue)
-  );
-}
-
-export function hydrateNodeRef<TActorMessage extends AnyActorMessage>(
+export function hydrateNodeRef<TDataContent>(
   refValue: Ref,
-  charter: Charter<TActorMessage>,
-): Node<TActorMessage> {
+  charter: Charter<TDataContent>,
+): Node<TDataContent> {
   return expectRegistryValue(charter.nodes[refValue], refValue, "node");
 }
 
-export function hydrateToolRef(refValue: Ref, charter: Charter<any>): AnyAction {
+export function hydrateToolRef(refValue: Ref, charter: Pick<Charter, "tools">): AnyAction {
   return expectRegistryValue(charter.tools[refValue], refValue, "tool");
 }
 
-export function hydrateCommandRef(refValue: Ref, charter: Charter<any>): AnyAction {
+export function hydrateCommandRef(refValue: Ref, charter: Pick<Charter, "commands">): AnyAction {
   return expectRegistryValue(charter.commands[refValue], refValue, "command");
 }
 
 export function hydrateStateRef(
   refValue: Ref,
-  charter: Charter<any>,
+  charter: Pick<Charter, "states">,
 ): NormalizedStateDescriptor {
   return expectRegistryValue(charter.states[refValue], refValue, "state");
 }
 
-export function hydrateProjectionRef<TActorMessage extends AnyActorMessage>(
+export function hydrateProjectionRef<TDataContent>(
   refValue: Ref,
-  charter: Charter<TActorMessage>,
-): ProjectionFunction<TActorMessage> {
-  return expectRegistryValue(charter.projections[refValue], refValue, "projection");
+  charter: Charter<TDataContent>,
+): ProjectionFunction<TDataContent> {
+  return expectRegistryValue(
+    charter.projections[refValue],
+    refValue,
+    "projection",
+  );
 }
 
-export function hydrateHistoryProjectionRef<TActorMessage extends AnyActorMessage>(
+export function hydrateHistoryProjectionRef<TDataContent>(
   refValue: Ref,
-  charter: Charter<TActorMessage>,
-): HistoryProjectionFunction<TActorMessage> {
+  charter: Charter<TDataContent>,
+): HistoryProjectionFunction<TDataContent> {
   return expectRegistryValue(
-    charter.historyProjections?.[refValue],
+    charter.historyProjections[refValue],
     refValue,
     "history projection",
   );
@@ -81,8 +65,4 @@ function expectRegistryValue<T>(
     throw new Error(`Unknown ${kind} ref "${refValue}"`);
   }
   return value;
-}
-
-function missingRef(refValue: string): never {
-  throw new Error(`Unknown ref "${refValue}"`);
 }

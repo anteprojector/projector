@@ -1,11 +1,19 @@
 import * as z from "zod";
-import { createNode, normalizeStateDescriptor } from "./create.ts";
+import {
+  createNode,
+  normalizeStaticBoundaryProjection,
+  normalizeStateDescriptor,
+} from "./create.ts";
+import {
+  isHistoryProjectionFunction,
+  isProjectionFunction,
+} from "./projection-functions.ts";
 import { hydrateNodeRef } from "./refs.ts";
 import type {
   ActionBindings,
   ActorHistoryProjection,
   AnyAction,
-  AnyActorMessage,
+  BoundaryProjection,
   Charter,
   DryHistoryProjection,
   DryRuntime,
@@ -27,13 +35,14 @@ import type {
   SerializedInstance,
   SerializedStateDescriptor,
   StateContainer,
+  StaticBoundaryProjection,
   StaticProjection,
 } from "./types.ts";
 
-export function serializeInstance<TActorMessage extends AnyActorMessage>(
-  instance: Instance<TActorMessage>,
-  charter: Charter<TActorMessage>,
-): SerializedInstance<TActorMessage> {
+export function serializeInstance<TDataContent>(
+  instance: Instance<TDataContent>,
+  charter: Charter<TDataContent>,
+): SerializedInstance<TDataContent> {
   return {
     id: instance.id,
     node: serializeNode(instance.node, charter),
@@ -42,10 +51,10 @@ export function serializeInstance<TActorMessage extends AnyActorMessage>(
   };
 }
 
-export function hydrateInstance<TActorMessage extends AnyActorMessage = any>(
-  serialized: SerializedInstance<TActorMessage>,
-  charter: Charter<TActorMessage>,
-): Instance<TActorMessage> {
+export function hydrateInstance<TDataContent = never>(
+  serialized: SerializedInstance<TDataContent>,
+  charter: Charter<TDataContent>,
+): Instance<TDataContent> {
   return {
     id: serialized.id,
     node: hydrateNode(serialized.node, charter),
@@ -54,10 +63,10 @@ export function hydrateInstance<TActorMessage extends AnyActorMessage = any>(
   };
 }
 
-export function serializeNode<TActorMessage extends AnyActorMessage>(
-  node: Node<TActorMessage>,
-  charter: Charter<TActorMessage>,
-): DryNode<TActorMessage> | Ref {
+export function serializeNode<TDataContent>(
+  node: Node<TDataContent>,
+  charter: Charter<TDataContent>,
+): DryNode<TDataContent> | Ref {
   const registeredKey = findRegisteredKey(charter.nodes, node);
   if (registeredKey) {
     return registeredKey;
@@ -69,6 +78,7 @@ export function serializeNode<TActorMessage extends AnyActorMessage>(
     sourceNodeKey,
     name: node.name,
     instructions: node.instructions,
+    stateless: node.stateless ? true : undefined,
     tools: serializeActionRefs(node.toolRefs, node.toolBindings, charter, "tool", sourceNodeKey),
     commands: serializeActionRefs(
       node.commandRefs,
@@ -85,19 +95,20 @@ export function serializeNode<TActorMessage extends AnyActorMessage>(
   };
 }
 
-export function hydrateNode<TActorMessage extends AnyActorMessage = any>(
-  serialized: DryNode<TActorMessage> | Ref,
-  charter: Charter<TActorMessage>,
-): Node<TActorMessage> {
+export function hydrateNode<TDataContent = never>(
+  serialized: DryNode<TDataContent> | Ref,
+  charter: Charter<TDataContent>,
+): Node<TDataContent> {
   if (typeof serialized === "string") {
     return hydrateNodeRef(serialized, charter);
   }
 
-  return createNode<TActorMessage>({
+  return createNode<TDataContent>({
     key: serialized.key,
     sourceNodeKey: serialized.sourceNodeKey,
     name: serialized.name,
     instructions: serialized.instructions,
+    stateless: serialized.stateless,
     tools: hydrateActionRefs(serialized.tools, charter, "tool", serialized.sourceNodeKey),
     commands: hydrateActionRefs(
       serialized.commands,
@@ -108,7 +119,7 @@ export function hydrateNode<TActorMessage extends AnyActorMessage = any>(
     state: serialized.state ? hydrateStateDescriptor(serialized.state, charter) : undefined,
     members: serialized.members?.map((member) => hydrateNode(member, charter)),
     output: serialized.output
-      ? (hydrateOutputConfig(serialized.output) as OutputConfig<TActorMessage>)
+      ? (hydrateOutputConfig(serialized.output) as OutputConfig<TDataContent>)
       : undefined,
     projection: serialized.projection ? hydrateProjection(serialized.projection, charter) : undefined,
     runtime: serialized.runtime ? hydrateRuntime(serialized.runtime, charter) : undefined,
@@ -135,29 +146,32 @@ export function hydrateOutputConfig(output: SerializedOutputConfig): AnyOutputCo
   };
 }
 
-export function serializeProjection<TActorMessage extends AnyActorMessage>(
-  projection: Projection<TActorMessage>,
-  charter: Charter<TActorMessage>,
+export function serializeProjection<TDataContent>(
+  projection: Projection<TDataContent>,
+  charter: Charter<TDataContent>,
 ): StaticProjection | Ref {
-  if (typeof projection === "function") {
-    const key = findRegisteredKey(charter.projections, projection);
-    if (!key) {
-      throw new Error("Cannot serialize unregistered projection function");
+  if (isProjectionFunction<TDataContent>(projection)) {
+    const registered = charter.projections[projection.name];
+    if (registered !== projection) {
+      throw new Error(
+        `Cannot serialize unregistered projection function "${projection.name}"`,
+      );
     }
-    return key;
+    return projection.name;
   }
 
   if (typeof projection === "string") {
+    assertProjectionRef(projection, charter);
     return projection;
   }
 
   return projection;
 }
 
-export function hydrateProjection<TActorMessage extends AnyActorMessage>(
+export function hydrateProjection<TDataContent>(
   projection: StaticProjection | Ref,
-  charter: Charter<TActorMessage>,
-): StaticProjection | ProjectionFunction<TActorMessage> {
+  charter: Charter<TDataContent>,
+): StaticProjection | ProjectionFunction<TDataContent> {
   if (typeof projection !== "string") {
     return projection;
   }
@@ -169,43 +183,108 @@ export function hydrateProjection<TActorMessage extends AnyActorMessage>(
   return fn;
 }
 
-export function serializeHistoryProjection<TActorMessage extends AnyActorMessage>(
-  projection: HistoryProjection<TActorMessage>,
-  charter: Charter<TActorMessage>,
+export function serializeBoundaryProjection<TDataContent>(
+  projection: BoundaryProjection<TDataContent>,
+  charter: Charter<TDataContent>,
+): StaticBoundaryProjection | Ref {
+  if (isProjectionFunction<TDataContent>(projection)) {
+    const registered = charter.projections[projection.name];
+    if (registered !== projection) {
+      throw new Error(
+        `Cannot serialize unregistered projection function "${projection.name}"`,
+      );
+    }
+    return projection.name;
+  }
+
+  if (typeof projection === "string") {
+    assertProjectionRef(projection, charter);
+    return projection;
+  }
+
+  return normalizeStaticBoundaryProjection(projection);
+}
+
+export function hydrateBoundaryProjection<TDataContent>(
+  projection: StaticBoundaryProjection | Ref,
+  charter: Charter<TDataContent>,
+): StaticBoundaryProjection | ProjectionFunction<TDataContent> {
+  if (typeof projection !== "string") {
+    return normalizeStaticBoundaryProjection(projection);
+  }
+
+  const fn = charter.projections[projection];
+  if (!fn) {
+    throw new Error(`Unknown projection ref "${projection}"`);
+  }
+  return fn;
+}
+
+function assertProjectionRef<TDataContent>(
+  projection: Ref,
+  charter: Charter<TDataContent>,
+): void {
+  if (!charter.projections[projection]) {
+    throw new Error(`Unknown projection ref "${projection}"`);
+  }
+}
+
+export function serializeHistoryProjection<TDataContent>(
+  projection: HistoryProjection<TDataContent>,
+  charter: Charter<TDataContent>,
 ): ActorHistoryProjection | MessageHistoryProjection | Ref {
   if (isActorHistoryProjection(projection) || isMessageHistoryProjection(projection)) {
     return projection;
   }
 
-  if (typeof projection === "function") {
-    const key = findRegisteredKey(charter.historyProjections ?? {}, projection);
-    if (!key) {
-      throw new Error("Cannot serialize unregistered history projection function");
+  if (isHistoryProjectionFunction(projection)) {
+    const registered = charter.historyProjections[projection.name];
+    if (registered !== projection) {
+      throw new Error(
+        `Cannot serialize unregistered history projection function "${projection.name}"`,
+      );
     }
-    return key;
+    return projection.name;
   }
 
-  return projection;
+  if (typeof projection === "string") {
+    assertHistoryProjectionRef(projection, charter);
+    return projection;
+  }
+
+  throw new Error(`Cannot serialize unknown history projection`);
 }
 
-export function hydrateHistoryProjection<TActorMessage extends AnyActorMessage>(
+function assertHistoryProjectionRef<TDataContent>(
+  projection: Ref,
+  charter: Charter<TDataContent>,
+): void {
+  if (!charter.historyProjections[projection]) {
+    throw new Error(`Unknown history projection ref "${projection}"`);
+  }
+}
+
+export function hydrateHistoryProjection<TDataContent>(
   projection: ActorHistoryProjection | MessageHistoryProjection | Ref,
-  charter: Charter<TActorMessage>,
-): ActorHistoryProjection | MessageHistoryProjection | HistoryProjectionFunction<TActorMessage> {
+  charter: Charter<TDataContent>,
+): ActorHistoryProjection | MessageHistoryProjection | HistoryProjectionFunction<TDataContent> {
   if (isActorHistoryProjection(projection) || isMessageHistoryProjection(projection)) {
     return projection;
   }
 
-  const fn = charter.historyProjections?.[projection];
-  if (!fn) {
+  if (typeof projection !== "string") {
+    throw new Error(`Cannot hydrate unknown history projection`);
+  }
+  const historyProjection = charter.historyProjections[projection];
+  if (!historyProjection) {
     throw new Error(`Unknown history projection ref "${projection}"`);
   }
-  return fn;
+  return historyProjection;
 }
 
-function serializeRuntime<TActorMessage extends AnyActorMessage>(
-  runtime: Node<TActorMessage>["runtime"],
-  charter: Charter<TActorMessage>,
+function serializeRuntime<TDataContent>(
+  runtime: Node<TDataContent>["runtime"],
+  charter: Charter<TDataContent>,
 ): DryRuntime {
   if (runtime.type === "primary") {
     const { boundaryProjection, historyProjection, ...rest } = runtime;
@@ -215,7 +294,7 @@ function serializeRuntime<TActorMessage extends AnyActorMessage>(
     return {
       ...rest,
       boundaryProjection: boundaryProjection
-        ? serializeProjection(boundaryProjection, charter)
+        ? serializeBoundaryProjection(boundaryProjection, charter)
         : undefined,
       ...(serializedHistoryProjection
         ? { historyProjection: serializedHistoryProjection }
@@ -231,7 +310,7 @@ function serializeRuntime<TActorMessage extends AnyActorMessage>(
     return {
       ...rest,
       boundaryProjection: boundaryProjection
-        ? serializeProjection(boundaryProjection, charter)
+        ? serializeBoundaryProjection(boundaryProjection, charter)
         : undefined,
       ...(serializedHistoryProjection
         ? { historyProjection: serializedHistoryProjection }
@@ -242,15 +321,15 @@ function serializeRuntime<TActorMessage extends AnyActorMessage>(
   return runtime;
 }
 
-function hydrateRuntime<TActorMessage extends AnyActorMessage>(
+function hydrateRuntime<TDataContent>(
   runtime: DryRuntime,
-  charter: Charter<TActorMessage>,
-): Runtime<TActorMessage> {
+  charter: Charter<TDataContent>,
+): Runtime<TDataContent> {
   if (runtime.type === "primary") {
     return {
       ...runtime,
       boundaryProjection: runtime.boundaryProjection
-        ? hydrateProjection(runtime.boundaryProjection, charter)
+        ? hydrateBoundaryProjection(runtime.boundaryProjection, charter)
         : undefined,
       historyProjection: runtime.historyProjection
         ? hydrateHistoryProjection(runtime.historyProjection, charter)
@@ -262,7 +341,7 @@ function hydrateRuntime<TActorMessage extends AnyActorMessage>(
     return {
       ...runtime,
       boundaryProjection: runtime.boundaryProjection
-        ? hydrateProjection(runtime.boundaryProjection, charter)
+        ? hydrateBoundaryProjection(runtime.boundaryProjection, charter)
         : undefined,
       historyProjection: runtime.historyProjection
         ? hydrateHistoryProjection(runtime.historyProjection, charter)
@@ -273,9 +352,9 @@ function hydrateRuntime<TActorMessage extends AnyActorMessage>(
   return runtime;
 }
 
-function serializeRuntimeHistoryProjection(
-  projection: HistoryProjection<any>,
-  charter: Charter<any>,
+function serializeRuntimeHistoryProjection<TDataContent>(
+  projection: HistoryProjection<TDataContent>,
+  charter: Charter<TDataContent>,
 ): DryHistoryProjection | undefined {
   if (isMessageHistoryProjection(projection)) {
     return undefined;
@@ -285,7 +364,7 @@ function serializeRuntimeHistoryProjection(
 
 export function serializeStateDescriptor(
   state: NormalizedStateDescriptor,
-  charter: Charter<any>,
+  charter: Pick<Charter, "states">,
 ): SerializedStateDescriptor | Ref {
   const registeredKey = findRegisteredKey(charter.states, state);
   if (registeredKey) {
@@ -308,7 +387,7 @@ export function serializeStateDescriptor(
 
 export function hydrateStateDescriptor(
   serialized: SerializedStateDescriptor | Ref,
-  charter: Charter<any>,
+  charter: Pick<Charter, "states">,
 ): NormalizedStateDescriptor {
   if (typeof serialized === "string") {
     const state = charter.states[serialized];
@@ -328,10 +407,10 @@ export function hydrateStateDescriptor(
   });
 }
 
-function serializeActionRefs(
+function serializeActionRefs<TDataContent>(
   refs: readonly string[],
   bindings: ActionBindings,
-  charter: Charter<any>,
+  charter: Pick<Charter<TDataContent>, "nodes" | "tools" | "commands">,
   kind: "tool" | "command",
   sourceNodeKey: string | undefined,
 ): DryAction[] {
@@ -340,18 +419,18 @@ function serializeActionRefs(
   );
 }
 
-function hydrateActionRefs(
+function hydrateActionRefs<TDataContent>(
   refs: readonly DryAction[] | undefined,
-  charter: Charter<any>,
+  charter: Pick<Charter<TDataContent>, "nodes" | "tools" | "commands">,
   kind: "tool" | "command",
   sourceNodeKey: string | undefined,
 ): AnyAction[] | undefined {
   return refs?.map((ref) => hydrateActionRef(ref, charter, kind, sourceNodeKey));
 }
 
-function hydrateActionRef(
+function hydrateActionRef<TDataContent>(
   ref: DryAction,
-  charter: Charter<any>,
+  charter: Pick<Charter<TDataContent>, "nodes" | "tools" | "commands">,
   kind: "tool" | "command",
   sourceNodeKey: string | undefined,
 ): AnyAction {
@@ -370,10 +449,10 @@ function hydrateActionRef(
   return binding;
 }
 
-function serializeActionRef(
+function serializeActionRef<TDataContent>(
   ref: string,
   binding: AnyAction | undefined,
-  charter: Charter<any>,
+  charter: Pick<Charter<TDataContent>, "nodes" | "tools" | "commands">,
   kind: "tool" | "command",
   sourceNodeKey: string | undefined,
 ): DryAction {
@@ -398,7 +477,10 @@ function serializeActionRef(
   return key;
 }
 
-function sourceNodeKeyFor(node: Node<any>, charter: Charter<any>): string | undefined {
+function sourceNodeKeyFor<TDataContent>(
+  node: Node<TDataContent>,
+  charter: Pick<Charter<TDataContent>, "nodes">,
+): string | undefined {
   if (node.sourceNodeKey) {
     return node.sourceNodeKey;
   }
@@ -417,13 +499,23 @@ function actionBinding(
 function isActorHistoryProjection(
   projection: HistoryProjection<any>,
 ): projection is ActorHistoryProjection {
-  return typeof projection === "object" && projection !== null && projection.type === "actor";
+  return (
+    typeof projection === "object" &&
+    projection !== null &&
+    "type" in projection &&
+    projection.type === "actor"
+  );
 }
 
 function isMessageHistoryProjection(
   projection: HistoryProjection<any>,
 ): projection is MessageHistoryProjection {
-  return typeof projection === "object" && projection !== null && projection.type === "messages";
+  return (
+    typeof projection === "object" &&
+    projection !== null &&
+    "type" in projection &&
+    projection.type === "messages"
+  );
 }
 
 function findRegisteredKey<T extends object>(registry: Record<string, T>, value: T): string | undefined {

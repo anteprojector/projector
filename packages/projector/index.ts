@@ -5,6 +5,7 @@ export * from "./src/create.ts";
 export * from "./src/frames.ts";
 export * from "./src/history.ts";
 export * from "./src/machine.ts";
+export * from "./src/projection-functions.ts";
 export * from "./src/refs.ts";
 export * from "./src/runtime-address.ts";
 export * from "./src/serialization.ts";

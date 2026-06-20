@@ -1,9 +1,8 @@
 import type { generateText, streamText, LanguageModel } from "ai";
 import type {
   ActionContext,
-  AnyActorMessage,
+  ActorMessage,
   AnyAction,
-  DefaultActorMessage,
   ExecutorRunRequest,
 } from "@projectors/core";
 
@@ -11,19 +10,19 @@ export type AiSdkGenerateText = typeof generateText;
 export type AiSdkStreamText = typeof streamText;
 
 export type AiSdkRunActionInput<
-  TActorMessage extends AnyActorMessage = DefaultActorMessage,
+  TDataContent = never,
 > = {
   action: AnyAction;
   input: unknown;
-  context: ActionContext<unknown>;
-  request: ExecutorRunRequest<TActorMessage>;
+  context: ActionContext<unknown, TDataContent>;
+  request: ExecutorRunRequest<TDataContent>;
   aiSdkContext?: unknown;
 };
 
 export type AiSdkStreamUpdate<
-  TActorMessage extends AnyActorMessage = DefaultActorMessage,
+  TDataContent = never,
 > = {
-  request: ExecutorRunRequest<TActorMessage>;
+  request: ExecutorRunRequest<TDataContent>;
   messageId: string;
   text: string;
   delta?: string;
@@ -33,15 +32,15 @@ export type AiSdkStreamUpdate<
 };
 
 export type AiSdkExecutorConfig<
-  TActorMessage extends AnyActorMessage = DefaultActorMessage,
+  TDataContent = never,
 > = {
   model: LanguageModel;
   generateText?: AiSdkGenerateText;
   streamText?: AiSdkStreamText;
   debug?: boolean;
-  stream?: boolean | ((request: ExecutorRunRequest<TActorMessage>) => boolean);
-  onStreamUpdate?: (update: AiSdkStreamUpdate<TActorMessage>) => unknown | Promise<unknown>;
-  messageToModelMessage?: (message: TActorMessage) => import("ai").ModelMessage | undefined;
+  stream?: boolean | ((request: ExecutorRunRequest<TDataContent>) => boolean);
+  onStreamUpdate?: (update: AiSdkStreamUpdate<TDataContent>) => unknown | Promise<unknown>;
+  messageToModelMessage?: (message: ActorMessage<TDataContent>) => import("ai").ModelMessage | undefined;
 
   maxOutputTokens?: number;
   temperature?: number;
@@ -56,5 +55,5 @@ export type AiSdkExecutorConfig<
   toolChoice?: unknown;
   toolStrict?: boolean;
 
-  runAction?: (input: AiSdkRunActionInput<TActorMessage>) => unknown | Promise<unknown>;
+  runAction?: (input: AiSdkRunActionInput<TDataContent>) => unknown | Promise<unknown>;
 };
