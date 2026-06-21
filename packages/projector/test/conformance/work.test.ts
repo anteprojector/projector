@@ -110,6 +110,44 @@ describe("conformance: work scheduling", () => {
     await expect(drain(runMachine(machine, { scheduleWork: false }))).resolves.toEqual([assistantFrame]);
   });
 
+  it("marks implicit worker output as self-audience assistant messages", async () => {
+    const { executor, requests } = createRecordingExecutor((request) => ({
+      completionReason: "done",
+      ...(request.runtimeInstanceId === "member:r/memory" ? { value: "memory updated" } : {}),
+    }));
+    const worker = createNode({
+      key: "memory",
+      runtime: { type: "worker", trigger: { type: "parent-completion" } },
+    });
+    const root = createNode({
+      key: "root",
+      members: [worker],
+      runtime: { type: "primary", trigger: { type: "actor-frame" } },
+    });
+    const machine = createMachine({
+      id: "worker-output-demo",
+      root: { id: "r", node: root },
+      charter: charter({ executor }),
+    });
+    machine.enqueueFrame({ messages: [{ ...textUserMessage("remember my name") }] });
+
+    const frames = await drain(runMachine(machine));
+    const workerRequest = requests.find((request) => request.runtimeInstanceId === "member:r/memory");
+    const assistantMessages = frames.flatMap((frame) =>
+      frame.messages.filter((message) => message.type === "assistant"),
+    );
+
+    expect(workerRequest?.output?.audience).toBe("self");
+    expect(assistantMessages).toEqual([
+      {
+        type: "assistant",
+        content: [{ type: "text", text: "memory updated" }],
+        text: "memory updated",
+        audience: "self",
+      },
+    ]);
+  });
+
   it("matches actor-frame triggers with default and explicit runtime address audiences", async () => {
     await expect(activationRuntimeIdsFor({ ...textUserMessage("broadcast") })).resolves.toEqual([
       "member:r/first",

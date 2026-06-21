@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useState, type ReactNode } from "react";
+import { forwardRef, useCallback, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "convex/react";
 import { useAtom } from "jotai";
 import type {
@@ -62,6 +62,11 @@ export const AgentPane = forwardRef<HTMLDivElement, AgentPaneProps>(
   ) {
     const [, setActiveTab] = useAtom(activeAgentTabAtom);
     const { effigy, instances, snapshot, readOnly } = useProjector();
+    const contentScrollRef = useRef<HTMLDivElement>(null);
+    const resetContentScroll = useCallback(() => {
+      contentScrollRef.current?.scrollTo({ top: 0, left: 0 });
+    }, []);
+
     return (
       <aside ref={ref} tabIndex={0} className="pane-focus flex h-full min-h-0 flex-col bg-terminal-bg">
         <header className="flex items-center justify-between gap-3 border-b border-terminal-green-dimmer px-4 py-2">
@@ -85,9 +90,14 @@ export const AgentPane = forwardRef<HTMLDivElement, AgentPaneProps>(
             </button>
           ))}
         </nav>
-        <div className="terminal-scrollbar min-h-0 flex-1 overflow-y-auto p-4">
+        <div ref={contentScrollRef} className="terminal-scrollbar min-h-0 flex-1 overflow-y-auto p-4">
           {activeTab === "tree" && (
-            <TreeTab sessionId={sessionId} instances={instances} projectionTree={snapshot.projectionTree} />
+            <TreeTab
+              sessionId={sessionId}
+              instances={instances}
+              projectionTree={snapshot.projectionTree}
+              onSubtabChange={resetContentScroll}
+            />
           )}
           {activeTab === "state" && <StateTab instances={instances} />}
           {activeTab === "history" && (
@@ -98,6 +108,7 @@ export const AgentPane = forwardRef<HTMLDivElement, AgentPaneProps>(
               onTimeTravelFrame={onTimeTravelFrame}
               onReturnToHead={onReturnToHead}
               onSwitchSession={onSwitchSession}
+              onSubtabChange={resetContentScroll}
             />
           )}
           {activeTab === "commands" && <CommandsTab instances={instances} effigy={effigy} readOnly={readOnly} />}
@@ -129,12 +140,19 @@ function TreeTab({
   sessionId,
   instances,
   projectionTree,
+  onSubtabChange,
 }: {
   sessionId: Id<"sessions"> | null;
   instances: DemoClientInstance[];
   projectionTree?: CompiledProjectionTree;
+  onSubtabChange: () => void;
 }) {
   const [activeSubtab, setActiveSubtab] = useAtom(activeTreeSubtabAtom);
+  const switchSubtab = (tab: TreeSubtab) => {
+    if (tab === activeSubtab) return;
+    setActiveSubtab(tab);
+    onSubtabChange();
+  };
 
   return (
     <div className="flex min-h-0 flex-col">
@@ -143,7 +161,7 @@ function TreeTab({
           <button
             key={tab}
             type="button"
-            onClick={() => setActiveSubtab(tab)}
+            onClick={() => switchSubtab(tab)}
             className={`px-3 py-2 ${
               activeSubtab === tab
                 ? "border-b border-terminal-green text-terminal-green"
@@ -477,6 +495,7 @@ function HistoryTab({
   onTimeTravelFrame,
   onReturnToHead,
   onSwitchSession,
+  onSubtabChange,
 }: {
   sessionId: Id<"sessions"> | null;
   headFrameId: Id<"frames"> | null;
@@ -484,9 +503,15 @@ function HistoryTab({
   onTimeTravelFrame: (frameId: Id<"frames">) => void;
   onReturnToHead: () => void;
   onSwitchSession: (sessionId: Id<"sessions">) => void;
+  onSubtabChange: () => void;
 }) {
   const [activeSubtab, setActiveSubtab] = useAtom(activeHistorySubtabAtom);
   const isTimeTraveling = Boolean(timeTravelFrameId && headFrameId && timeTravelFrameId !== headFrameId);
+  const switchSubtab = (tab: HistorySubtab) => {
+    if (tab === activeSubtab) return;
+    setActiveSubtab(tab);
+    onSubtabChange();
+  };
 
   return (
     <div className="flex min-h-0 flex-col">
@@ -496,7 +521,7 @@ function HistoryTab({
             <button
               key={tab}
               type="button"
-              onClick={() => setActiveSubtab(tab)}
+              onClick={() => switchSubtab(tab)}
               className={`px-3 py-2 ${
                 activeSubtab === tab
                   ? "border-b border-terminal-green text-terminal-green"

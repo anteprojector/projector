@@ -361,12 +361,13 @@ export async function runActivation<TDataContent = never>(
   const getState = inference.retrievableStates.length > 0
     ? createRetrievableStateGetter(machine, inference.retrievableStates)
     : undefined;
+  const output = outputConfigForRuntime(frame.node.output, runtime.type);
   const request: ExecutorRunRequest<TDataContent> = {
     generatorId: activation.generatorId,
     runtimeInstanceId: activation.runtimeInstanceId,
     activationId,
     inference,
-    output: frame.node.output,
+    output,
     createActionContext: (action) =>
       createMachineActionContext(machine, action, frameDefaults, getState),
     enqueueFrame: (draft) =>
@@ -379,7 +380,7 @@ export async function runActivation<TDataContent = never>(
   };
 
   const result = await machine.charter.executor.run(request);
-  enqueueExecutorResult(machine, result, frame.node.output, frameDefaults);
+  enqueueExecutorResult(machine, result, output, frameDefaults);
   if (!foldWork(machine).completions.has(activationId)) {
     machine.enqueueFrame(createCompletionFrame({
       activationId,
@@ -657,10 +658,28 @@ function enqueueExecutorResult<TDataContent>(
   if (result.value !== undefined) {
     enqueueFrameWithDefaults(
       machine,
-      { messages: [assistantMessageFromTextOutput(result.value, output) as FrameMessage<TDataContent>] },
+      {
+        messages: [
+          assistantMessageFromTextOutput(result.value, output) as FrameMessage<TDataContent>,
+        ],
+      },
       frameDefaults,
     );
   }
+}
+
+function outputConfigForRuntime<TDataContent>(
+  output: OutputConfig<TDataContent> | undefined,
+  runtimeType: NormalizedRuntime<TDataContent>["type"],
+): OutputConfig<TDataContent> | undefined {
+  if (runtimeType !== "worker" || output?.audience !== undefined) {
+    return output;
+  }
+
+  return {
+    ...output,
+    audience: "self",
+  };
 }
 
 function enqueueFrameWithDefaults<TDataContent>(

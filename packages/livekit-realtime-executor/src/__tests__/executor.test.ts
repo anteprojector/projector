@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { llm } from "@livekit/agents";
 import {
   ROOT_RUNTIME_INSTANCE_ID,
   createGetStateAction,
@@ -12,7 +13,7 @@ import {
 } from "@projectors/core";
 import { z } from "zod";
 import {
-  LiveKitExecutor,
+  LiveKitRealtimeExecutor,
   REALTIME_GENERATOR_ID,
   buildLiveKitInstructions,
   buildLiveKitToolDefinitions,
@@ -106,10 +107,10 @@ class FakeRoom {
   }
 }
 
-describe("LiveKitExecutor", () => {
+describe("LiveKitRealtimeExecutor", () => {
   it("delegates non-root activations to the discrete executor", async () => {
     const discrete = fakeDiscreteExecutor();
-    const executor = new LiveKitExecutor({
+    const executor = new LiveKitRealtimeExecutor({
       session: new FakeSession(),
       discreteExecutor: discrete,
     });
@@ -122,7 +123,7 @@ describe("LiveKitExecutor", () => {
 
   it("delegates root activations when realtime is inactive", async () => {
     const discrete = fakeDiscreteExecutor();
-    const executor = new LiveKitExecutor({
+    const executor = new LiveKitRealtimeExecutor({
       session: new FakeSession(),
       discreteExecutor: discrete,
     });
@@ -136,10 +137,7 @@ describe("LiveKitExecutor", () => {
   it("syncs compiled inference and returns delegated for active realtime root activations", async () => {
     const discrete = fakeDiscreteExecutor();
     const session = new FakeSession();
-    const realtimeSession = {
-      updateInstructions: vi.fn(),
-      updateTools: vi.fn(),
-    };
+    const realtimeSession = fakeRawRealtimeSession();
     const agent: LiveKitAgentLike = {
       _agentActivity: { realtimeLLMSession: realtimeSession },
     };
@@ -149,7 +147,7 @@ describe("LiveKitExecutor", () => {
       dynamicParts: ["Current mode: voice."],
       history: [{ ...textUserMessage("hello") }],
     });
-    const executor = new LiveKitExecutor({
+    const executor = new LiveKitRealtimeExecutor({
       session,
       discreteExecutor: discrete,
       agent,
@@ -163,22 +161,20 @@ describe("LiveKitExecutor", () => {
 
     expect(result).toEqual({ completionReason: "delegated" });
     expect(discrete.run).not.toHaveBeenCalled();
-    expect(session.replies).toEqual([{ userInput: "hello" }]);
+    expect(session.replies).toEqual([undefined]);
+    expect(realtimeSession.sendEvents.some((event) => event.type === "response.create")).toBe(false);
     expect(realtimeSession.updateInstructions).toHaveBeenCalledWith(
       expect.stringContaining("You are concise."),
     );
-    expect(agent._instructions).toContain("Current mode: voice.");
+    expect(agent._instructions).toContain("Application-provided dynamic context");
   });
 
   it("does not update realtime session instructions while realtime is disabled", async () => {
-    const realtimeSession = {
-      updateInstructions: vi.fn(),
-      updateTools: vi.fn(),
-    };
+    const realtimeSession = fakeRawRealtimeSession();
     const agent: LiveKitAgentLike = {
       _agentActivity: { realtimeLLMSession: realtimeSession },
     };
-    const executor = new LiveKitExecutor({
+    const executor = new LiveKitRealtimeExecutor({
       session: new FakeSession(),
       discreteExecutor: fakeDiscreteExecutor(),
       agent,
@@ -197,9 +193,25 @@ describe("LiveKitExecutor", () => {
     expect(agent._instructions).toContain("Camera data.");
   });
 
+  it("rejects active realtime sessions without raw event support", async () => {
+    const realtimeSession = {
+      updateInstructions: vi.fn(),
+      updateTools: vi.fn(),
+    };
+    const executor = new LiveKitRealtimeExecutor({
+      session: new FakeSession(),
+      discreteExecutor: fakeDiscreteExecutor(),
+      agent: { _agentActivity: { realtimeLLMSession: realtimeSession } },
+    });
+
+    await expect(executor.syncRuntime(syncContext())).rejects.toThrow(
+      /requires a realtime session with sendEvent/,
+    );
+  });
+
   it("realizes active realtime root prompts as LiveKit instructions and tools", async () => {
     const discrete = fakeDiscreteExecutor();
-    const executor = new LiveKitExecutor({
+    const executor = new LiveKitRealtimeExecutor({
       session: new FakeSession(),
       discreteExecutor: discrete,
       realtime: { enabled: true },
@@ -227,26 +239,295 @@ describe("LiveKitExecutor", () => {
 
   it("does not forward the same visible user frame to realtime twice", async () => {
     const session = new FakeSession();
-    const executor = new LiveKitExecutor({
+    const realtimeSession = fakeRawRealtimeSession();
+    const executor = new LiveKitRealtimeExecutor({
       session,
+      agent: { _agentActivity: { realtimeLLMSession: realtimeSession } },
       discreteExecutor: fakeDiscreteExecutor(),
-      realtime: { enabled: true },
     });
     const visibleFrames = [{ id: "user-1", messages: [{ ...textUserMessage("hello") }] }] as Frame[];
 
     await executor.syncRuntime(syncContext({ visibleFrames }));
     await executor.syncRuntime(syncContext({ visibleFrames }));
 
-    expect(session.replies).toEqual([{ userInput: "hello" }]);
+    const creates = realtimeSession.sendEvents.filter((event) =>
+      event.type === "conversation.item.create" && !event.item.id.startsWith("prj_d_")
+    );
+    expect(creates).toHaveLength(1);
+    expect(session.replies).toEqual([undefined]);
+    expect(realtimeSession.sendEvents.filter((event) => event.type === "response.create")).toHaveLength(0);
+  });
+
+  it("does not manually reply when the realtime session already has the visible user turn", async () => {
+    const session = new FakeSession();
+    const realtimeSession = fakeRawRealtimeSession([
+      llm.ChatMessage.create({ role: "user", content: "hello" }),
+    ]);
+    const executor = new LiveKitRealtimeExecutor({
+      session,
+      agent: { _agentActivity: { realtimeLLMSession: realtimeSession } },
+      discreteExecutor: fakeDiscreteExecutor(),
+    });
+
+    await executor.syncRuntime(syncContext({
+      visibleFrames: [{ id: "user-1", messages: [{ ...textUserMessage("hello") }] }],
+    }));
+
+    expect(realtimeSession.sendEvents.filter((event) => event.type === "conversation.item.create")).toHaveLength(0);
+    expect(session.replies).toEqual([]);
+  });
+
+  it("bootstraps history then pushes dynamic image and visible input through raw realtime events", async () => {
+    const session = new FakeSession();
+    const generateReply = vi.fn();
+    const realtimeSession = fakeRawRealtimeSession();
+    const executor = new LiveKitRealtimeExecutor({
+      session,
+      discreteExecutor: fakeDiscreteExecutor(),
+      agent: { _agentActivity: { realtimeLLMSession: realtimeSession, generateReply } },
+    });
+
+    await executor.syncRuntime(
+      syncContext({
+        inference: inference({
+          systemParts: ["You are concise."],
+          history: [{ ...textUserMessage("previous text") }],
+          dynamicParts: [
+            { type: "text", text: "Latest camera snapshot:" },
+            {
+              type: "image",
+              data: "data:image/jpeg;base64,abc123",
+              mediaType: "image/jpeg",
+              label: "latest camera sensor snapshot",
+            },
+          ],
+        }),
+        visibleFrames: [{ id: "user-1", messages: [{ ...textUserMessage("what do you see?") }] }],
+      }),
+    );
+
+    expect(session.replies).toEqual([undefined]);
+    expect(generateReply).not.toHaveBeenCalled();
+    expect(realtimeSession.updateChatCtx).toHaveBeenCalledOnce();
+    expect(realtimeSession.updateInstructions).toHaveBeenCalledWith(
+      expect.stringContaining("Application-provided dynamic context"),
+    );
+
+    const bootstrapCtx = realtimeSession.updateChatCtx.mock.calls[0]?.[0] as llm.ChatContext;
+    const bootstrapMessages = bootstrapCtx.items.filter((item): item is llm.ChatMessage => item.type === "message");
+    expect(bootstrapMessages.map((message) => message.content)).toEqual([["previous text"]]);
+    expect(bootstrapMessages.map((message) => message.id)).toEqual([
+      expect.stringMatching(/^prj_h_/),
+    ]);
+
+    expect(realtimeSession.sendEvents).toHaveLength(2);
+    expect(realtimeSession.sendEvents[0]).toMatchObject({
+      type: "conversation.item.create",
+      item: {
+        id: expect.stringMatching(/^prj_d_/),
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: expect.stringContaining("Latest camera snapshot:"),
+          },
+          {
+            type: "input_image",
+            image_url: "data:image/jpeg;base64,abc123",
+          },
+        ],
+      },
+    });
+    expect(realtimeSession.sendEvents[1]).toMatchObject({
+      type: "conversation.item.create",
+      item: {
+        role: "user",
+        content: [{ type: "input_text", text: "what do you see?" }],
+      },
+    });
+    expectRealtimeItemIdsWithinOpenAILimit(realtimeSession);
+  });
+
+  it("deletes the previous dynamic realtime item after the replacement is acknowledged", async () => {
+    const realtimeSession = fakeRawRealtimeSession();
+    const executor = new LiveKitRealtimeExecutor({
+      session: new FakeSession(),
+      discreteExecutor: fakeDiscreteExecutor(),
+      agent: { _agentActivity: { realtimeLLMSession: realtimeSession } },
+    });
+
+    await executor.syncRuntime(syncContext({
+      inference: inference({
+        dynamicParts: [
+          { type: "text", text: "Latest camera snapshot:" },
+          { type: "image", data: "data:image/jpeg;base64,first", mediaType: "image/jpeg" },
+        ],
+      }),
+    }));
+    const firstDynamicCreate = realtimeSession.sendEvents.find((event) =>
+      event.type === "conversation.item.create" &&
+      event.item.id.startsWith("prj_d_")
+    );
+    const firstDynamicId = firstDynamicCreate?.item.id;
+
+    await executor.syncRuntime(syncContext({
+      inference: inference({
+        dynamicParts: [
+          { type: "text", text: "Latest camera snapshot:" },
+          { type: "image", data: "data:image/jpeg;base64,second", mediaType: "image/jpeg" },
+        ],
+      }),
+    }));
+
+    const dynamicCreates = realtimeSession.sendEvents.filter((event) =>
+      event.type === "conversation.item.create" &&
+      event.item.id.startsWith("prj_d_")
+    );
+    expect(dynamicCreates).toHaveLength(2);
+    expect(dynamicCreates[1]?.item.id).not.toBe(firstDynamicId);
+    expect(dynamicCreates[1]?.item.content[1]).toMatchObject({
+      type: "input_image",
+      image_url: "data:image/jpeg;base64,second",
+    });
+    expect(realtimeSession.sendEvents).toContainEqual({
+      type: "conversation.item.delete",
+      item_id: firstDynamicId,
+    });
+    expectRealtimeItemIdsWithinOpenAILimit(realtimeSession);
+  });
+
+  it("publishes current dynamic context again when a new raw realtime session appears", async () => {
+    const firstRealtimeSession = fakeRawRealtimeSession();
+    const secondRealtimeSession = fakeRawRealtimeSession();
+    const activity = { realtimeLLMSession: firstRealtimeSession };
+    const executor = new LiveKitRealtimeExecutor({
+      session: new FakeSession(),
+      discreteExecutor: fakeDiscreteExecutor(),
+      agent: { _agentActivity: activity },
+    });
+    const context = syncContext({
+      inference: inference({
+        dynamicParts: [
+          { type: "text", text: "Latest camera snapshot:" },
+          { type: "image", data: "data:image/jpeg;base64,same", mediaType: "image/jpeg" },
+        ],
+      }),
+    });
+
+    await executor.syncRuntime(context);
+    activity.realtimeLLMSession = secondRealtimeSession;
+    await executor.syncRuntime(context);
+
+    expect(firstRealtimeSession.sendEvents).toContainEqual(expect.objectContaining({
+      type: "conversation.item.create",
+      item: expect.objectContaining({ id: expect.stringMatching(/^prj_d_/) }),
+    }));
+    expect(secondRealtimeSession.sendEvents).toContainEqual(expect.objectContaining({
+      type: "conversation.item.create",
+      item: expect.objectContaining({ id: expect.stringMatching(/^prj_d_/) }),
+    }));
+  });
+
+  it("keeps dynamic realtime content before a visible user message already present in history", async () => {
+    const realtimeSession = fakeRawRealtimeSession();
+    const executor = new LiveKitRealtimeExecutor({
+      session: new FakeSession(),
+      discreteExecutor: fakeDiscreteExecutor(),
+      agent: { _agentActivity: { realtimeLLMSession: realtimeSession } },
+    });
+    const userMessage = { ...textUserMessage("what do you see?") };
+
+    await executor.syncRuntime(syncContext({
+      inference: inference({
+        history: [userMessage],
+        dynamicParts: [
+          { type: "text", text: "Latest camera snapshot:" },
+          { type: "image", data: "data:image/jpeg;base64,abc123", mediaType: "image/jpeg" },
+        ],
+      }),
+      visibleFrames: [{ id: "user-1", messages: [userMessage] }],
+    }));
+
+    const bootstrapCtx = realtimeSession.updateChatCtx.mock.calls[0]?.[0] as llm.ChatContext;
+    expect(bootstrapCtx.items.filter((item) => item.type === "message")).toHaveLength(0);
+
+    const createEvents = realtimeSession.sendEvents.filter((event) =>
+      event.type === "conversation.item.create"
+    );
+    expect(createEvents.map((event) => event.item.id.startsWith("prj_d_"))).toEqual([
+      true,
+      false,
+    ]);
+    expect(createEvents[1]?.item.content).toEqual([
+      { type: "input_text", text: "what do you see?" },
+    ]);
+  });
+
+  it("restores persisted LiveKit voice transcripts into realtime ChatCtx", async () => {
+    const realtimeSession = fakeRawRealtimeSession();
+    const executor = new LiveKitRealtimeExecutor({
+      session: new FakeSession(),
+      discreteExecutor: fakeDiscreteExecutor(),
+      agent: { _agentActivity: { realtimeLLMSession: realtimeSession } },
+    });
+
+    await executor.syncRuntime(syncContext({
+      inference: inference({
+        history: [
+          { ...textUserMessage("voice transcript"), source: { external: true } },
+          { ...textUserMessage("typed livekit message"), source: { external: true, transport: "livekit" } },
+        ],
+      }),
+    }));
+
+    const contents = realtimeSession.chatCtx.items
+      .filter((item): item is llm.ChatMessage => item.type === "message")
+      .flatMap((message) => message.content);
+    expect(contents).toEqual(["voice transcript", "typed livekit message"]);
+  });
+
+  it("does not duplicate voice transcripts already present in realtime ChatCtx", async () => {
+    const realtimeSession = fakeRawRealtimeSession([
+      llm.ChatMessage.create({
+        role: "user",
+        id: "livekit-live-transcript",
+        content: ["voice transcript"],
+      }),
+    ]);
+    const executor = new LiveKitRealtimeExecutor({
+      session: new FakeSession(),
+      discreteExecutor: fakeDiscreteExecutor(),
+      agent: { _agentActivity: { realtimeLLMSession: realtimeSession } },
+    });
+
+    await executor.syncRuntime(syncContext({
+      inference: inference({
+        history: [
+          { ...textUserMessage("voice transcript"), source: { external: true } },
+          { ...textAssistantMessage("answer transcript"), source: { external: true } },
+        ],
+      }),
+    }));
+
+    const messages = realtimeSession.chatCtx.items
+      .filter((item): item is llm.ChatMessage => item.type === "message");
+    expect(messages.map((message) => message.id)).toEqual([
+      "livekit-live-transcript",
+      expect.stringMatching(/^prj_h_/),
+    ]);
+    expect(messages.flatMap((message) => message.content)).toEqual([
+      "voice transcript",
+      "answer transcript",
+    ]);
   });
 
   it("records LiveKit transcript events as inert realtime root frames", async () => {
     const session = new FakeSession();
     const frames: FrameDraft[] = [];
-    const executor = new LiveKitExecutor({
+    const executor = new LiveKitRealtimeExecutor({
       session,
       discreteExecutor: fakeDiscreteExecutor(),
-      realtime: { enabled: true },
+      agent: { _agentActivity: { realtimeLLMSession: fakeRawRealtimeSession() } },
     });
     await executor.syncRuntime(syncContext({}, frames));
 
@@ -302,10 +583,10 @@ describe("LiveKitExecutor", () => {
     const frames: FrameDraft[] = [];
     const userUpdates: any[] = [];
     const session = new FakeSession();
-    const executor = new LiveKitExecutor({
+    const executor = new LiveKitRealtimeExecutor({
       session,
       discreteExecutor: fakeDiscreteExecutor(),
-      realtime: { enabled: true },
+      agent: { _agentActivity: { realtimeLLMSession: fakeRawRealtimeSession() } },
       onUserTranscriptUpdate: (update) => {
         userUpdates.push(update);
       },
@@ -354,7 +635,7 @@ describe("LiveKitExecutor", () => {
     const session = new FakeSession();
     const room = new FakeRoom();
     const frames: FrameDraft[] = [];
-    const executor = new LiveKitExecutor({
+    const executor = new LiveKitRealtimeExecutor({
       session,
       room,
       discreteExecutor: fakeDiscreteExecutor(),
@@ -396,10 +677,10 @@ describe("LiveKitExecutor", () => {
     const session = new FakeSession(originalOutput);
     const frames: FrameDraft[] = [];
     const streamUpdates: any[] = [];
-    const executor = new LiveKitExecutor({
+    const executor = new LiveKitRealtimeExecutor({
       session,
       discreteExecutor: fakeDiscreteExecutor(),
-      realtime: { enabled: true },
+      agent: { _agentActivity: { realtimeLLMSession: fakeRawRealtimeSession() } },
       onAssistantTranscriptUpdate: (update) => {
         streamUpdates.push(update);
       },
@@ -441,10 +722,10 @@ describe("LiveKitExecutor", () => {
   it("forwards transcript output to the original LiveKit sink", async () => {
     const originalOutput = new FakeTextOutput();
     const session = new FakeSession(originalOutput);
-    const executor = new LiveKitExecutor({
+    const executor = new LiveKitRealtimeExecutor({
       session,
       discreteExecutor: fakeDiscreteExecutor(),
-      realtime: { enabled: true },
+      agent: { _agentActivity: { realtimeLLMSession: fakeRawRealtimeSession() } },
     });
 
     await executor.syncRuntime(syncContext({}, []));
@@ -463,10 +744,10 @@ describe("LiveKitExecutor", () => {
   it("restores original transcription output on disconnect", async () => {
     const originalOutput = new FakeTextOutput();
     const session = new FakeSession(originalOutput);
-    const executor = new LiveKitExecutor({
+    const executor = new LiveKitRealtimeExecutor({
       session,
       discreteExecutor: fakeDiscreteExecutor(),
-      realtime: { enabled: true },
+      agent: { _agentActivity: { realtimeLLMSession: fakeRawRealtimeSession() } },
     });
 
     await executor.syncRuntime(syncContext({}, []));
@@ -481,10 +762,10 @@ describe("LiveKitExecutor", () => {
   it("does not duplicate conversation_item_added when assistant stream wrapper is active", async () => {
     const session = new FakeSession(new FakeTextOutput());
     const frames: FrameDraft[] = [];
-    const executor = new LiveKitExecutor({
+    const executor = new LiveKitRealtimeExecutor({
       session,
       discreteExecutor: fakeDiscreteExecutor(),
-      realtime: { enabled: true },
+      agent: { _agentActivity: { realtimeLLMSession: fakeRawRealtimeSession() } },
     });
 
     await executor.syncRuntime(syncContext({}, frames));
@@ -510,10 +791,10 @@ describe("LiveKitExecutor", () => {
   it("does not emit partial transcript frames when no stream callback is configured", async () => {
     const session = new FakeSession(new FakeTextOutput());
     const frames: FrameDraft[] = [];
-    const executor = new LiveKitExecutor({
+    const executor = new LiveKitRealtimeExecutor({
       session,
       discreteExecutor: fakeDiscreteExecutor(),
-      realtime: { enabled: true },
+      agent: { _agentActivity: { realtimeLLMSession: fakeRawRealtimeSession() } },
     });
     await executor.syncRuntime(syncContext({}, frames));
 
@@ -551,12 +832,9 @@ describe("LiveKitExecutor", () => {
       run: secondRun,
     });
     const frames: FrameDraft[] = [];
-    const realtimeSession = {
-      updateInstructions: vi.fn(),
-      updateTools: vi.fn(),
-    };
+    const realtimeSession = fakeRawRealtimeSession();
     const session = new FakeSession();
-    const executor = new LiveKitExecutor({
+    const executor = new LiveKitRealtimeExecutor({
       session,
       agent: { _agentActivity: { realtimeLLMSession: realtimeSession } },
       discreteExecutor: fakeDiscreteExecutor(),
@@ -607,11 +885,8 @@ describe("LiveKitExecutor", () => {
       return `state:${address}`;
     });
     const createActionContext = vi.fn(() => createUnboundActionContext(getState));
-    const realtimeSession = {
-      updateInstructions: vi.fn(),
-      updateTools: vi.fn(),
-    };
-    const executor = new LiveKitExecutor({
+    const realtimeSession = fakeRawRealtimeSession();
+    const executor = new LiveKitRealtimeExecutor({
       session: new FakeSession(),
       agent: { _agentActivity: { realtimeLLMSession: realtimeSession } },
       discreteExecutor: fakeDiscreteExecutor(),
@@ -644,7 +919,7 @@ describe("LiveKitExecutor", () => {
   });
 
   it("syncs projected retrieval tools without a current request", async () => {
-    const executor = new LiveKitExecutor({
+    const executor = new LiveKitRealtimeExecutor({
       session: new FakeSession(),
       discreteExecutor: fakeDiscreteExecutor(),
     });
@@ -668,9 +943,57 @@ describe("LiveKitExecutor", () => {
     );
   });
 
+  it("enqueues formed messages returned by tools", async () => {
+    const frames: FrameDraft[] = [];
+    const ping = createTool({
+      state: null,
+      name: "ping",
+      inputSchema: z.object({}),
+      run: () => textAssistantMessage("pong"),
+    });
+    const executor = new LiveKitRealtimeExecutor({
+      session: new FakeSession(),
+      discreteExecutor: fakeDiscreteExecutor(),
+    });
+
+    await executor.syncRuntime(
+      syncContext(
+        {
+          inference: inference({
+            tools: [ping],
+          }),
+        },
+        frames,
+      ),
+    );
+
+    await expect(executor.executeTool("ping", {})).resolves.toEqual(textAssistantMessage("pong"));
+    expect(frames).toMatchObject([
+      {
+        inert: true,
+        messages: [{ type: "tool", name: "ping", value: { phase: "call", input: {} } }],
+      },
+      {
+        inert: true,
+        messages: [
+          {
+            type: "tool",
+            name: "ping",
+            value: { phase: "result", value: textAssistantMessage("pong") },
+          },
+        ],
+      },
+      {
+        inert: true,
+        metadata: { transport: "livekit", actionResult: true },
+        messages: [textAssistantMessage("pong")],
+      },
+    ]);
+  });
+
   it("removes event handlers on disconnect", () => {
     const session = new FakeSession();
-    const executor = new LiveKitExecutor({
+    const executor = new LiveKitRealtimeExecutor({
       session,
       discreteExecutor: fakeDiscreteExecutor(),
     });
@@ -768,6 +1091,123 @@ function fakeDiscreteExecutor(): ProjectorExecutor & { run: ReturnType<typeof vi
     })),
     realizePrompt: vi.fn((request) => ({ provider: "test", input: request.inference })),
   };
+}
+
+function fakeRealtimeSession(items: llm.ChatItem[] = []) {
+  const chatCtx = llm.ChatContext.empty();
+  chatCtx.items = items;
+  const session = {
+    chatCtx,
+    updateInstructions: vi.fn(),
+    updateTools: vi.fn(),
+    updateChatCtx: vi.fn((chatCtx: llm.ChatContext) => {
+      assertChatContextItemIdsWithinOpenAILimit(chatCtx);
+      session.chatCtx = chatCtx.copy();
+    }),
+    generateReply: vi.fn(),
+  };
+  return session;
+}
+
+function fakeRawRealtimeSession(items: llm.ChatItem[] = []) {
+  const chatCtx = llm.ChatContext.empty();
+  chatCtx.items = items;
+  const session = {
+    chatCtx,
+    updateInstructions: vi.fn(),
+    updateTools: vi.fn(),
+    updateChatCtx: vi.fn((chatCtx: llm.ChatContext) => {
+      assertChatContextItemIdsWithinOpenAILimit(chatCtx);
+      session.chatCtx = chatCtx.copy();
+    }),
+    generateReply: vi.fn(),
+    handlers: new Map<string, Set<(event: unknown) => void>>(),
+    sendEvents: [] as any[],
+    on(event: string, handler: (event: unknown) => void): void {
+      const handlers = this.handlers.get(event) ?? new Set();
+      handlers.add(handler);
+      this.handlers.set(event, handlers);
+    },
+    off(event: string, handler: (event: unknown) => void): void {
+      this.handlers.get(event)?.delete(handler);
+    },
+    emit(event: string, payload: unknown): void {
+      for (const handler of this.handlers.get(event) ?? []) {
+        handler(payload);
+      }
+    },
+    sendEvent: vi.fn((event: any) => {
+      session.sendEvents.push(event);
+      if (event.type === "conversation.item.create") {
+        assertOpenAIRealtimeItemId(event.item.id);
+        const message = realtimeMessageToLiveKitMessage(event.item);
+        if (message) session.chatCtx.items.push(message);
+        session.emit("openai_server_event_received", {
+          type: "conversation.item.created",
+          item: event.item,
+          previous_item_id: event.previous_item_id ?? null,
+        });
+      }
+      if (event.type === "conversation.item.delete") {
+        session.chatCtx.items = session.chatCtx.items.filter((item) => item.id !== event.item_id);
+        session.emit("openai_server_event_received", {
+          type: "conversation.item.deleted",
+          item_id: event.item_id,
+        });
+      }
+    }),
+  };
+  return session;
+}
+
+function expectRealtimeItemIdsWithinOpenAILimit(session: { sendEvents: any[]; chatCtx?: llm.ChatContext }): void {
+  for (const event of session.sendEvents) {
+    if (event.type === "conversation.item.create") {
+      expect(event.item.id.length).toBeLessThanOrEqual(32);
+      expect(event.item.id).toMatch(/^[a-zA-Z0-9_-]+$/);
+    }
+    if (event.type === "conversation.item.delete") {
+      expect(event.item_id.length).toBeLessThanOrEqual(32);
+      expect(event.item_id).toMatch(/^[a-zA-Z0-9_-]+$/);
+    }
+  }
+  if (session.chatCtx) {
+    for (const item of session.chatCtx.items) {
+      expect(item.id.length).toBeLessThanOrEqual(32);
+      expect(item.id).toMatch(/^[a-zA-Z0-9_-]+$/);
+    }
+  }
+}
+
+function assertChatContextItemIdsWithinOpenAILimit(chatCtx: llm.ChatContext): void {
+  for (const item of chatCtx.items) {
+    assertOpenAIRealtimeItemId(item.id);
+  }
+}
+
+function assertOpenAIRealtimeItemId(itemId: string): void {
+  if (itemId.length > 32) {
+    throw new Error(`OpenAI Realtime item id too long: ${itemId}`);
+  }
+  if (!/^[a-zA-Z0-9_-]+$/.test(itemId)) {
+    throw new Error(`OpenAI Realtime item id contains invalid characters: ${itemId}`);
+  }
+}
+
+function realtimeMessageToLiveKitMessage(item: any): llm.ChatMessage | undefined {
+  if (!item || item.type !== "message") return undefined;
+  const content = (item.content ?? []).flatMap((part: any) => {
+    if (part.type === "input_text" || part.type === "output_text") return [part.text];
+    if (part.type === "input_image") {
+      return [llm.createImageContent({ image: part.image_url })];
+    }
+    return [];
+  });
+  return llm.ChatMessage.create({
+    id: item.id,
+    role: item.role,
+    content,
+  });
 }
 
 function request(overrides: Partial<ExecutorRunRequest> = {}): ExecutorRunRequest {

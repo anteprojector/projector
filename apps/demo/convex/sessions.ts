@@ -339,6 +339,12 @@ export const applyClientMessage = mutation({
       frames: producedFrames,
       expectedHeadFrameId: session.headFrameId,
     });
+    await persistClientCommandAssistantMessages(ctx, {
+      sessionId,
+      message: message as ClientMachineMessage,
+      frames: producedFrames,
+      frameIds,
+    });
     const nextSyncState = recordCommandResidue(syncState, result.clientId, { limit: 20 });
     await appendProjectorInstanceLog(ctx, {
       sessionId,
@@ -665,6 +671,59 @@ async function appendMachineFrameSequenceInternal(
   }
 
   return frameIds;
+}
+
+async function persistClientCommandAssistantMessages(
+  ctx: MutationCtx,
+  {
+    sessionId,
+    message,
+    frames,
+    frameIds,
+  }: {
+    sessionId: Id<"sessions">;
+    message: ClientMachineMessage;
+    frames: Frame[];
+    frameIds: Id<"frames">[];
+  },
+): Promise<void> {
+  for (const [frameIndex, frame] of frames.entries()) {
+    const frameId = frameIds[frameIndex];
+    if (!frameId) continue;
+
+    for (const [messageIndex, frameMessage] of frame.messages.entries()) {
+      if (frameMessage.type !== "assistant") continue;
+      const text = typeof frameMessage.text === "string" ? frameMessage.text.trim() : "";
+      if (!text) continue;
+
+      const idempotencyKey = message.clientId
+        ? `command:${message.clientId}:assistant:${frameIndex}:${messageIndex}`
+        : undefined;
+      if (idempotencyKey) {
+        const existing = await ctx.db
+          .query("messageIndex")
+          .withIndex("by_session_idempotency_key", (q) =>
+            q.eq("sessionId", sessionId).eq("idempotencyKey", idempotencyKey),
+          )
+          .first();
+        if (existing) continue;
+      }
+
+      const messageId = await ctx.db.insert("messages", {
+        role: "assistant",
+        content: text,
+        frameId,
+        mode: "text",
+        idempotencyKey,
+        createdAt: Date.now(),
+      });
+      await ctx.db.insert("messageIndex", {
+        sessionId,
+        messageId,
+        idempotencyKey,
+      });
+    }
+  }
 }
 
 function assertExpectedHead(session: SessionDoc, expectedHeadFrameId: Id<"frames">) {

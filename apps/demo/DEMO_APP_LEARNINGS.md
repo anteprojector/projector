@@ -159,7 +159,7 @@ Important behavior:
 - LiveKit data-channel text can be used while `liveMode` is false.
 - If `liveMode` is false, the agent should not create/use realtime voice behavior for the reply.
 - Text should run through the discrete AI SDK executor.
-- `LiveKitExecutor` realtime delegation is gated by both `ENABLE_REALTIME_MODEL` and projected `agentControls.liveMode`.
+- `LiveKitRealtimeExecutor` realtime delegation is gated by both `ENABLE_REALTIME_MODEL` and projected `agentControls.liveMode`.
 
 The current `handleLiveKitTextMessage` path sends text through:
 
@@ -430,8 +430,8 @@ bun run --filter @projectors/demo typecheck
 bun run --filter @projectors/demo-agent build
 bun run --filter @projectors/aisdk-executor typecheck
 bun run --filter @projectors/aisdk-executor test
-bun run --filter @projectors/livekit-executor typecheck
-bun run --filter @projectors/livekit-executor test
+bun run --filter @projectors/livekit-realtime-executor typecheck
+bun run --filter @projectors/livekit-realtime-executor test
 ```
 
 ESLint note: at one point `apps/demo` had ESLint 9 but no flat

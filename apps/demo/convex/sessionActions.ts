@@ -189,7 +189,7 @@ async function persistFrameMessages(
 
     if (
       message.type === "assistant" &&
-      frame.runtimeInstanceId === rootRuntimeInstanceId &&
+      shouldPersistAssistantMessage(frame, message, rootRuntimeInstanceId) &&
       text.trim()
     ) {
       await ctx.runMutation(api.messages.add, {
@@ -202,6 +202,15 @@ async function persistFrameMessages(
       });
     }
   }
+}
+
+function shouldPersistAssistantMessage(
+  frame: Frame,
+  message: Frame["messages"][number],
+  rootRuntimeInstanceId: string,
+): boolean {
+  if (message.audience === "self") return false;
+  return frame.runtimeInstanceId === rootRuntimeInstanceId;
 }
 
 function idempotencyKey(prefix: string, source: unknown): string {

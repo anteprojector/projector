@@ -19,6 +19,7 @@ import {
   resolveStates,
   replaceState,
   serializeInstance,
+  textAssistantMessage,
   textContent,
   type CompiledProjectionTree,
   type Charter,
@@ -161,7 +162,7 @@ export const cameraSensorNode = createNode({
   key: "cameraSensor",
   name: "CameraSensorNode",
   instructions:
-    "The user's camera is enabled. Use the latest camera snapshot only when relevant.",
+    "The user's camera is enabled. Use the latest camera snapshot only when relevant. When asked about the camera, answer directly from the currently available snapshot. Do not say you will check or look later; if no usable snapshot is available, say you cannot see the current camera view.",
   projection: projectCameraSensorData,
 });
 
@@ -233,8 +234,17 @@ export const setThemeHue = createCommand({
 export const pingTool = createAction({
   state: null,
   name: "ping",
-  description: "A projected provider tool placeholder.",
-  inputSchema: z.object({ text: z.string().optional() }),
+  description: "Respond with pong.",
+  inputSchema: z.object({}),
+  run: () => pongAssistantMessage(),
+});
+
+export const pingCommand = createCommand({
+  state: null,
+  name: "ping",
+  description: "Respond with pong.",
+  inputSchema: z.object({}),
+  run: () => pongAssistantMessage(),
 });
 
 export const updateDemoState = createAction({
@@ -351,7 +361,7 @@ export const agentControlsMemberNode = createNode({
   key: "agentControls",
   name: "Agent Controls",
   instructions:
-    "Expose client commands for voice, camera, streaming, and theme controls.",
+    "Expose client commands for voice, camera, streaming, memory, and test controls.",
   state: agentControlsState,
   commands: [
     setVoiceEnabled,
@@ -370,7 +380,7 @@ export const demoBaseNode = createNode({
     "You are a compact demo assistant. Be direct, remember small facts, and explain what changed in state. Call updateDemoState when the user shares their name or a favorite.",
   state: demoState,
   tools: [pingTool, updateDemoState],
-  commands: [setThemeHue],
+  commands: [pingCommand, setThemeHue],
   members: [agentControlsMemberNode],
   projection: {
     mode: "augment",
@@ -402,6 +412,7 @@ export function createDemoCharter(
     ],
     tools: [pingTool, updateDemoState, saveMemories],
     commands: [
+      pingCommand,
       setVoiceEnabled,
       setCameraEnabled,
       setMemoryEnabled,
@@ -523,6 +534,10 @@ function writeResolvedState(
     throw new Error(`Unknown demo state "${key}"`);
   }
   state.container.value = value;
+}
+
+function pongAssistantMessage() {
+  return textAssistantMessage("pong");
 }
 
 function newMemories(

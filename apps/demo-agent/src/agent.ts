@@ -8,8 +8,8 @@ import {
 import { ParticipantKind, RoomEvent, type RemoteParticipant } from "@livekit/rtc-node";
 import { openai as aiSdkOpenAI } from "@ai-sdk/openai";
 import * as openai from "@livekit/agents-plugin-openai";
-import { LiveKitExecutor } from "@projectors/livekit-executor";
-import type { LiveKitAgentLike, LiveKitRoomLike, LiveKitSessionLike } from "@projectors/livekit-executor";
+import { LiveKitRealtimeExecutor } from "@projectors/livekit-realtime-executor";
+import type { LiveKitAgentLike, LiveKitRoomLike, LiveKitSessionLike } from "@projectors/livekit-realtime-executor";
 import { AiSdkExecutor } from "@projectors/aisdk-executor";
 import { ConvexClient } from "convex/browser";
 import { fileURLToPath } from "node:url";
@@ -106,8 +106,10 @@ export default defineAgent({
     const workerId = `demo-agent:${process.pid}:${crypto.randomUUID()}`;
     const leaseToken = crypto.randomUUID();
     let leaseActive = false;
+    let stoppingForLostLease = false;
     let leaseHeartbeat: ReturnType<typeof setInterval> | undefined;
     let leaseSubscription: { unsubscribe: () => void } | undefined;
+    let activeSession: voice.AgentSession | undefined;
     let latestCameraImage: CameraSensorImage | undefined;
     let cameraSampler: CameraSamplerHandle | undefined;
     const cameraSensor = {
@@ -142,10 +144,16 @@ export default defineAgent({
     };
 
     const stopForLostLease = async () => {
-      if (!leaseActive) return;
+      if (stoppingForLostLease) return;
+      stoppingForLostLease = true;
       console.warn(`[demo-agent] worker lease lost for room ${roomName}; disconnecting`);
       releaseLease();
-      await ctx.room.disconnect();
+      await Promise.allSettled([
+        activeSession?.close(),
+        stopCameraSampler(),
+        ctx.room.disconnect(),
+      ]);
+      setTimeout(() => process.exit(0), 250).unref();
     };
 
     const renewLease = async (): Promise<boolean> => {
@@ -239,13 +247,19 @@ export default defineAgent({
         role: "user" | "assistant",
         mode: "text" | "voice",
         update: {
+          request?: {
+            runtimeInstanceId?: string;
+            output?: { audience?: unknown };
+          };
           messageId: string;
           text: string;
           streamState: "streaming" | "complete" | "error";
           streamSeq: number;
         },
       ) => {
+        if (!leaseActive) return;
         if (!shouldStreamText()) return;
+        if (role === "assistant" && !shouldPersistAssistantStreamingUpdate(update)) return;
         return addDemoMessage({
           role,
           content: update.text,
@@ -281,8 +295,9 @@ export default defineAgent({
             : agentDiscreteExecutor.realizePrompt(request),
       };
       const session = createVoiceSession();
+      activeSession = session;
       const agent = new DemoVoiceAgent();
-      const liveKitExecutor = new LiveKitExecutor({
+      const liveKitExecutor = new LiveKitRealtimeExecutor({
         session: session as unknown as LiveKitSessionLike,
         agent: agent as unknown as LiveKitAgentLike,
         room: ctx.room as unknown as LiveKitRoomLike,
@@ -336,7 +351,11 @@ export default defineAgent({
             });
           }
 
-          if (message.type === "assistant" && (text.trim() || hasMessageId(message))) {
+          if (
+            message.type === "assistant" &&
+            shouldPersistAssistantMessage(frame, message) &&
+            (text.trim() || hasMessageId(message))
+          ) {
             const streamState = normalizeStreamState(message.streamState);
             await addDemoMessage({
               role: "assistant",
@@ -509,6 +528,9 @@ export default defineAgent({
       session.on(voice.AgentSessionEventTypes.SpeechCreated, (event) => {
         const speechId = readSpeechHandleId(event);
         console.log(`[demo-agent] speech created ${speechId ?? "<unknown>"} source=${event.source}`);
+      });
+      session.on(voice.AgentSessionEventTypes.FunctionToolsExecuted, (event) => {
+        console.log(`[demo-agent] function tools executed ${summarizeLiveKitFunctionToolsExecuted(event)}`);
       });
       session.on(voice.AgentSessionEventTypes.Error, (event) => {
         console.error("[demo-agent] LiveKit session error", event.error);
@@ -696,6 +718,21 @@ function frameMessageMode(frame: Frame): "text" | "voice" {
   return frame.metadata?.mode === "voice" ? "voice" : "text";
 }
 
+function shouldPersistAssistantMessage(frame: Frame, message: Frame["messages"][number]): boolean {
+  if (message.audience === "self") return false;
+  return frame.runtimeInstanceId === ROOT_RUNTIME_INSTANCE_ID;
+}
+
+function shouldPersistAssistantStreamingUpdate(update: {
+  request?: {
+    runtimeInstanceId?: string;
+    output?: { audience?: unknown };
+  };
+}): boolean {
+  if (update.request?.output?.audience === "self") return false;
+  return !update.request?.runtimeInstanceId || update.request.runtimeInstanceId === ROOT_RUNTIME_INSTANCE_ID;
+}
+
 function idempotencyKey(prefix: string, source: unknown): string {
   if (source && typeof source === "object") {
     const record = source as Record<string, unknown>;
@@ -776,6 +813,26 @@ function attachRealtimeDebugLogging(agent: DemoVoiceAgent): void {
   });
 }
 
+function summarizeLiveKitFunctionToolsExecuted(event: unknown): string {
+  const record = asRecord(event);
+  const calls = Array.isArray(record.functionCalls) ? record.functionCalls : [];
+  const outputs = Array.isArray(record.functionCallOutputs) ? record.functionCallOutputs : [];
+  const callSummary = calls
+    .map((call) => {
+      const item = asRecord(call);
+      return `${String(item.name ?? "<name>")}:${String(item.callId ?? "<call>")}`;
+    })
+    .join(",");
+  const outputSummary = outputs
+    .map((output) => {
+      const item = asRecord(output);
+      const text = typeof item.output === "string" ? item.output : "";
+      return `${String(item.callId ?? "<call>")}:error=${String(item.isError ?? false)}:chars=${text.length}`;
+    })
+    .join(",");
+  return `calls=${calls.length}${callSummary ? `[${callSummary}]` : ""} outputs=${outputs.length}${outputSummary ? `[${outputSummary}]` : ""}`;
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? value as Record<string, unknown> : {};
 }
@@ -786,7 +843,8 @@ function summarizeRealtimeClientEvent(event: unknown): string | undefined {
   if (!type) return undefined;
   if (type === "session.update") {
     const session = asRecord(record.session);
-    return `${type} max_output_tokens=${String(session.max_output_tokens ?? session.max_response_output_tokens ?? "<unset>")} interrupt_response=${readNestedValue(session, ["audio", "input", "turn_detection", "interrupt_response"])}`;
+    const createResponse = readNestedValue(session, ["audio", "input", "turn_detection", "create_response"]);
+    return `${type} max_output_tokens=${String(session.max_output_tokens ?? session.max_response_output_tokens ?? "<unset>")} create_response=${createResponse === "<unset>" ? "default_true" : createResponse} interrupt_response=${readNestedValue(session, ["audio", "input", "turn_detection", "interrupt_response"])}`;
   }
   if (
     type === "response.cancel" ||
@@ -816,10 +874,21 @@ function summarizeRealtimeServerEvent(event: unknown): string | undefined {
     type === "response.output_audio_transcript.done" ||
     type === "response.audio.done" ||
     type === "response.output_audio.done" ||
-    type === "response.output_item.done" ||
     type === "error"
   ) {
     return `${type} ${formatRecordSummary(record, ["item_id", "response_id", "audio_end_ms", "error"])}`;
+  }
+
+  if (type === "conversation.item.added" || type === "conversation.item.created") {
+    return `${type} item=${summarizeRealtimeItem(record.item)}`;
+  }
+
+  if (type === "response.output_item.added" || type === "response.output_item.done") {
+    return `${type} response_id=${String(record.response_id ?? "<none>")} item=${summarizeRealtimeItem(record.item)}`;
+  }
+
+  if (type === "response.function_call_arguments.done") {
+    return `${type} response_id=${String(record.response_id ?? "<none>")} item_id=${String(record.item_id ?? "<none>")} call_id=${String(record.call_id ?? "<none>")} name=${String(record.name ?? "<none>")} args_chars=${typeof record.arguments === "string" ? record.arguments.length : 0}`;
   }
 
   if (
@@ -854,6 +923,32 @@ function summarizeRealtimeOutput(output: unknown): string {
       return `${String(record.type ?? "<type>")}:${String(record.role ?? record.name ?? "<role>")}:chars=${chars}`;
     })
     .join(",");
+}
+
+function summarizeRealtimeItem(item: unknown): string {
+  const record = asRecord(item);
+  const type = typeof record.type === "string" ? record.type : "<type>";
+  if (type === "function_call") {
+    return `${type}:${String(record.name ?? "<name>")}:call_id=${String(record.call_id ?? "<none>")}:args_chars=${typeof record.arguments === "string" ? record.arguments.length : 0}`;
+  }
+  if (type === "function_call_output") {
+    return `${type}:call_id=${String(record.call_id ?? "<none>")}:output_chars=${typeof record.output === "string" ? record.output.length : 0}`;
+  }
+  if (type === "message") {
+    const content = Array.isArray(record.content) ? record.content : [];
+    const chars = content.reduce((sum, part) => {
+      const partRecord = asRecord(part);
+      const text =
+        typeof partRecord.text === "string"
+          ? partRecord.text
+          : typeof partRecord.transcript === "string"
+            ? partRecord.transcript
+            : "";
+      return sum + text.length;
+    }, 0);
+    return `${type}:${String(record.role ?? "<role>")}:chars=${chars}`;
+  }
+  return type;
 }
 
 function formatRecordSummary(record: Record<string, unknown>, keys: string[]): string {
