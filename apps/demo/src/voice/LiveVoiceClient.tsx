@@ -2,7 +2,16 @@
 
 import { useAction } from "convex/react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ConnectionState, Room, RoomEvent, Track, type LocalVideoTrack } from "livekit-client";
+import {
+  ConnectionState,
+  ParticipantKind,
+  Room,
+  RoomEvent,
+  Track,
+  type LocalVideoTrack,
+  type RemoteParticipant,
+  type RemoteTrackPublication,
+} from "livekit-client";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 
@@ -141,10 +150,29 @@ export function LiveVoiceClient({
         const room = new Room({ adaptiveStream: true, dynacast: true });
         roomRef.current = room;
         roomSessionIdRef.current = sessionId;
+        const reconcileRemoteAudioSubscription = (
+          publication: RemoteTrackPublication,
+          participant: RemoteParticipant,
+        ) => {
+          if (publication.kind !== Track.Kind.Audio) return;
+          const shouldSubscribe = isAgentParticipant(participant);
+          publication.setSubscribed(shouldSubscribe);
+          if (!shouldSubscribe) {
+            publication.track?.detach();
+          }
+        };
+        const reconcileRemoteAudioSubscriptions = () => {
+          for (const participant of room.remoteParticipants.values()) {
+            for (const publication of participant.audioTrackPublications.values()) {
+              reconcileRemoteAudioSubscription(publication, participant);
+            }
+          }
+        };
 
         room.on(RoomEvent.ConnectionStateChanged, (state) => {
           if (state === ConnectionState.Connected) {
             onStatusChange?.("connected", `room ${room.name}`);
+            reconcileRemoteAudioSubscriptions();
             publishSender(room);
           }
           if (state === ConnectionState.Disconnected) {
@@ -154,7 +182,15 @@ export function LiveVoiceClient({
         });
 
         room.on(RoomEvent.ParticipantConnected, (participant) => {
-          onStatusChange?.("connected", `agent ${participant.identity}`);
+          onStatusChange?.(
+            "connected",
+            isAgentParticipant(participant)
+              ? `agent ${participant.identity}`
+              : `${room.remoteParticipants.size} remote participant(s)`,
+          );
+          for (const publication of participant.audioTrackPublications.values()) {
+            reconcileRemoteAudioSubscription(publication, participant);
+          }
           publishSender(room);
         });
         room.on(RoomEvent.ParticipantDisconnected, () => {
@@ -162,8 +198,17 @@ export function LiveVoiceClient({
           publishSender(room);
         });
 
-        room.on(RoomEvent.TrackSubscribed, (track) => {
+        room.on(RoomEvent.TrackPublished, (publication, participant) => {
+          reconcileRemoteAudioSubscription(publication, participant);
+        });
+
+        room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
           if (track.kind !== Track.Kind.Audio || !audioRef.current) return;
+          if (!isAgentParticipant(participant)) {
+            publication.setSubscribed(false);
+            track.detach();
+            return;
+          }
           track.attach(audioRef.current);
           void audioRef.current.play().catch(() => undefined);
         });
@@ -225,4 +270,8 @@ export function LiveVoiceClient({
   }, [cameraEnabled, onLocalCameraTrackChange, onStatusChange, voiceEnabled]);
 
   return <audio ref={setAudioElement} autoPlay playsInline className="hidden" />;
+}
+
+function isAgentParticipant(participant: RemoteParticipant): boolean {
+  return participant.isAgent || participant.kind === ParticipantKind.AGENT;
 }

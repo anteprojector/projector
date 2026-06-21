@@ -476,7 +476,10 @@ export default defineAgent({
       };
       unsubscribeMachine = machine.subscribe(scheduleMachineHost);
 
-      let selectedVoiceParticipantIdentity = selectVoiceParticipantIdentity(ctx.room.remoteParticipants.values());
+      let selectedVoiceParticipantIdentity = selectVoiceParticipantIdentity(
+        ctx.room.remoteParticipants.values(),
+        init.sessionId,
+      );
       let appliedRoomIoParticipantIdentity: string | null | undefined;
       const setRoomIoParticipant = (identity: string | null) => {
         selectedVoiceParticipantIdentity = identity;
@@ -493,12 +496,15 @@ export default defineAgent({
       // otherwise its init task can wait forever and never publish the output audio track.
       const deferRoomIoParticipantSync = () => {
         queueMicrotask(() => {
-          setRoomIoParticipant(selectVoiceParticipantIdentity(ctx.room.remoteParticipants.values()));
+          setRoomIoParticipant(selectVoiceParticipantIdentity(
+            ctx.room.remoteParticipants.values(),
+            init.sessionId,
+          ));
         });
       };
 
       const handleParticipantConnected = (participant: RemoteParticipant) => {
-        if (!isVoiceParticipant(participant)) return;
+        if (!isVoiceParticipant(participant, init.sessionId)) return;
         deferRoomIoParticipantSync();
       };
       const handleParticipantDisconnected = (participant: RemoteParticipant) => {
@@ -517,10 +523,12 @@ export default defineAgent({
       ctx.room.on(RoomEvent.ParticipantConnected, handleParticipantConnected);
       ctx.room.on(RoomEvent.ParticipantDisconnected, handleParticipantDisconnected);
 
-      await syncMachineRuntime(machine, {
-        runtimeInstanceId: ROOT_RUNTIME_INSTANCE_ID,
-        visibleFrames: [],
-      });
+      if (!shouldUseRealtime()) {
+        await syncMachineRuntime(machine, {
+          runtimeInstanceId: ROOT_RUNTIME_INSTANCE_ID,
+          visibleFrames: [],
+        });
+      }
 
       session.on(voice.AgentSessionEventTypes.AgentStateChanged, (event) => {
         console.log(`[demo-agent] state ${event.oldState} -> ${event.newState}`);
@@ -700,18 +708,28 @@ function readRealtimeNoiseReductionEnv(
   throw new Error(`${name} must be near_field, far_field, off, none, or false`);
 }
 
-function selectVoiceParticipantIdentity(participants: Iterable<RemoteParticipant>): string | null {
-  let selected: string | null = null;
+function selectVoiceParticipantIdentity(participants: Iterable<RemoteParticipant>, sessionId: string): string | null {
+  let selected: { identity: string; priority: number } | undefined;
   for (const participant of participants) {
-    if (isVoiceParticipant(participant)) {
-      selected = participant.identity;
+    const priority = voiceParticipantPriority(participant, sessionId);
+    if (priority === 0) continue;
+    if (!selected || priority >= selected.priority) {
+      selected = { identity: participant.identity, priority };
     }
   }
-  return selected;
+  return selected?.identity ?? null;
 }
 
-function isVoiceParticipant(participant: RemoteParticipant): boolean {
-  return participant.kind === ParticipantKind.STANDARD;
+function isVoiceParticipant(participant: RemoteParticipant, sessionId: string): boolean {
+  return voiceParticipantPriority(participant, sessionId) > 0;
+}
+
+function voiceParticipantPriority(participant: RemoteParticipant, sessionId: string): number {
+  if (participant.kind !== ParticipantKind.STANDARD) return 0;
+  const stableIdentity = `user-${sessionId}`;
+  if (participant.identity === stableIdentity) return 3;
+  if (participant.identity.startsWith(`${stableIdentity}-`)) return 2;
+  return 0;
 }
 
 function frameMessageMode(frame: Frame): "text" | "voice" {

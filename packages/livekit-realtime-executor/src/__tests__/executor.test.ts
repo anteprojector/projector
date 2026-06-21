@@ -277,6 +277,37 @@ describe("LiveKitRealtimeExecutor", () => {
     expect(session.replies).toEqual([]);
   });
 
+  it("syncs text-only realtime dynamic context through instructions without creating a user item", async () => {
+    const realtimeSession = fakeRawRealtimeSession();
+    const executor = new LiveKitRealtimeExecutor({
+      session: new FakeSession(),
+      discreteExecutor: fakeDiscreteExecutor(),
+      agent: { _agentActivity: { realtimeLLMSession: realtimeSession } },
+    });
+
+    await executor.syncRuntime(
+      syncContext({
+        inference: inference({
+          systemParts: ["You are concise."],
+          dynamicParts: [
+            { type: "text", text: "Known memories:" },
+            { type: "data", data: ["User likes tea"], label: "memories" },
+          ],
+        }),
+      }),
+    );
+
+    expect(realtimeSession.updateInstructions).toHaveBeenCalledWith(
+      expect.stringContaining("Known memories:"),
+    );
+    expect(realtimeSession.updateInstructions).toHaveBeenCalledWith(
+      expect.stringContaining("User likes tea"),
+    );
+    expect(realtimeSession.sendEvents.filter((event) =>
+      event.type === "conversation.item.create" && event.item.id.startsWith("prj_d_")
+    )).toHaveLength(0);
+  });
+
   it("bootstraps history then pushes dynamic image and visible input through raw realtime events", async () => {
     const session = new FakeSession();
     const generateReply = vi.fn();
@@ -312,6 +343,9 @@ describe("LiveKitRealtimeExecutor", () => {
     expect(realtimeSession.updateInstructions).toHaveBeenCalledWith(
       expect.stringContaining("Application-provided dynamic context"),
     );
+    expect(realtimeSession.updateInstructions).toHaveBeenCalledWith(
+      expect.stringContaining("Latest camera snapshot:"),
+    );
 
     const bootstrapCtx = realtimeSession.updateChatCtx.mock.calls[0]?.[0] as llm.ChatContext;
     const bootstrapMessages = bootstrapCtx.items.filter((item): item is llm.ChatMessage => item.type === "message");
@@ -329,7 +363,7 @@ describe("LiveKitRealtimeExecutor", () => {
         content: [
           {
             type: "input_text",
-            text: expect.stringContaining("Latest camera snapshot:"),
+            text: expect.stringContaining("Latest application-provided dynamic context is attached as multimodal content."),
           },
           {
             type: "input_image",
@@ -545,9 +579,9 @@ describe("LiveKitRealtimeExecutor", () => {
       createdAt: 123,
     });
 
-    await Promise.resolve();
+    await flushPromises();
 
-    expect(frames).toHaveLength(2);
+    expect(frames).toHaveLength(3);
     expect(frames[0]).toMatchObject({
       generatorId: REALTIME_GENERATOR_ID,
       inert: true,
@@ -577,6 +611,7 @@ describe("LiveKitRealtimeExecutor", () => {
         },
       ],
     });
+    expectRealtimeTurnFrame(frames[2], frames[1]);
   });
 
   it("emits a user transcript envelope on speech start and reuses its id for the final transcript", async () => {
@@ -693,9 +728,11 @@ describe("LiveKitRealtimeExecutor", () => {
     session.output?.transcription?.flush();
     await flushPromises();
 
-    expect(frames).toHaveLength(1);
-    const messages = frames.map((frame) => frame.messages[0] as any);
-    const messageId = messages[0]!.messageId;
+    expect(frames).toHaveLength(2);
+    expect(frames[0]?.inert).toBe(true);
+    expectRealtimeTurnFrame(frames[1], frames[0]);
+    const message = frames[0]!.messages[0] as any;
+    const messageId = message.messageId;
     expect(typeof messageId).toBe("string");
     expect(streamUpdates.map((update) => update.messageId)).toEqual([
       messageId,
@@ -710,7 +747,7 @@ describe("LiveKitRealtimeExecutor", () => {
       "streaming",
     ]);
     expect(streamUpdates.map((update) => update.streamSeq)).toEqual([0, 1, 2]);
-    expect(messages[0]).toMatchObject({
+    expect(message).toMatchObject({
       messageId,
       text: "Hello",
       streamState: "complete",
@@ -782,8 +819,9 @@ describe("LiveKitRealtimeExecutor", () => {
     });
     await Promise.resolve();
 
-    expect(frames).toHaveLength(1);
-    expect(frames.map((frame) => frame.messages[0]?.streamState)).toEqual([
+    expect(frames).toHaveLength(2);
+    expectRealtimeTurnFrame(frames[1], frames[0]);
+    expect(frames.filter((frame) => frame.inert).map((frame) => frame.messages[0]?.streamState)).toEqual([
       "complete",
     ]);
   });
@@ -806,13 +844,14 @@ describe("LiveKitRealtimeExecutor", () => {
     session.output?.transcription?.flush();
     await flushPromises();
 
-    expect(frames).toHaveLength(1);
+    expect(frames).toHaveLength(2);
     expect(frames[0]?.messages[0]).toMatchObject({
       type: "assistant",
       content: textParts("Hello"),
       text: "Hello",
       streamState: "complete",
     });
+    expectRealtimeTurnFrame(frames[1], frames[0]);
   });
 
   it("uses last compiled tool wins and resolves callbacks against the latest snapshot", async () => {
@@ -1321,6 +1360,48 @@ function enqueueTo(frames: FrameDraft[]) {
     frames.push(frame);
     return { id: `frame-${frames.length}`, ...frame };
   };
+}
+
+function expectRealtimeTurnFrame(
+  frame: FrameDraft | undefined,
+  sourceFrame: FrameDraft | undefined,
+): void {
+  const sourceFrameId = (sourceFrame as Frame | undefined)?.id;
+  expect(sourceFrameId).toBeTruthy();
+  expect(frame).toMatchObject({
+    generatorId: REALTIME_GENERATOR_ID,
+    runtimeInstanceId: REALTIME_GENERATOR_ID,
+    activationId: expect.stringMatching(/^activation:realtime:/),
+    metadata: {
+      type: "projector.runtime-turn",
+      runtimeInstanceId: REALTIME_GENERATOR_ID,
+      sourceFrameId,
+      completionReason: "end-turn",
+      mode: "voice",
+      transport: "livekit",
+      realtimeTurn: true,
+    },
+    messages: [
+      {
+        type: "work",
+        kind: "activation",
+        runtimeInstanceId: REALTIME_GENERATOR_ID,
+        generatorId: REALTIME_GENERATOR_ID,
+        sourceFrameId,
+        concurrencyKey: REALTIME_GENERATOR_ID,
+        concurrency: "serial",
+      },
+      {
+        type: "work",
+        kind: "completion",
+        sourceFrameId,
+        reason: "end-turn",
+      },
+    ],
+  });
+  expect(frame?.messages[1]).toMatchObject({
+    activationId: (frame?.messages[0] as { activationId?: string } | undefined)?.activationId,
+  });
 }
 
 function flushPromises(): Promise<void> {

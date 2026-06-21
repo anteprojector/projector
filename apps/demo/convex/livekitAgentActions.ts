@@ -31,8 +31,13 @@ export const getToken = action({
     }
 
     const roomName = `demo-${sessionId}`;
+    const identity = userParticipantIdentity(sessionId);
+    const httpUrl = liveKitHttpUrl(url);
+    const roomService = new RoomServiceClient(httpUrl, apiKey, apiSecret);
+    await removeStaleUserParticipantsBestEffort(roomService, roomName, sessionId);
+
     const token = new AccessToken(apiKey, apiSecret, {
-      identity: `user-${sessionId}-${crypto.randomUUID()}`,
+      identity,
       ttl: "15m",
     });
     token.addGrant({
@@ -120,7 +125,7 @@ async function ensureAgentDispatchedImpl(
     const hasLiveWorkerAfterLock = await ctx.runQuery(internal.livekitAgent.hasLiveAgentWorkerLease, { sessionId });
 
     const now = Date.now();
-    const httpUrl = liveKitUrl.replace("wss://", "https://").replace("ws://", "http://");
+    const httpUrl = liveKitHttpUrl(liveKitUrl);
     const dispatchClient = new AgentDispatchClient(httpUrl, apiKey, apiSecret);
     const roomService = new RoomServiceClient(httpUrl, apiKey, apiSecret);
     let activeDispatches = await listActiveDispatches(dispatchClient, roomName);
@@ -269,6 +274,27 @@ function orderedAgentParticipants(
   });
 }
 
+async function removeStaleUserParticipantsBestEffort(
+  roomService: RoomServiceClient,
+  roomName: string,
+  sessionId: string,
+): Promise<void> {
+  try {
+    const participants = await roomService.listParticipants(roomName);
+    const users = participants.filter(
+      (participant) =>
+        participant.kind === ParticipantInfo_Kind.STANDARD &&
+        isUserParticipantIdentity(participant.identity, sessionId),
+    );
+    for (const user of users) {
+      await removeParticipantBestEffort(roomService, roomName, user.identity);
+    }
+  } catch (error) {
+    if (isLiveKitNotFoundError(error)) return;
+    console.warn(`[livekit] Failed to reconcile stale user participants for room ${roomName}:`, error);
+  }
+}
+
 async function listActiveDispatches(dispatchClient: AgentDispatchClient, roomName: string) {
   try {
     const dispatches = await dispatchClient.listDispatch(roomName);
@@ -291,8 +317,26 @@ async function removeParticipantBestEffort(roomService: RoomServiceClient, roomN
   try {
     await roomService.removeParticipant(roomName, identity);
   } catch (error) {
-    console.warn(`[livekit] Failed to remove agent participant ${identity} from room ${roomName}:`, error);
+    console.warn(`[livekit] Failed to remove participant ${identity} from room ${roomName}:`, error);
   }
+}
+
+function userParticipantIdentity(sessionId: string): string {
+  return `user-${sessionId}`;
+}
+
+function isUserParticipantIdentity(identity: string, sessionId: string): boolean {
+  const stableIdentity = userParticipantIdentity(sessionId);
+  return identity === stableIdentity || identity.startsWith(`${stableIdentity}-`);
+}
+
+function liveKitHttpUrl(url: string): string {
+  return url.replace("wss://", "https://").replace("ws://", "http://");
+}
+
+function isLiveKitNotFoundError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /not found|does not exist/i.test(message);
 }
 
 function nextDispatchAt(now: number, reconnectAttempt: number): number {

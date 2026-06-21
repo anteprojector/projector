@@ -13,6 +13,7 @@ import {
   createHistoryProjectionFunction,
   createProjectionFunction,
   createRuntimeCompletionFrame,
+  createRuntimeTurnFrame,
   createNode,
   createRoot,
   createTool,
@@ -1851,6 +1852,71 @@ describe("work scheduling", () => {
       .find((message) => message.type === "work" && message.kind === "completion");
 
     expect(completion).toMatchObject({ reason: "delegated" });
+  });
+
+  it("lets external runtime turn frames trigger parent-completion workers without running the parent", async () => {
+    const calls: string[] = [];
+    const memoryHistoryTexts: string[] = [];
+    const runtimeExecutor = {
+      run: async (request: ExecutorRunRequest) => {
+        calls.push(request.runtimeInstanceId);
+        if (request.runtimeInstanceId === "member:r/memory") {
+          memoryHistoryTexts.push(
+            ...request.inference.history
+              .filter(isActorMessage)
+              .map((message) => message.text ?? ""),
+          );
+        }
+        return { completionReason: "done" as const };
+      },
+      realizePrompt: (request: { inference: unknown }) => ({ provider: "test", input: request.inference }),
+    };
+    const memory = createNode({
+      key: "memory",
+      runtime: { type: "worker", trigger: { type: "parent-completion" } },
+    });
+    const root = createNode({ key: "root", members: [memory] });
+    const machine = createMachine({
+      id: "external-turn-demo",
+      root: createRoot([{ id: "r", node: root }]),
+      charter: charter({ executor: runtimeExecutor }),
+    });
+    const userTranscript = machine.enqueueFrame({
+      id: "user-transcript",
+      generatorId: ROOT_RUNTIME_INSTANCE_ID,
+      runtimeInstanceId: ROOT_RUNTIME_INSTANCE_ID,
+      inert: true,
+      messages: [{ ...textUserMessage("voice request") }],
+    } as Frame);
+    const assistantTranscript = machine.enqueueFrame({
+      id: "assistant-transcript",
+      generatorId: ROOT_RUNTIME_INSTANCE_ID,
+      runtimeInstanceId: ROOT_RUNTIME_INSTANCE_ID,
+      inert: true,
+      messages: [{ ...textAssistantMessage("voice answer") }],
+    } as Frame);
+    const turn = machine.enqueueFrame(createRuntimeTurnFrame({
+      generatorId: ROOT_RUNTIME_INSTANCE_ID,
+      runtimeInstanceId: ROOT_RUNTIME_INSTANCE_ID,
+      activationId: "external-root-turn",
+      sourceFrameId: assistantTranscript.id,
+    }));
+
+    const frames = await collectFrames(runMachine(machine));
+
+    expect(frames[0]?.id).toBe(userTranscript.id);
+    expect(frames[1]?.id).toBe(assistantTranscript.id);
+    expect(frames[2]?.id).toBe(turn.id);
+    expect(calls).toEqual(["member:r/memory"]);
+    expect(memoryHistoryTexts).toEqual(["voice request"]);
+    expect(frames.flatMap((frame) => frame.messages)).toContainEqual(
+      expect.objectContaining({
+        type: "work",
+        kind: "activation",
+        runtimeInstanceId: "member:r/memory",
+        sourceFrameId: turn.id,
+      }),
+    );
   });
 
   it("activates the root runtime and structurally visible primary children", async () => {
