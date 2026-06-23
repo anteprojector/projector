@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  createActivationFrame,
+  createCompletionFrame,
   createMachine,
   createNode,
   runMachine,
@@ -196,6 +198,54 @@ describe("conformance: work scheduling", () => {
 
     const frames = await drain(runMachine(machine, { scheduleWork: false }));
     expect(workActivationRuntimeIds(frames)).toEqual([]);
+  });
+
+  it("recovers parent-completion activations from the latest work frame inclusively", async () => {
+    const memory = createNode({
+      key: "memory",
+      runtime: { type: "generator", trigger: { type: "parent-completion" } },
+    });
+    const root = createNode({
+      key: "root",
+      members: [memory],
+      runtime: { type: "generator", trigger: { type: "actor-frame" } },
+    });
+    const rootCompletion = {
+      id: "root-completion-frame",
+      ...createCompletionFrame({
+        activationId: "root-activation",
+        sourceFrameId: "user-frame",
+        reason: "end-turn",
+      }),
+    } as Frame;
+    const machine = createMachine({
+      id: "inclusive-cursor-demo",
+      root: { id: "r", isSource: true, node: root },
+      charter: charter(),
+      frames: [
+        { id: "user-frame", messages: [{ ...textUserMessage("hi") }] },
+        {
+          id: "root-activation-frame",
+          ...createActivationFrame({
+            activationId: "root-activation",
+            runtimeInstanceId: "instance:r",
+            generatorId: "instance:r",
+            sourceFrameId: "user-frame",
+            concurrencyKey: "instance:r",
+            concurrency: "serial",
+          }),
+        },
+        rootCompletion,
+      ],
+    });
+
+    const frames = await drain(runMachine(machine, { scheduleWork: false }));
+    expect(workActivationRuntimeIds(frames)).toEqual(["member:r/memory"]);
+    expect(frames[0]?.messages[0]).toMatchObject({
+      type: "work",
+      kind: "activation",
+      sourceFrameId: rootCompletion.id,
+    });
   });
 
   it("does not reschedule historical activations when frame history is forked into a new machine", async () => {

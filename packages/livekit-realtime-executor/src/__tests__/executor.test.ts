@@ -355,6 +355,7 @@ describe("LiveKitRealtimeExecutor", () => {
     ]);
 
     expect(realtimeSession.sendEvents).toHaveLength(2);
+    expectRealtimeItemIdsWithinOpenAILimit(realtimeSession);
     expect(realtimeSession.sendEvents[0]).toMatchObject({
       type: "conversation.item.create",
       item: {
@@ -363,7 +364,7 @@ describe("LiveKitRealtimeExecutor", () => {
         content: [
           {
             type: "input_text",
-            text: expect.stringContaining("Latest application-provided dynamic context is attached as multimodal content."),
+            text: expect.stringContaining("Latest camera snapshot:"),
           },
           {
             type: "input_image",
@@ -379,7 +380,6 @@ describe("LiveKitRealtimeExecutor", () => {
         content: [{ type: "input_text", text: "what do you see?" }],
       },
     });
-    expectRealtimeItemIdsWithinOpenAILimit(realtimeSession);
   });
 
   it("deletes the previous dynamic realtime item after the replacement is acknowledged", async () => {
@@ -664,6 +664,74 @@ describe("LiveKitRealtimeExecutor", () => {
       streamState: "complete",
       streamSeq: 1,
     });
+  });
+
+  it("enqueues realtime turn completion from response.done using the latest user transcript", async () => {
+    const frames: FrameDraft[] = [];
+    const session = new FakeSession();
+    const realtimeSession = fakeRawRealtimeSession();
+    const executor = new LiveKitRealtimeExecutor({
+      session,
+      discreteExecutor: fakeDiscreteExecutor(),
+      agent: { _agentActivity: { realtimeLLMSession: realtimeSession } },
+    });
+    await executor.syncRuntime(syncContext({}, frames));
+
+    session.emit("user_input_transcribed", {
+      transcript: "what should I remember?",
+      isFinal: true,
+    });
+    await flushPromises();
+    realtimeSession.emit("openai_server_event_received", {
+      type: "response.done",
+      response: { id: "response-1" },
+    });
+    await flushPromises();
+
+    expect(frames).toHaveLength(2);
+    expect(frames[0]?.messages[0]).toMatchObject({
+      type: "user",
+      text: "what should I remember?",
+    });
+    expectRealtimeTurnFrame(frames[1], frames[0]);
+    expect(frames[1]?.metadata).toMatchObject({
+      responseDone: true,
+      responseId: "response-1",
+    });
+  });
+
+  it("does not duplicate realtime turn completion when response.done precedes assistant transcript flush", async () => {
+    const frames: FrameDraft[] = [];
+    const session = new FakeSession(new FakeTextOutput());
+    const realtimeSession = fakeRawRealtimeSession();
+    const executor = new LiveKitRealtimeExecutor({
+      session,
+      discreteExecutor: fakeDiscreteExecutor(),
+      agent: { _agentActivity: { realtimeLLMSession: realtimeSession } },
+    });
+    await executor.syncRuntime(syncContext({}, frames));
+
+    session.emit("user_input_transcribed", {
+      transcript: "remember that I like tea",
+      isFinal: true,
+    });
+    await flushPromises();
+    realtimeSession.emit("openai_server_event_received", {
+      type: "response.done",
+      response: { id: "response-1" },
+    });
+    await flushPromises();
+    await session.output?.transcription?.captureText("Got it.");
+    session.output?.transcription?.flush();
+    await flushPromises();
+
+    expect(frames).toHaveLength(3);
+    expectRealtimeTurnFrame(frames[1], frames[0]);
+    expect(frames[2]?.messages[0]).toMatchObject({
+      type: "assistant",
+      text: "Got it.",
+    });
+    expect(frames.filter((frame) => frame.metadata?.type === "projector.runtime-turn")).toHaveLength(1);
   });
 
   it("enqueues parsed LiveKit data messages as active user frames", async () => {
@@ -1202,6 +1270,9 @@ function fakeRawRealtimeSession(items: llm.ChatItem[] = []) {
 function expectRealtimeItemIdsWithinOpenAILimit(session: { sendEvents: any[]; chatCtx?: llm.ChatContext }): void {
   for (const event of session.sendEvents) {
     if (event.type === "conversation.item.create") {
+      if (typeof event.item.id !== "string") {
+        throw new Error(`Expected realtime create item id to be a string: ${JSON.stringify(event)}`);
+      }
       expect(event.item.id.length).toBeLessThanOrEqual(32);
       expect(event.item.id).toMatch(/^[a-zA-Z0-9_-]+$/);
     }

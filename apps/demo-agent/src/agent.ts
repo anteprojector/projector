@@ -16,11 +16,13 @@ import { fileURLToPath } from "node:url";
 import {
   ROOT_RUNTIME_INSTANCE_ID,
   createMachine,
+  executeCommand,
   runMachine,
   type Executor,
   type Frame,
   syncMachineRuntime,
 } from "@projectors/core";
+import type { ClientMachineMessage } from "@projectors/core/client";
 import {
   createDemoCharter,
   getAgentControlsState,
@@ -50,6 +52,7 @@ const REALTIME_INPUT_NOISE_REDUCTION = readRealtimeNoiseReductionEnv(
   "near_field",
 );
 const MESSAGE_TOPIC = "demo.message.v1";
+const COMMAND_RPC_METHOD = "demo.command.v1";
 const WORKER_LEASE_TTL_MS = 15_000;
 const WORKER_LEASE_HEARTBEAT_MS = 5_000;
 const DEBUG_REALTIME_EVENTS = process.env.DEBUG_REALTIME_EVENTS === "true";
@@ -410,6 +413,7 @@ export default defineAgent({
               runtimeInstanceId: ROOT_RUNTIME_INSTANCE_ID,
               visibleFrames: [frame],
             });
+            applyRoomIoParticipant();
           }
         }
       };
@@ -431,13 +435,39 @@ export default defineAgent({
       };
       unsubscribeMachine = machine.subscribe(scheduleMachineHost);
 
+      let commandTail: Promise<void> = Promise.resolve();
+      ctx.room.localParticipant?.registerRpcMethod(COMMAND_RPC_METHOD, async (data) => {
+        const runCommand = commandTail
+          .catch(() => undefined)
+          .then(async () => {
+            await assertLease();
+            const payload = parseCommandRpcPayload(data.payload);
+            if (payload.sessionId !== init.sessionId) {
+              return {
+                success: false,
+                error: "Command session does not match LiveKit worker session",
+                clientId: payload.message.clientId,
+              };
+            }
+
+            const result = await executeCommand(machine, payload.message);
+            await hostTail;
+            return result;
+          });
+        commandTail = runCommand.then(() => undefined, () => undefined);
+        return JSON.stringify(await runCommand);
+      });
+      ctx.room.once(RoomEvent.Disconnected, () => {
+        ctx.room.localParticipant?.unregisterRpcMethod(COMMAND_RPC_METHOD);
+      });
+
       let selectedVoiceParticipantIdentity = selectVoiceParticipantIdentity(
         ctx.room.remoteParticipants.values(),
         init.sessionId,
       );
       let appliedRoomIoParticipantIdentity: string | null | undefined;
-      const setRoomIoParticipant = (identity: string | null) => {
-        selectedVoiceParticipantIdentity = identity;
+      const applyRoomIoParticipant = () => {
+        const identity = selectedVoiceParticipantIdentity;
         const roomIO = (session as unknown as { roomIO?: { setParticipant?: (participantIdentity: string | null) => void } }).roomIO;
         if (!roomIO?.setParticipant) return;
         if (appliedRoomIoParticipantIdentity === identity) return;
@@ -446,12 +476,16 @@ export default defineAgent({
         roomIO.setParticipant(identity);
         console.log(`[demo-agent] voice participant ${identity ?? "<auto>"}`);
       };
+      const setSelectedVoiceParticipant = (identity: string | null) => {
+        selectedVoiceParticipantIdentity = identity;
+        applyRoomIoParticipant();
+      };
 
       // RoomIO must observe participant events before we call its private setParticipant;
       // otherwise its init task can wait forever and never publish the output audio track.
       const deferRoomIoParticipantSync = () => {
         queueMicrotask(() => {
-          setRoomIoParticipant(selectVoiceParticipantIdentity(
+          setSelectedVoiceParticipant(selectVoiceParticipantIdentity(
             ctx.room.remoteParticipants.values(),
             init.sessionId,
           ));
@@ -508,7 +542,7 @@ export default defineAgent({
           ...(selectedVoiceParticipantIdentity ? { participantIdentity: selectedVoiceParticipantIdentity } : {}),
         },
       });
-      setRoomIoParticipant(selectedVoiceParticipantIdentity);
+      applyRoomIoParticipant();
       if (DEBUG_REALTIME_EVENTS) {
         attachRealtimeDebugLogging(agent);
       }
@@ -644,12 +678,13 @@ function readRealtimeNoiseReductionEnv(
 }
 
 function selectVoiceParticipantIdentity(participants: Iterable<RemoteParticipant>, sessionId: string): string | null {
-  let selected: { identity: string; priority: number } | undefined;
+  let selected: { identity: string; joinedAtMs: bigint; priority: number } | undefined;
   for (const participant of participants) {
     const priority = voiceParticipantPriority(participant, sessionId);
     if (priority === 0) continue;
-    if (!selected || priority >= selected.priority) {
-      selected = { identity: participant.identity, priority };
+    const joinedAtMs = participantJoinedAtMs(participant);
+    if (!selected || priority > selected.priority || (priority === selected.priority && joinedAtMs >= selected.joinedAtMs)) {
+      selected = { identity: participant.identity, joinedAtMs, priority };
     }
   }
   return selected?.identity ?? null;
@@ -665,6 +700,13 @@ function voiceParticipantPriority(participant: RemoteParticipant, sessionId: str
   if (participant.identity === stableIdentity) return 3;
   if (participant.identity.startsWith(`${stableIdentity}-`)) return 2;
   return 0;
+}
+
+function participantJoinedAtMs(participant: RemoteParticipant): bigint {
+  const info = (participant as RemoteParticipant & { info?: { joinedAtMs?: bigint; joinedAt?: bigint } }).info;
+  if (info?.joinedAtMs && info.joinedAtMs > 0n) return info.joinedAtMs;
+  if (info?.joinedAt && info.joinedAt > 0n) return info.joinedAt * 1000n;
+  return 0n;
 }
 
 function frameMessageMode(frame: Frame): "text" | "voice" {
@@ -941,6 +983,30 @@ function parseLiveKitTextMessage(payload: Uint8Array): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function parseCommandRpcPayload(payload: string): {
+  sessionId: string;
+  message: ClientMachineMessage;
+} {
+  const parsed = JSON.parse(payload) as {
+    sessionId?: unknown;
+    message?: unknown;
+  };
+  if (typeof parsed.sessionId !== "string") {
+    throw new Error("Command RPC payload is missing sessionId");
+  }
+  if (!parsed.message || typeof parsed.message !== "object") {
+    throw new Error("Command RPC payload is missing message");
+  }
+  const message = parsed.message as Partial<ClientMachineMessage>;
+  if (message.type !== "command" || typeof message.name !== "string") {
+    throw new Error("Command RPC message must be a command");
+  }
+  return {
+    sessionId: parsed.sessionId,
+    message: parsed.message as ClientMachineMessage,
+  };
 }
 
 if (import.meta.main) {

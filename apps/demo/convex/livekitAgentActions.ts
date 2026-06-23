@@ -5,6 +5,7 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { ParticipantInfo_Kind } from "@livekit/protocol";
 import { AccessToken, AgentDispatchClient, RoomServiceClient } from "livekit-server-sdk";
+import { randomUUID } from "node:crypto";
 
 const AGENT_NAME = "demo-agent";
 const DISPATCH_LOCK_TTL_MS = 20_000;
@@ -32,9 +33,6 @@ export const getToken = action({
 
     const roomName = `demo-${sessionId}`;
     const identity = userParticipantIdentity(sessionId);
-    const httpUrl = liveKitHttpUrl(url);
-    const roomService = new RoomServiceClient(httpUrl, apiKey, apiSecret);
-    await removeStaleUserParticipantsBestEffort(roomService, roomName, sessionId);
 
     const token = new AccessToken(apiKey, apiSecret, {
       identity,
@@ -274,27 +272,6 @@ function orderedAgentParticipants(
   });
 }
 
-async function removeStaleUserParticipantsBestEffort(
-  roomService: RoomServiceClient,
-  roomName: string,
-  sessionId: string,
-): Promise<void> {
-  try {
-    const participants = await roomService.listParticipants(roomName);
-    const users = participants.filter(
-      (participant) =>
-        participant.kind === ParticipantInfo_Kind.STANDARD &&
-        isUserParticipantIdentity(participant.identity, sessionId),
-    );
-    for (const user of users) {
-      await removeParticipantBestEffort(roomService, roomName, user.identity);
-    }
-  } catch (error) {
-    if (isLiveKitNotFoundError(error)) return;
-    console.warn(`[livekit] Failed to reconcile stale user participants for room ${roomName}:`, error);
-  }
-}
-
 async function listActiveDispatches(dispatchClient: AgentDispatchClient, roomName: string) {
   try {
     const dispatches = await dispatchClient.listDispatch(roomName);
@@ -322,21 +299,11 @@ async function removeParticipantBestEffort(roomService: RoomServiceClient, roomN
 }
 
 function userParticipantIdentity(sessionId: string): string {
-  return `user-${sessionId}`;
-}
-
-function isUserParticipantIdentity(identity: string, sessionId: string): boolean {
-  const stableIdentity = userParticipantIdentity(sessionId);
-  return identity === stableIdentity || identity.startsWith(`${stableIdentity}-`);
+  return `user-${sessionId}-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
 }
 
 function liveKitHttpUrl(url: string): string {
   return url.replace("wss://", "https://").replace("ws://", "http://");
-}
-
-function isLiveKitNotFoundError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /not found|does not exist/i.test(message);
 }
 
 function nextDispatchAt(now: number, reconnectAttempt: number): number {

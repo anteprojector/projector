@@ -17,7 +17,6 @@ import {
   messagesSinceLastCompletion,
   patchState,
   resolveStates,
-  replaceState,
   serializeInstance,
   textAssistantMessage,
   textContent,
@@ -36,9 +35,7 @@ import {
 } from "@projectors/core/client";
 
 const demoStateSchema = z.object({
-  name: z.string().optional(),
   themeHue: z.number(),
-  favorites: z.array(z.string()),
   turns: z.number(),
 });
 
@@ -98,7 +95,6 @@ const demoState = {
   schema: demoStateSchema,
   init: {
     themeHue: 126,
-    favorites: [],
     turns: 0,
   } satisfies DemoState,
   projection: "dynamic" as const,
@@ -173,9 +169,11 @@ export const setCameraEnabled = createAction({
   inputSchema: z.object({ enabled: z.boolean() }),
   run: ({ enabled }, ctx) => {
     const state = agentControlsStateSchema.parse(ctx.state);
-    ctx.updateState?.(patchState({ cameraEnabled: enabled }));
-    if (state.cameraEnabled === enabled) return;
+    if (state.cameraEnabled !== enabled) {
+      ctx.updateState?.(patchState({ cameraEnabled: enabled }));
+    }
     if (enabled) {
+      ctx.instance.cede(cameraSensorNode);
       ctx.instance.spawn(cameraSensorNode);
     } else {
       ctx.instance.cede(cameraSensorNode);
@@ -190,9 +188,11 @@ export const setMemoryEnabled = createAction({
   inputSchema: z.object({ enabled: z.boolean() }),
   run: ({ enabled }, ctx) => {
     const state = agentControlsStateSchema.parse(ctx.state);
-    ctx.updateState?.(patchState({ memoryEnabled: enabled }));
-    if (state.memoryEnabled === enabled) return;
+    if (state.memoryEnabled !== enabled) {
+      ctx.updateState?.(patchState({ memoryEnabled: enabled }));
+    }
     if (enabled) {
+      ctx.instance.cede(memoryMemberNode);
       ctx.instance.spawn(memoryMemberNode);
     } else {
       ctx.instance.cede(memoryMemberNode);
@@ -245,39 +245,6 @@ export const pingCommand = createAction({
   description: "Respond with pong.",
   inputSchema: z.object({}),
   run: () => pongAssistantMessage(),
-});
-
-export const updateDemoState = createAction({
-  state: demoState,
-  name: "updateDemoState",
-  description:
-    "Update durable demo state when the user shares a name or favorite.",
-  inputSchema: z.object({
-    name: z.string().min(1).optional(),
-    favorite: z
-      .object({
-        kind: z.string().min(1),
-        value: z.string().min(1),
-      })
-      .optional(),
-  }),
-  run: ({ name, favorite }, ctx) => {
-    const state = demoStateSchema.parse(ctx.state);
-    const next: DemoState = { ...state };
-
-    if (name) {
-      next.name = capitalize(name.trim());
-    }
-    if (favorite) {
-      next.favorites = [
-        ...next.favorites,
-        `${favorite.kind.trim().toLowerCase()}: ${favorite.value.trim().replace(/[.!?]+$/, "")}`,
-      ].slice(-6);
-    }
-
-    ctx.updateState?.(replaceState(next));
-    return "Demo state updated.";
-  },
 });
 
 export const saveMemories = createAction({
@@ -378,9 +345,9 @@ export const demoBaseNode = createNode({
   key: "demoBase",
   name: "Projector Demo Agent",
   instructions:
-    "You are a compact demo assistant. Be direct, remember small facts, and explain what changed in state. Call updateDemoState when the user shares their name or a favorite.",
+    "You are a compact demo assistant. Be direct, remember small facts, and explain what changed in state.",
   state: demoState,
-  tools: [pingTool, updateDemoState],
+  tools: [pingTool],
   commands: [pingCommand, setThemeHue],
   members: [agentControlsMemberNode],
   projection: {
@@ -411,7 +378,7 @@ export function createDemoCharter(
       agentControlsMemberNode,
       cameraSensorNode,
     ],
-    tools: [pingTool, updateDemoState, saveMemories],
+    tools: [pingTool, saveMemories],
     commands: [
       pingCommand,
       setVoiceEnabled,
@@ -441,6 +408,7 @@ export function createInitialDemoSourceInstance(): Instance {
 }
 
 export function createDemoMachineRoot(source: Instance): Instance {
+  reconcileAgentControlMembers(source);
   const root = createRoot([source]);
   resolveStates(root);
   return root;
@@ -514,6 +482,31 @@ function findDemoSourceInstance(instance: Instance): Instance | undefined {
     }
   }
   return undefined;
+}
+
+function reconcileAgentControlMembers(instance: Instance): void {
+  const controls = agentControlsStateSchema.safeParse(
+    readResolvedState(instance, "agentControls"),
+  );
+  if (!controls.success) return;
+
+  reconcileOptionalMember(instance, cameraSensorNode, controls.data.cameraEnabled);
+  reconcileOptionalMember(instance, memoryMemberNode, controls.data.memoryEnabled);
+  resolveStates(instance);
+}
+
+function reconcileOptionalMember(
+  instance: Instance,
+  node: typeof cameraSensorNode | typeof memoryMemberNode,
+  enabled: boolean,
+): void {
+  const existingChildren = instance.children ?? [];
+  const matchingChild = existingChildren.find((child) => child.node.key === node.key);
+  const children = existingChildren.filter((child) => child.node.key !== node.key);
+  if (enabled) {
+    children.push(matchingChild ?? { id: `${node.key}-${crypto.randomUUID()}`, node });
+  }
+  instance.children = children.length > 0 ? children : undefined;
 }
 
 export function getDemoState(instance: Instance): DemoState {
@@ -659,8 +652,4 @@ function stringifyValue(value: unknown): string {
   } catch {
     return String(value);
   }
-}
-
-function capitalize(value: string): string {
-  return value.slice(0, 1).toUpperCase() + value.slice(1).toLowerCase();
 }

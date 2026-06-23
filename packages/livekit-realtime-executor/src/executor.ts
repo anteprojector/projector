@@ -211,6 +211,11 @@ export class LiveKitRealtimeConnection<TDataContent = never> {
     session: LiveKitRealtimeSessionLike;
     handler: (...args: unknown[]) => void;
   };
+  private realtimeTurnState: {
+    sourceFrame?: Frame<TDataContent>;
+    completed: boolean;
+  } = { completed: false };
+  private pendingRealtimeTurnCompletionMetadata?: Record<string, unknown>;
   private readonly dynamicContextState: DynamicContextState = {
     version: 0,
     pending: new Map(),
@@ -394,6 +399,33 @@ export class LiveKitRealtimeConnection<TDataContent = never> {
     }));
   }
 
+  beginRealtimeTurn(): void {
+    this.realtimeTurnState = { completed: false };
+    this.pendingRealtimeTurnCompletionMetadata = undefined;
+  }
+
+  async noteRealtimeTurnSource(frame: Frame<TDataContent>): Promise<void> {
+    if (this.realtimeTurnState.completed) return;
+    this.realtimeTurnState.sourceFrame = frame;
+    const pending = this.pendingRealtimeTurnCompletionMetadata;
+    if (!pending) return;
+    this.pendingRealtimeTurnCompletionMetadata = undefined;
+    await this.completeRealtimeTurn(pending);
+  }
+
+  async completeRealtimeTurn(metadata: Record<string, unknown> = {}): Promise<Frame<TDataContent> | undefined> {
+    if (this.realtimeTurnState.completed) return undefined;
+    const sourceFrame = this.realtimeTurnState.sourceFrame;
+    if (!sourceFrame) {
+      this.pendingRealtimeTurnCompletionMetadata = metadata;
+      return undefined;
+    }
+
+    this.realtimeTurnState.completed = true;
+    this.pendingRealtimeTurnCompletionMetadata = undefined;
+    return this.enqueueRealtimeTurnCompletion(sourceFrame, metadata);
+  }
+
   private async syncNow(input: CompiledInference<TDataContent> | RuntimeSyncContext<TDataContent>): Promise<void> {
     if (this.disconnected) return;
 
@@ -475,6 +507,18 @@ export class LiveKitRealtimeConnection<TDataContent = never> {
     if (type === "conversation.item.deleted") {
       const itemId = readString(event, "item_id");
       if (itemId) this.onRealtimeItemDeleted(itemId);
+      return;
+    }
+
+    if (type === "response.done") {
+      const response = readObject(event, "response");
+      const responseId = readString(response, "id");
+      void this.completeRealtimeTurn({
+        ...(responseId ? { responseId } : {}),
+        responseDone: true,
+      }).catch((error) => {
+        this.executor.log("Failed to enqueue realtime turn completion", error);
+      });
     }
   }
 
@@ -829,7 +873,10 @@ export class LiveKitRealtimeConnection<TDataContent = never> {
       if (itemId) metadata.messageId = itemId;
 
       void this.enqueueAssistantTranscript(text, metadata)
-        .then((frame) => this.enqueueRealtimeTurnCompletion(frame, metadata))
+        .then(async (frame) => {
+          await this.noteRealtimeTurnSource(frame);
+          await this.completeRealtimeTurn(metadata);
+        })
         .catch((error) => {
           this.executor.log("Failed to enqueue assistant transcript", error);
         });
@@ -1039,7 +1086,8 @@ class AssistantTranscriptStream<TDataContent> {
       streamState: "complete",
       streamSeq,
     });
-    await this.connection.enqueueRealtimeTurnCompletion(frame, {
+    await this.connection.noteRealtimeTurnSource(frame);
+    await this.connection.completeRealtimeTurn({
       messageId,
       streamState: "complete",
       streamSeq,
@@ -1065,6 +1113,7 @@ class UserTranscriptEnvelope<TDataContent> {
 
   begin(): void {
     if (this.messageId) return;
+    this.connection.beginRealtimeTurn();
     this.messageId = crypto.randomUUID();
     this.seq = 0;
     this.connection.emitUserTranscriptUpdate({
@@ -1076,15 +1125,19 @@ class UserTranscriptEnvelope<TDataContent> {
   }
 
   async complete(transcript: string, metadata: Record<string, unknown>): Promise<void> {
+    if (!this.messageId) {
+      this.connection.beginRealtimeTurn();
+    }
     const messageId = this.messageId ?? crypto.randomUUID();
     const streamSeq = this.seq + 1;
     this.reset();
-    await this.connection.enqueueUserTranscript(transcript, {
+    const frame = await this.connection.enqueueUserTranscript(transcript, {
       ...metadata,
       messageId,
       streamState: "complete",
       streamSeq,
     });
+    await this.connection.noteRealtimeTurnSource(frame);
     this.connection.emitUserTranscriptUpdate({
       messageId,
       text: transcript,
@@ -1440,7 +1493,7 @@ function realtimeInstructionDynamicParts(parts: readonly ContentPart<any>[]): Co
 }
 
 function realtimeConversationDynamicParts(parts: readonly ContentPart<any>[]): ContentPart<any>[] {
-  return parts.filter((part) => part.type === "image");
+  return parts.some((part) => part.type === "image") ? [...parts] : [];
 }
 
 function actorMessageRealtimeItemId(idSource: string, descriptor: unknown): string {

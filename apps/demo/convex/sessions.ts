@@ -678,7 +678,7 @@ async function applyFrameInstanceMessage(
   message: InstanceMessage,
 ): Promise<void> {
   const targetInstanceId = instanceMessageTargetId(message);
-  const source = await getLatestSourceContainingInstance(ctx, sessionId, targetInstanceId);
+  const source = await getLatestSourceForInstanceMessage(ctx, sessionId, message, targetInstanceId);
   if (!source) {
     throw new Error(`No source instance contains target instance "${targetInstanceId}"`);
   }
@@ -700,6 +700,20 @@ function instanceMessageTargetId(message: InstanceMessage): string {
     return message.parentInstanceId;
   }
   return message.instanceId;
+}
+
+async function getLatestSourceForInstanceMessage(
+  ctx: DbCtx,
+  sessionId: Id<"sessions">,
+  message: InstanceMessage,
+  targetInstanceId: string,
+) {
+  const source = await getLatestSourceContainingInstance(ctx, sessionId, targetInstanceId);
+  if (source || message.kind !== "remove") {
+    return source;
+  }
+
+  return await getLatestSource(ctx, sessionId);
 }
 
 function isInstanceMessage(message: unknown): message is InstanceMessage {
@@ -726,6 +740,14 @@ async function getLatestSourceContainingInstance(
     }
   }
   return null;
+}
+
+async function getLatestSource(
+  ctx: DbCtx,
+  sessionId: Id<"sessions">,
+) {
+  const [latestLog] = await getLatestSourceLogs(ctx, sessionId);
+  return latestLog ? hydrateDemoSourceInstance(restoreConvexJson(latestLog.instance)) : null;
 }
 
 async function getLatestSourceLogs(ctx: DbCtx, sessionId: Id<"sessions">) {

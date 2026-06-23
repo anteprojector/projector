@@ -6,6 +6,7 @@ import { useAtom, useAtomValue } from "jotai";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { LocalVideoTrack } from "livekit-client";
+import type { ClientMachineMessage } from "@projectors/core/client";
 import {
   activeAgentTabAtom,
   inputAtom,
@@ -27,10 +28,26 @@ export function HomeClient({ initialSessionId }: { initialSessionId: Id<"session
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const createSession = useAction(api.sessionActions.createSession);
   const sendMessage = useAction(api.sessionActions.sendMessage);
-  const sendClientMessage = useAction(api.sessionActions.sendClientMessage);
+  const sendClientMessageToConvex = useAction(api.sessionActions.sendClientMessage);
   const ensureAgentDispatched = useAction(api.livekitAgentActions.ensureAgentDispatched);
   const cloneFromFrame = useMutation(api.sessions.cloneFromFrame);
   const [timeTravelFrameId, setTimeTravelFrameId] = useAtom(timeTravelFrameIdAtom);
+  const [sendLiveKitCommand, setSendLiveKitCommand] = useState<((message: ClientMachineMessage) => Promise<unknown>) | null>(null);
+  const handleLiveKitCommandSenderChange = useCallback(
+    (sender: ((message: ClientMachineMessage) => Promise<unknown>) | null) => {
+      setSendLiveKitCommand(sender ? () => sender : null);
+    },
+    [],
+  );
+  const sendClientMessage = useCallback(
+    async (args: { sessionId: Id<"sessions">; message: ClientMachineMessage }) => {
+      if (sendLiveKitCommand) {
+        return await sendLiveKitCommand(args.message);
+      }
+      return await sendClientMessageToConvex(args);
+    },
+    [sendClientMessageToConvex, sendLiveKitCommand],
+  );
 
   const session = useQuery(
     api.sessions.get,
@@ -100,6 +117,7 @@ export function HomeClient({ initialSessionId }: { initialSessionId: Id<"session
         ensureAgentDispatched={ensureAgentDispatched}
         serverMessages={serverMessages}
         liveKitWorkerStatus={liveKitWorkerStatus}
+        onLiveKitCommandSenderChange={handleLiveKitCommandSenderChange}
         connectionError={connectionError}
         onConnectionErrorChange={setConnectionError}
         latestFrameId={latestFrameId}
@@ -119,6 +137,7 @@ function HomeClientContent({
   ensureAgentDispatched,
   serverMessages,
   liveKitWorkerStatus,
+  onLiveKitCommandSenderChange,
   connectionError,
   onConnectionErrorChange,
   latestFrameId,
@@ -148,6 +167,7 @@ function HomeClientContent({
       }
     | null
     | undefined;
+  onLiveKitCommandSenderChange: (sender: ((message: ClientMachineMessage) => Promise<unknown>) | null) => void;
   connectionError: string | null;
   onConnectionErrorChange: (error: string | null) => void;
   latestFrameId: Id<"frames"> | null;
@@ -278,6 +298,13 @@ function HomeClientContent({
     }
   }, [onConnectionErrorChange]);
 
+  const handleLiveKitCommandSenderChange = useCallback((sender: ((message: ClientMachineMessage) => Promise<unknown>) | null) => {
+    onLiveKitCommandSenderChange(sender);
+    if (sender) {
+      onConnectionErrorChange(null);
+    }
+  }, [onConnectionErrorChange, onLiveKitCommandSenderChange]);
+
   const themeHue = getThemeHue(clientInstances);
   const persistedAgentControls = getAgentControlsState(snapshot.root ? [snapshot.root] : []);
   const persistedVoiceEnabled = Boolean(persistedAgentControls?.liveMode);
@@ -382,6 +409,7 @@ function HomeClientContent({
           cameraEnabled={persistedCameraEnabled}
           onStatusChange={handleVoiceStatus}
           onSendMessageChange={handleLiveKitSenderChange}
+          onSendCommandChange={handleLiveKitCommandSenderChange}
           onLocalCameraTrackChange={setLocalCameraTrack}
         />
       </div>

@@ -130,7 +130,7 @@ export const TerminalPane = forwardRef<HTMLTextAreaElement, TerminalPaneProps>(
             {messages.length === 0 ? (
               <div className="max-w-xl space-y-3 text-sm leading-6 text-terminal-green-dim">
                 <p>
-                  Start with a message like <span className="text-terminal-green">my name is Ada</span> or{" "}
+                  Start with a message like{" "}
                   <span className="text-terminal-green">remember this demo uses projector</span>.
                 </p>
                 {connectionError && (

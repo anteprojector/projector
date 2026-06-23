@@ -1416,9 +1416,11 @@ activationId = hash(machineId, runtimeInstanceId, triggerKey, sourceFrameId)
 
 Work frames are appended by framework reconciliation, not by mutating the frame
 that caused the work. Enqueueing a frame assigns its identity and appends it to
-the log. Reconciliation folds the log, evaluates frames against runtime
-triggers, and appends any missing deterministic activation or completion work
-frames after their source frame has been persisted.
+the log. Reconciliation folds the full work log, then evaluates trigger source
+frames from a scheduling suffix. The suffix starts at the latest durable work
+frame, inclusive; if no work frame exists, it starts at the beginning of the
+frame log. Reconciliation appends any missing deterministic activation or
+completion work frames after their source frame has been persisted.
 
 A non-inert frame matching generator runtime triggers will be followed by
 separate activation work frames for those runtimes. Work frames may themselves be
@@ -1431,9 +1433,18 @@ inputs and there is at most one terminal completion for a given activation ID.
 The exact frame IDs may come from storage, but the semantic work identity must be
 stable.
 
+The latest work frame acts as a durable scheduling cursor, but is included in
+the next reconciliation pass so `parent-activation` and `parent-completion`
+follow-up work can be recovered after a crash. Frames before that cursor are not
+searched for additional activation work. Cancellation is separate: open
+activations whose runtime no longer exists may be completed with
+`reason: "cancelled"` regardless of where their activation frame appears in
+history.
+
 Reconciliation must also be deterministic:
 
-- Process source frames in stable durable append order.
+- Process source frames from the scheduling suffix in stable durable append
+  order.
 - For each source frame, derive candidate work frames in `ProjectionNode`
   traversal order.
 - Append newly derived activation work frames and schedule runnable executor work
@@ -1597,7 +1608,7 @@ The high-level run algorithm is:
 runMachine(machine, options) creates a MachineRun whose drain loop:
   syncGenerators(machine)
   yield any previously pending frames before using them as trigger sources
-  reconcile deterministic work frames from yielded source frames
+  reconcile deterministic work frames from the scheduling suffix
   fold work messages to derive open and completed activations
   identify runnable activations
 
@@ -2442,14 +2453,14 @@ Add focused tests for:
   activations still see actor messages produced by the same activation.
 - Work reconciliation: generator triggers append deterministic
   activation work frames separate from the source frame, activation messages
-  record `sourceFrameId`, reconciliation processes source frames in durable
-  append order and derives work in projection traversal order, work-only and
-  instance-only frames do not trigger `actor-frame`, nearest-ancestor rules apply
-  to parent activation/completion triggers, a serial runtime's own assistant and
-  tool frames derive no new activations for that runtime, a parallel
-  activation's output derives no new activations for the same runtime address,
-  the first durable terminal completion wins, and removed instances cancel open
-  activations.
+  record `sourceFrameId`, reconciliation processes source frames from the latest
+  durable work frame inclusively and derives work in projection traversal order,
+  work-only and instance-only frames do not trigger `actor-frame`,
+  nearest-ancestor rules apply to parent activation/completion triggers, a serial
+  runtime's own assistant and tool frames derive no new activations for that
+  runtime, a parallel activation's output derives no new activations for the
+  same runtime address, the first durable terminal completion wins, and removed
+  instances cancel open activations.
 - Concurrency and dispatch: serial generator runtimes expose only the
   earliest incomplete activation per concurrency key, parallel runtimes expose
   all incomplete activations as runnable, `runMachine(..., { scheduleWork: false })`

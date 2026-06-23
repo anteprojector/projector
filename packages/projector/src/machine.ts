@@ -16,6 +16,7 @@ import {
   createCompletionFrame,
   isWorkActivationMessage,
   isWorkCompletionMessage,
+  isWorkMessage,
 } from "./history.ts";
 import {
   isHistoryProjectionFunction,
@@ -1285,7 +1286,7 @@ function reconcileWorkOnce<TDataContent>(
     }
   }
 
-  for (const sourceFrame of machine.frames.slice()) {
+  for (const sourceFrame of schedulingSourceFrames(machine.frames)) {
     if (sourceFrame.inert) continue;
     if (pendingFrameIds?.has(sourceFrame.id)) continue;
 
@@ -1329,6 +1330,25 @@ function reconcileWorkOnce<TDataContent>(
   }
 
   return appended;
+}
+
+function schedulingSourceFrames<TDataContent>(
+  frames: readonly Frame<TDataContent>[],
+): readonly Frame<TDataContent>[] {
+  const lastWorkFrameIndex = findLastWorkFrameIndex(frames);
+  const startIndex = lastWorkFrameIndex ?? 0;
+  return frames.slice(startIndex);
+}
+
+function findLastWorkFrameIndex<TDataContent>(
+  frames: readonly Frame<TDataContent>[],
+): number | undefined {
+  for (let index = frames.length - 1; index >= 0; index -= 1) {
+    if (frames[index]?.messages.some(isWorkMessage)) {
+      return index;
+    }
+  }
+  return undefined;
 }
 
 function hasActivationForRuntimeSource(
