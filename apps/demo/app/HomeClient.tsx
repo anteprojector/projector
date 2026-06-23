@@ -37,7 +37,7 @@ export function HomeClient({ initialSessionId }: { initialSessionId: Id<"session
     sessionId
       ? {
           id: sessionId,
-          ...(timeTravelFrameId ? { headFrameId: timeTravelFrameId } : {}),
+          ...(timeTravelFrameId ? { timetravelFrameId: timeTravelFrameId } : {}),
         }
       : "skip",
   );
@@ -82,25 +82,14 @@ export function HomeClient({ initialSessionId }: { initialSessionId: Id<"session
     }
   }, [sessionId, setTimeTravelFrameId]);
 
-  useEffect(() => {
-    if (!timeTravelFrameId || !session?.frameId) return;
-    if (session.frameId !== timeTravelFrameId) {
-      setTimeTravelFrameId(session.frameId === session.headFrameId ? null : session.frameId);
-    }
-  }, [session?.frameId, session?.headFrameId, setTimeTravelFrameId, timeTravelFrameId]);
-
-  useEffect(() => {
-    if (session?.headFrameId && timeTravelFrameId === session.headFrameId) {
-      setTimeTravelFrameId(null);
-    }
-  }, [session?.headFrameId, setTimeTravelFrameId, timeTravelFrameId]);
+  const latestFrameId = timeTravelFrameId ? null : (session?.frameId ?? null);
 
   return (
     <ProjectorProvider
       sessionId={sessionId}
       sendClientMessage={sendClientMessage}
       snapshot={session?.clientSnapshot as DemoClientSnapshot | undefined}
-      readOnly={Boolean(timeTravelFrameId && session?.headFrameId && timeTravelFrameId !== session.headFrameId)}
+      readOnly={Boolean(timeTravelFrameId)}
     >
       <HomeClientContent
         sessionId={sessionId}
@@ -113,7 +102,7 @@ export function HomeClient({ initialSessionId }: { initialSessionId: Id<"session
         liveKitWorkerStatus={liveKitWorkerStatus}
         connectionError={connectionError}
         onConnectionErrorChange={setConnectionError}
-        headFrameId={session?.headFrameId ?? null}
+        latestFrameId={latestFrameId}
         timeTravelFrameId={timeTravelFrameId}
         onTimeTravelFrameChange={setTimeTravelFrameId}
       />
@@ -132,7 +121,7 @@ function HomeClientContent({
   liveKitWorkerStatus,
   connectionError,
   onConnectionErrorChange,
-  headFrameId,
+  latestFrameId,
   timeTravelFrameId,
   onTimeTravelFrameChange,
 }: {
@@ -161,7 +150,7 @@ function HomeClientContent({
     | undefined;
   connectionError: string | null;
   onConnectionErrorChange: (error: string | null) => void;
-  headFrameId: Id<"frames"> | null;
+  latestFrameId: Id<"frames"> | null;
   timeTravelFrameId: Id<"frames"> | null;
   onTimeTravelFrameChange: (frameId: Id<"frames"> | null) => void;
 }) {
@@ -177,7 +166,7 @@ function HomeClientContent({
   const scanlinesEnabled = useAtomValue(scanlinesEnabledAtom);
   const activeTab = useAtomValue(activeAgentTabAtom);
   const { instances: clientInstances, snapshot } = useProjector();
-  const isTimeTraveling = Boolean(timeTravelFrameId && headFrameId && timeTravelFrameId !== headFrameId);
+  const isTimeTraveling = Boolean(timeTravelFrameId);
 
   const terminalRef = useRef<HTMLTextAreaElement>(null);
   const agentRef = useRef<HTMLDivElement>(null);
@@ -230,12 +219,12 @@ function HomeClientContent({
 
   const handleTimeTravelFrame = useCallback(
     (frameId: Id<"frames">) => {
-      onTimeTravelFrameChange(frameId === headFrameId ? null : frameId);
+      onTimeTravelFrameChange(frameId === latestFrameId ? null : frameId);
     },
-    [headFrameId, onTimeTravelFrameChange],
+    [latestFrameId, onTimeTravelFrameChange],
   );
 
-  const handleReturnToHead = useCallback(() => {
+  const handleReturnToLatest = useCallback(() => {
     onTimeTravelFrameChange(null);
   }, [onTimeTravelFrameChange]);
 
@@ -339,10 +328,10 @@ function HomeClientContent({
       docked={agentDocked}
       onToggleDock={toggleAgentDock}
       onResetSession={handleReset}
-      headFrameId={headFrameId}
+      latestFrameId={latestFrameId}
       timeTravelFrameId={timeTravelFrameId}
       onTimeTravelFrame={handleTimeTravelFrame}
-      onReturnToHead={handleReturnToHead}
+      onReturnToLatest={handleReturnToLatest}
       onSwitchSession={setSessionId}
       messageTransport={messageTransport}
       onMessageTransportChange={setMessageTransport}
@@ -364,7 +353,7 @@ function HomeClientContent({
           onInputChange={setInput}
           onSend={handleSend}
           onForkSession={handleForkSession}
-          onReturnToHead={handleReturnToHead}
+          onReturnToLatest={handleReturnToLatest}
           isLoading={isLoading}
           isTimeTraveling={isTimeTraveling}
           timeTravelFrameId={timeTravelFrameId}
@@ -464,7 +453,9 @@ function findState(instances: DemoClientInstance[], key: string) {
 }
 
 function findStateInInstance(instance: DemoClientInstance, key: string): DemoClientInstance["states"][number] | undefined {
-  const state = instance.states.find((item) => item.key === key);
+  const state = instance.states.find(
+    (item: DemoClientInstance["states"][number]) => item.key === key,
+  );
   if (state) return state;
   for (const member of instance.members) {
     const found = findStateInInstance(member, key);

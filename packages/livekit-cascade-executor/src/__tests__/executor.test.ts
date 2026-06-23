@@ -3,7 +3,7 @@ import {
   ROOT_RUNTIME_INSTANCE_ID,
   createGetStateAction,
   createNode,
-  createTool,
+  createAction,
   createUnboundActionContext,
   textAssistantMessage,
   textUserMessage,
@@ -211,7 +211,7 @@ describe("LiveKitCascadeExecutor", () => {
           systemParts: ["System A"],
           dynamicParts: ["Dynamic B"],
           history: [{ ...textUserMessage("Hi") }],
-          tools: [createTool({ state: null, name: "lookup", description: "Lookup things" })],
+          tools: [createAction({ state: null, name: "lookup", description: "Lookup things" })],
         }),
       }),
     );
@@ -535,7 +535,7 @@ describe("LiveKitCascadeExecutor", () => {
   });
 
   it("uses last compiled tool wins and resolves callbacks against the latest snapshot", async () => {
-    const first = createTool({
+    const first = createAction({
       state: null,
       name: "lookup",
       description: "first",
@@ -543,7 +543,7 @@ describe("LiveKitCascadeExecutor", () => {
       run: vi.fn(() => "first-result"),
     });
     const secondRun = vi.fn(() => "second-result");
-    const second = createTool({
+    const second = createAction({
       state: null,
       name: "lookup",
       description: "second",
@@ -670,7 +670,7 @@ describe("LiveKitCascadeExecutor", () => {
 
   it("enqueues formed messages returned by tools", async () => {
     const frames: FrameDraft[] = [];
-    const ping = createTool({
+    const ping = createAction({
       state: null,
       name: "ping",
       inputSchema: z.object({}),
@@ -790,8 +790,8 @@ describe("LiveKit prompt and tool rendering", () => {
     const definitions = buildLiveKitToolDefinitions(
       inference({
         tools: [
-          createTool({ state: null, name: "same", description: "first" }),
-          createTool({ state: null, name: "same", description: "last" }),
+          createAction({ state: null, name: "same", description: "first" }),
+          createAction({ state: null, name: "same", description: "last" }),
           createGetStateAction(),
         ],
         retrievableStates: [
@@ -886,7 +886,7 @@ function syncContext(
     runtimeInstanceId: ROOT_RUNTIME_INSTANCE_ID,
     generator: {
       id: REALTIME_GENERATOR_ID,
-      kind: "primary",
+      kind: "generator",
       runtimeInstanceId: ROOT_RUNTIME_INSTANCE_ID,
     },
     inference: inference(),

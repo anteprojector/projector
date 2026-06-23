@@ -11,7 +11,7 @@ import {
 import { useQuery } from "convex/react";
 import { useAtom, useAtomValue } from "jotai";
 import type {
-  CompiledProjectionFrameView,
+  CompiledProjectionNodeView,
   CompiledProjectionNode,
   CompiledProjectionTree,
 } from "@projectors/core";
@@ -40,10 +40,10 @@ type AgentPaneProps = {
   docked: boolean;
   onToggleDock: () => void;
   onResetSession: () => void;
-  headFrameId: Id<"frames"> | null;
+  latestFrameId: Id<"frames"> | null;
   timeTravelFrameId: Id<"frames"> | null;
   onTimeTravelFrame: (frameId: Id<"frames">) => void;
-  onReturnToHead: () => void;
+  onReturnToLatest: () => void;
   onSwitchSession: (sessionId: Id<"sessions">) => void;
   messageTransport: MessageTransport;
   onMessageTransportChange: (transport: MessageTransport) => void;
@@ -59,10 +59,10 @@ export const AgentPane = forwardRef<HTMLDivElement, AgentPaneProps>(
       docked,
       onToggleDock,
       onResetSession,
-      headFrameId,
+      latestFrameId,
       timeTravelFrameId,
       onTimeTravelFrame,
-      onReturnToHead,
+      onReturnToLatest,
       onSwitchSession,
       messageTransport,
       onMessageTransportChange,
@@ -143,10 +143,10 @@ export const AgentPane = forwardRef<HTMLDivElement, AgentPaneProps>(
             <HistoryTab
               sessionId={sessionId}
               projectionTree={snapshot.projectionTree}
-              headFrameId={headFrameId}
+              latestFrameId={latestFrameId}
               timeTravelFrameId={timeTravelFrameId}
               onTimeTravelFrame={onTimeTravelFrame}
-              onReturnToHead={onReturnToHead}
+              onReturnToLatest={onReturnToLatest}
               onSwitchSession={onSwitchSession}
             />
           )}
@@ -266,7 +266,7 @@ function ProjectionTree({ tree }: { tree?: CompiledProjectionTree }) {
 type RuntimeInspectionBase = {
   generatorId: string;
   runtimeInstanceId: string;
-  kind: "primary" | "worker";
+  kind: "generator";
   nodeKey: string;
   name?: string;
 };
@@ -591,25 +591,25 @@ type HistoryFilterOption = {
 function HistoryTab({
   sessionId,
   projectionTree,
-  headFrameId,
+  latestFrameId,
   timeTravelFrameId,
   onTimeTravelFrame,
-  onReturnToHead,
+  onReturnToLatest,
   onSwitchSession,
 }: {
   sessionId: Id<"sessions"> | null;
   projectionTree?: CompiledProjectionTree;
-  headFrameId: Id<"frames"> | null;
+  latestFrameId: Id<"frames"> | null;
   timeTravelFrameId: Id<"frames"> | null;
   onTimeTravelFrame: (frameId: Id<"frames">) => void;
-  onReturnToHead: () => void;
+  onReturnToLatest: () => void;
   onSwitchSession: (sessionId: Id<"sessions">) => void;
 }) {
   const [activeSubtab, setActiveSubtab] = useAtom(activeHistorySubtabAtom);
   const stickyHeaderRef = useRef<HTMLDivElement>(null);
   const [filterStickyTop, setFilterStickyTop] = useState(0);
   const isTimeTraveling = Boolean(
-    timeTravelFrameId && headFrameId && timeTravelFrameId !== headFrameId,
+    timeTravelFrameId && latestFrameId && timeTravelFrameId !== latestFrameId,
   );
   const switchSubtab = (tab: HistorySubtab) => {
     if (tab === activeSubtab) return;
@@ -658,10 +658,10 @@ function HistoryTab({
             </div>
             <button
               type="button"
-              onClick={onReturnToHead}
+              onClick={onReturnToLatest}
               className="shrink-0 text-terminal-green-dim hover:text-terminal-green"
             >
-              live head
+              live latest
             </button>
           </div>
         )}
@@ -672,7 +672,7 @@ function HistoryTab({
             sessionId={sessionId}
             projectionTree={projectionTree}
             filterStickyTop={filterStickyTop}
-            headFrameId={headFrameId}
+            latestFrameId={latestFrameId}
             timeTravelFrameId={timeTravelFrameId}
             onTimeTravelFrame={onTimeTravelFrame}
           />
@@ -680,7 +680,7 @@ function HistoryTab({
         {activeSubtab === "messages" && (
           <MessagesHistory
             sessionId={sessionId}
-            headFrameId={headFrameId}
+            latestFrameId={latestFrameId}
             timeTravelFrameId={timeTravelFrameId}
             onTimeTravelFrame={onTimeTravelFrame}
           />
@@ -688,7 +688,7 @@ function HistoryTab({
         {activeSubtab === "branches" && (
           <BranchesHistory
             sessionId={sessionId}
-            headFrameId={headFrameId}
+            latestFrameId={latestFrameId}
             timeTravelFrameId={timeTravelFrameId}
             onTimeTravelFrame={onTimeTravelFrame}
             onSwitchSession={onSwitchSession}
@@ -703,14 +703,14 @@ function FramesHistory({
   sessionId,
   projectionTree,
   filterStickyTop,
-  headFrameId,
+  latestFrameId,
   timeTravelFrameId,
   onTimeTravelFrame,
 }: {
   sessionId: Id<"sessions"> | null;
   projectionTree?: CompiledProjectionTree;
   filterStickyTop: number;
-  headFrameId: Id<"frames"> | null;
+  latestFrameId: Id<"frames"> | null;
   timeTravelFrameId: Id<"frames"> | null;
   onTimeTravelFrame: (frameId: Id<"frames">) => void;
 }) {
@@ -824,8 +824,8 @@ function FramesHistory({
         <div className="space-y-2">
           {filteredFrameViews.map(({ frame, index, messages, frameType }) => {
             const expanded = expandedFrameIds.has(frame._id);
-            const isHead = frame._id === headFrameId;
-            const isSelected = frame._id === timeTravelFrameId && !isHead;
+            const isLatest = frame._id === latestFrameId;
+            const isSelected = frame._id === timeTravelFrameId && !isLatest;
             return (
               <section
                 key={frame._id}
@@ -861,8 +861,8 @@ function FramesHistory({
                           <span className="shrink-0 text-terminal-green">
                             {frameType}
                           </span>
-                          {isHead && (
-                            <span className="text-terminal-yellow">head</span>
+                          {isLatest && (
+                            <span className="text-terminal-yellow">latest</span>
                           )}
                           {isSelected && (
                             <span className="text-terminal-cyan">viewing</span>
@@ -1152,12 +1152,12 @@ function FilterChipGroup({
 }
 function MessagesHistory({
   sessionId,
-  headFrameId,
+  latestFrameId,
   timeTravelFrameId,
   onTimeTravelFrame,
 }: {
   sessionId: Id<"sessions"> | null;
-  headFrameId: Id<"frames"> | null;
+  latestFrameId: Id<"frames"> | null;
   timeTravelFrameId: Id<"frames"> | null;
   onTimeTravelFrame: (frameId: Id<"frames">) => void;
 }) {
@@ -1187,8 +1187,8 @@ function MessagesHistory({
           "frameId" in message && typeof message.frameId === "string"
             ? (message.frameId as Id<"frames">)
             : null;
-        const isHead = frameId === headFrameId;
-        const isSelected = frameId === timeTravelFrameId && !isHead;
+        const isLatest = frameId === latestFrameId;
+        const isSelected = frameId === timeTravelFrameId && !isLatest;
         return (
           <button
             key={message._id}
@@ -1221,7 +1221,7 @@ function MessagesHistory({
                     {message.mode}
                   </span>
                 )}
-                {isHead && <span className="text-terminal-yellow">head</span>}
+                {isLatest && <span className="text-terminal-yellow">latest</span>}
                 {isSelected && (
                   <span className="text-terminal-cyan">viewing</span>
                 )}
@@ -1247,7 +1247,7 @@ function MessagesHistory({
 
 type BranchSession = {
   sessionId: Id<"sessions">;
-  headFrameId?: Id<"frames">;
+  latestFrameId?: Id<"frames">;
   contextEpoch: number;
   forkedFromSessionId?: Id<"sessions">;
   forkedFromFrameId?: Id<"frames">;
@@ -1266,13 +1266,13 @@ type FamilyTimeline = {
 
 function BranchesHistory({
   sessionId,
-  headFrameId,
+  latestFrameId,
   timeTravelFrameId,
   onTimeTravelFrame,
   onSwitchSession,
 }: {
   sessionId: Id<"sessions"> | null;
-  headFrameId: Id<"frames"> | null;
+  latestFrameId: Id<"frames"> | null;
   timeTravelFrameId: Id<"frames"> | null;
   onTimeTravelFrame: (frameId: Id<"frames">) => void;
   onSwitchSession: (sessionId: Id<"sessions">) => void;
@@ -1345,7 +1345,7 @@ function BranchesHistory({
             depth={0}
             currentSessionId={sessionId}
             rootSessionId={timeline.familyRootSessionId}
-            headFrameId={headFrameId}
+            latestFrameId={latestFrameId}
             timeTravelFrameId={timeTravelFrameId}
             branchNumber={branchNumber}
             childrenByParent={childrenByParent}
@@ -1377,7 +1377,7 @@ function BranchNode({
   depth,
   currentSessionId,
   rootSessionId,
-  headFrameId,
+  latestFrameId,
   timeTravelFrameId,
   branchNumber,
   childrenByParent,
@@ -1391,7 +1391,7 @@ function BranchNode({
   depth: number;
   currentSessionId: Id<"sessions">;
   rootSessionId: Id<"sessions">;
-  headFrameId: Id<"frames"> | null;
+  latestFrameId: Id<"frames"> | null;
   timeTravelFrameId: Id<"frames"> | null;
   branchNumber: Map<Id<"sessions">, number>;
   childrenByParent: Map<string, BranchSession[]>;
@@ -1456,8 +1456,8 @@ function BranchNode({
                     </span>
                   </div>
                   <div className="mt-1 truncate text-terminal-green-dim">
-                    head{" "}
-                    {branch.headFrameId ? shortId(branch.headFrameId) : "none"}{" "}
+                    latest{" "}
+                    {branch.latestFrameId ? shortId(branch.latestFrameId) : "none"}{" "}
                     / epoch {branch.contextEpoch}
                   </div>
                 </div>
@@ -1481,7 +1481,7 @@ function BranchNode({
           <BranchFrameRail
             frames={orderedFrames}
             currentSession={isCurrent}
-            headFrameId={isCurrent ? headFrameId : (branch.headFrameId ?? null)}
+            latestFrameId={isCurrent ? latestFrameId : (branch.latestFrameId ?? null)}
             timeTravelFrameId={isCurrent ? timeTravelFrameId : null}
             forksByFrame={forksByFrame}
             onFrameClick={(frameId) => {
@@ -1508,7 +1508,7 @@ function BranchNode({
                 depth={depth + 1}
                 currentSessionId={currentSessionId}
                 rootSessionId={rootSessionId}
-                headFrameId={headFrameId}
+                latestFrameId={latestFrameId}
                 timeTravelFrameId={timeTravelFrameId}
                 branchNumber={branchNumber}
                 childrenByParent={childrenByParent}
@@ -1529,14 +1529,14 @@ function BranchNode({
 function BranchFrameRail({
   frames,
   currentSession,
-  headFrameId,
+  latestFrameId,
   timeTravelFrameId,
   forksByFrame,
   onFrameClick,
 }: {
   frames: FrameDoc[];
   currentSession: boolean;
-  headFrameId: Id<"frames"> | null;
+  latestFrameId: Id<"frames"> | null;
   timeTravelFrameId: Id<"frames"> | null;
   forksByFrame: Map<string, number>;
   onFrameClick: (frameId: Id<"frames">) => void;
@@ -1558,9 +1558,9 @@ function BranchFrameRail({
         />
         {frames.map((frame, index) => {
           const messages = normalizeFrameMessages(frame.messages);
-          const isHead = frame._id === headFrameId;
+          const isLatest = frame._id === latestFrameId;
           const isSelected =
-            currentSession && frame._id === timeTravelFrameId && !isHead;
+            currentSession && frame._id === timeTravelFrameId && !isLatest;
           const forkCount = forksByFrame.get(frame._id) ?? 0;
           const label = String(index + 1).padStart(2, "0");
           return (
@@ -1575,7 +1575,7 @@ function BranchFrameRail({
                 className={`grid h-7 w-7 place-items-center rounded border text-[11px] ${
                   isSelected
                     ? "border-terminal-cyan bg-terminal-cyan text-terminal-bg"
-                    : isHead
+                    : isLatest
                       ? "border-terminal-yellow bg-terminal-bg text-terminal-yellow"
                       : forkCount > 0
                         ? "border-terminal-cyan bg-terminal-bg text-terminal-cyan"
@@ -1837,8 +1837,8 @@ function generatorMatchesRuntime(
   if (!generatorId) return false;
   return (
     generatorId === runtimeInstanceId ||
-    generatorId.startsWith(`primary:${runtimeInstanceId}:activation:`) ||
-    generatorId.startsWith(`worker:${runtimeInstanceId}:activation:`)
+    generatorId.startsWith(`generator:${runtimeInstanceId}:activation:`) ||
+    generatorId.startsWith(`generator:${runtimeInstanceId}:activation:`)
   );
 }
 
@@ -1860,7 +1860,7 @@ function frameTypeForFrame(frame: FrameDoc, messages: FrameMessage[]): FrameType
 function frameSummary(frame: FrameDoc, messages: FrameMessage[]) {
   const preview = messages.map(messagePreview).find(Boolean);
   if (preview) return preview;
-  return `${frame.instanceId} state frame`;
+  return `state frame`;
 }
 
 function messagePreview(message: FrameMessage) {
@@ -2152,7 +2152,7 @@ function ProjectionNode({
             ]}
           />
           <CompiledPayload node={node} />
-          <ProjectionFrameList frames={node.frames} />
+          <ProjectionNodeList projectionNodes={node.projectionNodes} />
           {node.children.length > 0 ? (
             <TreeSection title={`child projections ${node.children.length}`}>
               {node.children.map((child) => (
@@ -2205,44 +2205,44 @@ function CompiledPayload({ node }: { node: CompiledProjectionNode }) {
   );
 }
 
-function ProjectionFrameList({
-  frames,
+function ProjectionNodeList({
+  projectionNodes,
 }: {
-  frames: CompiledProjectionFrameView[];
+  projectionNodes: CompiledProjectionNodeView[];
 }) {
-  if (frames.length === 0) {
-    return <MutedLine>source frames empty</MutedLine>;
+  if (projectionNodes.length === 0) {
+    return <MutedLine>projection nodes empty</MutedLine>;
   }
 
   return (
-    <TreeSection title={`source frames ${frames.length}`}>
+    <TreeSection title={`projection nodes ${projectionNodes.length}`}>
       <div className="space-y-2">
-        {frames.map((frame) => (
+        {projectionNodes.map((projectionNode) => (
           <div
-            key={frame.runtimeInstanceId}
+            key={projectionNode.runtimeInstanceId}
             className="rounded border border-terminal-green-dimmer bg-terminal-bg-lighter p-2"
           >
             <div className="flex min-w-0 items-center gap-2">
-              <span className="text-terminal-green-dim">{frame.kind}</span>
-              <span className="text-terminal-green">{frame.nodeKey}</span>
-              {frame.name && (
+              <span className="text-terminal-green-dim">{projectionNode.kind}</span>
+              <span className="text-terminal-green">{projectionNode.nodeKey}</span>
+              {projectionNode.name && (
                 <span className="truncate text-terminal-cyan">
-                  {frame.name}
+                  {projectionNode.name}
                 </span>
               )}
               <span className="truncate text-terminal-green-dim">
-                {frame.runtimeInstanceId}
+                {projectionNode.runtimeInstanceId}
               </span>
             </div>
             <KeyValueRows
               rows={[
-                ["address", addressLabel(frame.address)],
-                ["projection", projectionLabel(frame.projection)],
+                ["address", addressLabel(projectionNode.address)],
+                ["projection", projectionLabel(projectionNode.projection)],
               ]}
             />
-            <StateList states={frame.states} />
-            <ActionList title="tools" actions={frame.tools} />
-            <ActionList title="commands" actions={frame.commands} />
+            <StateList states={projectionNode.states} />
+            <ActionList title="tools" actions={projectionNode.tools} />
+            <ActionList title="commands" actions={projectionNode.commands} />
           </div>
         ))}
       </div>

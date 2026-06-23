@@ -20,7 +20,6 @@ import {
   createInitialSerializedInstance,
   createDemoCharter,
   hydrateDemoInstance,
-  serializeDemoInstance,
 } from "@projectors/demo-agent/src/projector-demo.js";
 import type { ClientMachineMessage } from "@projectors/core/client";
 
@@ -95,7 +94,7 @@ export const sendMessage = action({
     );
     const frameIds = await ctx.runMutation(api.sessions.appendMachineFrameSequence, {
       sessionId,
-      expectedHeadFrameId: session.headFrameId,
+      referenceFrameId: session.frameId,
       frames: durableFrames,
     }) as Id<"frames">[];
 
@@ -109,13 +108,6 @@ export const sendMessage = action({
         rootRuntimeInstanceId: ROOT_RUNTIME_INSTANCE_ID,
       });
     }
-
-    await ctx.runMutation(api.sessions.commitMachineInstance, {
-      sessionId,
-      frameId: frameIds.at(-1),
-      message: { type: "machine.run", trigger: "user", text: content },
-      instance: serializeDemoInstance(rootInstance),
-    });
 
     return { success: true };
   },

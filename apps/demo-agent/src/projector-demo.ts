@@ -5,11 +5,11 @@ import {
   applyStaticProjection,
   createAction,
   createCharter,
-  createCommand,
   createHistoryProjectionFunction,
   createNode,
   createProjectionFunction,
   createRoot,
+  createSourceInstance,
   hydrateInstance,
   inspectCompiledProjectionTree,
   imageContent,
@@ -124,7 +124,7 @@ const memoriesState = {
   projection: "dynamic" as const,
 };
 
-export const setVoiceEnabled = createCommand({
+export const setVoiceEnabled = createAction({
   state: agentControlsState,
   name: "setVoiceEnabled",
   description: "Toggle voice mode for the demo session.",
@@ -166,7 +166,7 @@ export const cameraSensorNode = createNode({
   projection: projectCameraSensorData,
 });
 
-export const setCameraEnabled = createCommand({
+export const setCameraEnabled = createAction({
   state: agentControlsState,
   name: "setCameraEnabled",
   description: "Toggle camera sampling in live mode.",
@@ -183,7 +183,7 @@ export const setCameraEnabled = createCommand({
   },
 });
 
-export const setMemoryEnabled = createCommand({
+export const setMemoryEnabled = createAction({
   state: agentControlsState,
   name: "setMemoryEnabled",
   description: "Toggle durable memory extraction for the demo session.",
@@ -200,7 +200,7 @@ export const setMemoryEnabled = createCommand({
   },
 });
 
-export const setStreamingEnabled = createCommand({
+export const setStreamingEnabled = createAction({
   state: agentControlsState,
   name: "setStreamingEnabled",
   description: "Toggle streaming-style assistant output.",
@@ -210,7 +210,7 @@ export const setStreamingEnabled = createCommand({
   },
 });
 
-export const incrementTestCounter = createCommand({
+export const incrementTestCounter = createAction({
   state: agentControlsState,
   name: "incrementTestCounter",
   description: "Increment the agent controls test counter.",
@@ -221,7 +221,7 @@ export const incrementTestCounter = createCommand({
   },
 });
 
-export const setThemeHue = createCommand({
+export const setThemeHue = createAction({
   state: demoState,
   name: "setThemeHue",
   description: "Change the terminal accent hue.",
@@ -239,7 +239,7 @@ export const pingTool = createAction({
   run: () => pongAssistantMessage(),
 });
 
-export const pingCommand = createCommand({
+export const pingCommand = createAction({
   state: null,
   name: "ping",
   description: "Respond with pong.",
@@ -349,11 +349,12 @@ export const memoryMemberNode = createNode({
   tools: [saveMemories],
   projection: { mode: "replace" },
   runtime: {
-    type: "worker",
+    type: "generator",
     trigger: { type: "parent-completion" },
     concurrency: "serial",
     activationHistory: "snapshot",
     historyProjection: "memory",
+    outputAudienceDefault: "self",
   },
 });
 
@@ -430,36 +431,61 @@ export function createDemoCharter(
   });
 }
 
-export function createInitialDemoInstance(): Instance {
-  const demoBase: Instance = {
+export function createInitialDemoSourceInstance(): Instance {
+  const demoBase = createSourceInstance({
     id: `demo-${crypto.randomUUID()}`,
     node: demoBaseNode,
-  };
-  const root = createRoot([demoBase]);
+  });
+  resolveStates(demoBase);
+  return demoBase;
+}
+
+export function createDemoMachineRoot(source: Instance): Instance {
+  const root = createRoot([source]);
   resolveStates(root);
   return root;
 }
 
-export function createInitialSerializedInstance(): SerializedInstance {
-  return serializeDemoInstance(createInitialDemoInstance());
+export function createInitialDemoMachineRoot(): Instance {
+  return createDemoMachineRoot(createInitialDemoSourceInstance());
 }
 
-export function hydrateDemoInstance(serialized: SerializedInstance): Instance {
+export function createInitialDemoInstance(): Instance {
+  return createInitialDemoMachineRoot();
+}
+
+export function createInitialSerializedInstance(): SerializedInstance {
+  return serializeDemoSourceInstance(createInitialDemoSourceInstance());
+}
+
+export function hydrateDemoSourceInstance(serialized: SerializedInstance): Instance {
   const instance = hydrateInstance(serialized, createDemoCharter());
   resolveStates(instance);
   return instance;
 }
 
-export function serializeDemoInstance(instance: Instance): SerializedInstance {
+export function serializeDemoSourceInstance(instance: Instance): SerializedInstance {
   resolveStates(instance);
   return serializeInstance(instance, createDemoCharter());
+}
+
+export function hydrateDemoInstance(serialized: SerializedInstance): Instance {
+  return createDemoMachineRoot(hydrateDemoSourceInstance(serialized));
+}
+
+export function serializeDemoInstance(instance: Instance): SerializedInstance {
+  const source = findDemoSourceInstance(instance);
+  if (!source) {
+    throw new Error("Demo instance tree has no source instance");
+  }
+  return serializeDemoSourceInstance(source);
 }
 
 export function getDemoRootGenerator(_instance: Instance): Generator {
   const runtimeInstanceId = ROOT_RUNTIME_INSTANCE_ID;
   return {
     id: runtimeInstanceId,
-    kind: "primary",
+    kind: "generator",
     runtimeInstanceId,
   };
 }
@@ -475,6 +501,19 @@ export function createDemoClientSnapshot(
       charter: createDemoCharter(),
     }),
   };
+}
+
+function findDemoSourceInstance(instance: Instance): Instance | undefined {
+  if (instance.isSource) {
+    return instance;
+  }
+  for (const child of instance.children ?? []) {
+    const source = findDemoSourceInstance(child);
+    if (source) {
+      return source;
+    }
+  }
+  return undefined;
 }
 
 export function getDemoState(instance: Instance): DemoState {

@@ -25,7 +25,6 @@ import {
   createDemoCharter,
   getAgentControlsState,
   hydrateDemoInstance,
-  serializeDemoInstance,
   type CameraSensorImage,
   type DemoMessage,
 } from "./projector-demo.js";
@@ -60,9 +59,8 @@ type Id<TableName extends string> = string & { __tableName: TableName };
 
 type AgentInit = {
   sessionId: Id<"sessions">;
-  headFrameId: Id<"frames">;
+  frameId: Id<"frames">;
   instance: SerializedInstance;
-  instanceFrameId?: Id<"frames">;
   messages: DemoMessage[];
 } | null;
 
@@ -70,12 +68,6 @@ type AgentWorkerRoomLeaseSnapshot = {
   roomName: string;
   agentWorkerLeaseToken?: string;
 } | null;
-
-type StaleHeadErrorData = {
-  code: "stale_head";
-  expectedHeadFrameId?: Id<"frames">;
-  headFrameId?: Id<"frames">;
-};
 
 type RealtimeModelOptions = ConstructorParameters<typeof openai.realtime.RealtimeModel>[0] & {
   maxResponseOutputTokens?: number | "inf";
@@ -220,8 +212,7 @@ export default defineAgent({
       console.log(`[demo-agent] loaded session ${init.sessionId} with ${init.messages.length} messages`);
 
       let root = hydrateDemoInstance(init.instance);
-      let rootInstanceFrameId = init.instanceFrameId;
-      let durableHeadFrameId = init.headFrameId;
+      let referenceFrameId = init.frameId;
       const contextFrames = (await convex.query(api.sessions.listMachineContextFrames, {
         sessionId: init.sessionId,
       })) as Frame[];
@@ -377,8 +368,7 @@ export default defineAgent({
         }
 
         root = hydrateDemoInstance(refreshed.instance);
-        rootInstanceFrameId = refreshed.instanceFrameId;
-        durableHeadFrameId = refreshed.headFrameId;
+        referenceFrameId = refreshed.frameId;
         const refreshedFrames = (await convex.query(api.sessions.listMachineContextFrames, {
           sessionId: init.sessionId,
         })) as Frame[];
@@ -399,57 +389,22 @@ export default defineAgent({
         try {
           frameId = await convex.mutation(api.sessions.appendMachineFrame, {
             sessionId: init.sessionId,
-            expectedHeadFrameId: durableHeadFrameId,
+            referenceFrameId,
             frame,
           });
         } catch (error) {
-          if (!isStaleHeadError(error)) {
-            throw error;
-          }
-          await refreshDurableMachineState("stale head");
+          await refreshDurableMachineState("append failure");
           return undefined;
         }
-        durableHeadFrameId = frameId;
+        referenceFrameId = frameId;
         await persistFrameMessages(frame, frameId);
         return frameId;
-      };
-
-      const commitMachineInstance = async (frameId: Id<"frames"> | undefined) => {
-        await assertLease();
-        const result = await convex.mutation(api.sessions.commitMachineInstance, {
-          sessionId: init.sessionId,
-          frameId,
-          ...(rootInstanceFrameId ? { expectedInstanceFrameId: rootInstanceFrameId } : {}),
-          message: { type: "machine.run", trigger: "livekit-host" },
-          instance: serializeDemoInstance(root),
-        }) as {
-          committed?: boolean;
-          headFrameId?: Id<"frames">;
-          instance?: SerializedInstance;
-          instanceFrameId?: Id<"frames">;
-        };
-
-        if (result.committed === false && result.instance) {
-          root = hydrateDemoInstance(result.instance);
-          machine.root = root;
-          durableHeadFrameId = result.headFrameId ?? durableHeadFrameId;
-          rootInstanceFrameId = result.instanceFrameId;
-          machine.frames = (await convex.query(api.sessions.listMachineContextFrames, {
-            sessionId: init.sessionId,
-          })) as Frame[];
-          console.warn("[demo-agent] skipped stale instance commit and refreshed durable session state");
-          return;
-        }
-
-        durableHeadFrameId = result.headFrameId ?? durableHeadFrameId;
-        rootInstanceFrameId = result.instanceFrameId ?? frameId ?? rootInstanceFrameId;
       };
 
       const runMachineHost = async () => {
         for await (const frame of runMachine(machine)) {
           const frameId = await persistMachineFrame(frame);
           if (!frameId) return;
-          await commitMachineInstance(frameId);
           if (!frame.inert) {
             await syncMachineRuntime(machine, {
               runtimeInstanceId: ROOT_RUNTIME_INSTANCE_ID,
@@ -622,26 +577,6 @@ function createVoiceSession(): voice.AgentSession {
     // Realtime normally returns audio; TTS is a fallback for text-only realtime responses.
     tts: new openai.TTS({ voice: "alloy" }),
   });
-}
-
-function isStaleHeadError(error: unknown): boolean {
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-  const data = (error as { data?: unknown }).data;
-  if (isStaleHeadErrorData(data)) {
-    return true;
-  }
-  const message = error instanceof Error ? error.message : String(error);
-  return message.includes("stale_head");
-}
-
-function isStaleHeadErrorData(data: unknown): data is StaleHeadErrorData {
-  return (
-    !!data &&
-    typeof data === "object" &&
-    (data as { code?: unknown }).code === "stale_head"
-  );
 }
 
 function readNumberEnv(name: string, fallback: number): number {

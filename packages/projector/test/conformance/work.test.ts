@@ -13,18 +13,22 @@ import { charter, createRecordingExecutor, drain } from "./helpers.ts";
 describe("conformance: work scheduling", () => {
   it("creates durable activation and completion frames in host-gated order", async () => {
     const { executor, requests } = createRecordingExecutor();
-    const worker = createNode({
+    const generator = createNode({
       key: "memory",
-      runtime: { type: "worker", trigger: { type: "parent-completion" } },
+      runtime: {
+        type: "generator",
+        trigger: { type: "parent-completion" },
+        outputAudienceDefault: "self",
+      },
     });
     const root = createNode({
       key: "root",
-      members: [worker],
-      runtime: { type: "primary", trigger: { type: "actor-frame" } },
+      members: [generator],
+      runtime: { type: "generator", trigger: { type: "actor-frame" } },
     });
     const machine = createMachine({
       id: "work-demo",
-      root: { id: "r", node: root },
+      root: { id: "r", isSource: true, node: root },
       charter: charter({ executor }),
     });
     const userFrame = machine.enqueueFrame({
@@ -61,9 +65,9 @@ describe("conformance: work scheduling", () => {
       reason: "end-turn",
     });
 
-    const workerActivation = await iterator.next();
-    const workerActivationMessage = workerActivation.value?.messages[0];
-    expect(workerActivationMessage).toMatchObject({
+    const generatorActivation = await iterator.next();
+    const generatorActivationMessage = generatorActivation.value?.messages[0];
+    expect(generatorActivationMessage).toMatchObject({
       type: "work",
       kind: "activation",
       runtimeInstanceId: "member:r/memory",
@@ -73,15 +77,15 @@ describe("conformance: work scheduling", () => {
       concurrency: "serial",
     });
 
-    const workerCompletion = await iterator.next();
+    const generatorCompletion = await iterator.next();
     expect(requests.map((request) => request.runtimeInstanceId)).toEqual([
       "instance:r",
       "member:r/memory",
     ]);
-    expect(workerCompletion.value?.messages[0]).toMatchObject({
+    expect(generatorCompletion.value?.messages[0]).toMatchObject({
       type: "work",
       kind: "completion",
-      activationId: (workerActivationMessage as { activationId: string }).activationId,
+      activationId: (generatorActivationMessage as { activationId: string }).activationId,
       sourceFrameId: rootCompletion.value?.id,
       reason: "done",
     });
@@ -93,11 +97,11 @@ describe("conformance: work scheduling", () => {
   it("does not let actor output from a runtime trigger that same runtime again", async () => {
     const root = createNode({
       key: "root",
-      runtime: { type: "primary", trigger: { type: "actor-frame" } },
+      runtime: { type: "generator", trigger: { type: "actor-frame" } },
     });
     const machine = createMachine({
       id: "self-trigger-demo",
-      root: { id: "r", node: root },
+      root: { id: "r", isSource: true, node: root },
       charter: charter(),
     });
     const assistantFrame = machine.enqueueFrame({
@@ -110,34 +114,38 @@ describe("conformance: work scheduling", () => {
     await expect(drain(runMachine(machine, { scheduleWork: false }))).resolves.toEqual([assistantFrame]);
   });
 
-  it("marks implicit worker output as self-audience assistant messages", async () => {
+  it("marks implicit generator output as self-audience assistant messages", async () => {
     const { executor, requests } = createRecordingExecutor((request) => ({
       completionReason: "done",
       ...(request.runtimeInstanceId === "member:r/memory" ? { value: "memory updated" } : {}),
     }));
-    const worker = createNode({
+    const generator = createNode({
       key: "memory",
-      runtime: { type: "worker", trigger: { type: "parent-completion" } },
+      runtime: {
+        type: "generator",
+        trigger: { type: "parent-completion" },
+        outputAudienceDefault: "self",
+      },
     });
     const root = createNode({
       key: "root",
-      members: [worker],
-      runtime: { type: "primary", trigger: { type: "actor-frame" } },
+      members: [generator],
+      runtime: { type: "generator", trigger: { type: "actor-frame" } },
     });
     const machine = createMachine({
-      id: "worker-output-demo",
-      root: { id: "r", node: root },
+      id: "generator-output-demo",
+      root: { id: "r", isSource: true, node: root },
       charter: charter({ executor }),
     });
     machine.enqueueFrame({ messages: [{ ...textUserMessage("remember my name") }] });
 
     const frames = await drain(runMachine(machine));
-    const workerRequest = requests.find((request) => request.runtimeInstanceId === "member:r/memory");
+    const generatorRequest = requests.find((request) => request.runtimeInstanceId === "member:r/memory");
     const assistantMessages = frames.flatMap((frame) =>
       frame.messages.filter((message) => message.type === "assistant"),
     );
 
-    expect(workerRequest?.output?.audience).toBe("self");
+    expect(generatorRequest?.output?.audience).toBe("self");
     expect(assistantMessages).toEqual([
       {
         type: "assistant",
@@ -174,14 +182,14 @@ describe("conformance: work scheduling", () => {
   });
 
   it("does not activate runtimes whose trigger does not match the audience-visible frame", async () => {
-    const worker = createNode({
-      key: "worker",
-      runtime: { type: "worker", trigger: { type: "parent-completion" } },
+    const generator = createNode({
+      key: "generator",
+      runtime: { type: "generator", trigger: { type: "parent-completion" } },
     });
-    const root = createNode({ key: "root", members: [worker] });
+    const root = createNode({ key: "root", members: [generator] });
     const machine = createMachine({
       id: "trigger-demo",
-      root: { id: "r", node: root },
+      root: { id: "r", isSource: true, node: root },
       charter: charter(),
     });
     machine.enqueueFrame({ messages: [{ ...textUserMessage("visible but wrong trigger") }] });
@@ -194,11 +202,11 @@ describe("conformance: work scheduling", () => {
     const { executor } = createRecordingExecutor();
     const root = createNode({
       key: "root",
-      runtime: { type: "primary", trigger: { type: "actor-frame" } },
+      runtime: { type: "generator", trigger: { type: "actor-frame" } },
     });
     const source = createMachine({
       id: "source-session",
-      root: { id: "r", node: root },
+      root: { id: "r", isSource: true, node: root },
       charter: charter({ executor }),
     });
     source.enqueueFrame({
@@ -209,7 +217,7 @@ describe("conformance: work scheduling", () => {
     await drain(runMachine(source));
     const fork = createMachine({
       id: "forked-session",
-      root: { id: "r", node: root },
+      root: { id: "r", isSource: true, node: root },
       charter: charter({ executor }),
       frames: source.frames.map((frame) => ({ ...frame, messages: [...frame.messages] })),
     });
@@ -221,11 +229,11 @@ describe("conformance: work scheduling", () => {
 async function activationRuntimeIdsFor(message: FrameMessage): Promise<string[]> {
   const first = createNode({
     key: "first",
-    runtime: { type: "primary", trigger: { type: "actor-frame" } },
+    runtime: { type: "generator", trigger: { type: "actor-frame" } },
   });
   const second = createNode({
     key: "second",
-    runtime: { type: "primary", trigger: { type: "actor-frame" } },
+    runtime: { type: "generator", trigger: { type: "actor-frame" } },
   });
   const root = createNode({
     key: "root",
@@ -233,7 +241,7 @@ async function activationRuntimeIdsFor(message: FrameMessage): Promise<string[]>
   });
   const machine = createMachine({
     id: "audience-demo",
-    root: { id: "r", node: root },
+    root: { id: "r", isSource: true, node: root },
     charter: charter(),
   });
   machine.enqueueFrame({ messages: [message] });
