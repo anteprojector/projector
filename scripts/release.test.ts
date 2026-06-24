@@ -246,8 +246,9 @@ describe("release flow", () => {
       confirm: async () => true,
     });
 
-    expect(calls).toEqual(expect.arrayContaining(["jj bookmark move main --to @", "jj git export", "git reset"]));
-    expect(calls).not.toContain("git symbolic-ref HEAD refs/heads/main");
+    expect(calls).toEqual(
+      expect.arrayContaining(["jj bookmark move main --to @", "jj git export", "git symbolic-ref HEAD refs/heads/main", "git reset"]),
+    );
   });
 
   it("dry run verifies and packs without editing package versions", async () => {
