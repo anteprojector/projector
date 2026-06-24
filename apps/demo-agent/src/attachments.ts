@@ -14,9 +14,10 @@ export type DemoAttachmentData = {
   size: number;
   kind: DemoAttachmentKind;
   url: string | null;
+  dataUrl?: string;
 };
 
-export type StoredDemoAttachmentData = Omit<DemoAttachmentData, "url">;
+export type StoredDemoAttachmentData = Omit<DemoAttachmentData, "url" | "dataUrl">;
 
 export function attachmentSummary(attachments: readonly Pick<StoredDemoAttachmentData, "name">[]): string {
   return `Attached: ${attachments.map((attachment) => attachment.name).join(", ")}`;
@@ -30,9 +31,11 @@ export function userContentPartsForAttachments(
   const trimmed = content.trim();
   if (trimmed) parts.push(textContent(trimmed));
   for (const attachment of attachments) {
-    parts.push(dataContent(attachment, { label: "Attachment" }));
-    if (attachment.kind === "image" && attachment.url) {
-      parts.push(imageContent(attachment.url, {
+    const { dataUrl: _dataUrl, ...attachmentMetadata } = attachment;
+    parts.push(dataContent(attachmentMetadata, { label: "Attachment" }));
+    const imageData = attachment.kind === "image" ? attachment.dataUrl ?? attachment.url : null;
+    if (imageData) {
+      parts.push(imageContent(imageData, {
         mediaType: attachment.contentType,
         label: attachment.name,
       }));
@@ -79,5 +82,8 @@ export function normalizeAttachmentData(value: unknown): DemoAttachmentData | un
     size: record.size,
     kind: record.kind === "image" ? "image" : "file",
     url: typeof record.url === "string" && record.url ? record.url : null,
+    ...(typeof record.dataUrl === "string" && record.dataUrl.startsWith("data:image/")
+      ? { dataUrl: record.dataUrl }
+      : {}),
   };
 }

@@ -212,6 +212,10 @@ function HomeClientContent({
   const activeTab = useAtomValue(activeAgentTabAtom);
   const { instances: clientInstances, snapshot } = useProjector();
   const isTimeTraveling = Boolean(timeTravelFrameId);
+  const persistedAgentControls = getAgentControlsState(snapshot.root ? [snapshot.root] : []);
+  const persistedVoiceEnabled = Boolean(persistedAgentControls?.liveMode);
+  const persistedCameraEnabled = Boolean(persistedAgentControls?.cameraEnabled);
+  const activeMessageTransport: MessageTransport = persistedVoiceEnabled ? "livekit" : messageTransport;
 
   const terminalRef = useRef<HTMLTextAreaElement>(null);
   const agentRef = useRef<HTMLDivElement>(null);
@@ -268,6 +272,7 @@ function HomeClientContent({
             const contentType = normalizeFileContentType(file);
             const kind = attachmentKind(contentType);
             const previewUrl = kind === "image" ? URL.createObjectURL(file) : undefined;
+            const dataUrl = kind === "image" ? await readFileAsDataUrl(file) : undefined;
             if (previewUrl) previewUrls.push(previewUrl);
             const uploadUrl = await generateAttachmentUploadUrl();
             const response = await fetch(uploadUrl, {
@@ -289,6 +294,7 @@ function HomeClientContent({
               contentType,
               size: file.size,
               kind,
+              dataUrl,
               previewUrl,
             };
           }),
@@ -297,11 +303,13 @@ function HomeClientContent({
           attachments: uploaded.map(toStoredAttachmentInput),
         });
         const previewUrlByStorageId = new Map(uploaded.map((attachment) => [attachment.storageId, attachment.previewUrl]));
+        const dataUrlByStorageId = new Map(uploaded.map((attachment) => [attachment.storageId, attachment.dataUrl]));
         setPendingAttachments((attachments) => [
           ...attachments,
           ...resolved.map((attachment) => ({
             ...attachment,
             previewUrl: previewUrlByStorageId.get(attachment.storageId),
+            dataUrl: dataUrlByStorageId.get(attachment.storageId),
           })),
         ]);
         onConnectionErrorChange(null);
@@ -338,7 +346,7 @@ function HomeClientContent({
     const storedAttachments = pendingAttachments.map(toStoredAttachmentInput);
     if ((!content && liveKitAttachments.length === 0) || !sessionId || isLoading || isTimeTraveling || attachmentsUploading) return;
 
-    if (messageTransport === "livekit" && !sendLiveKitMessage) {
+    if (activeMessageTransport === "livekit" && !sendLiveKitMessage) {
       onConnectionErrorChange("LiveKit agent is not ready");
       return;
     }
@@ -347,7 +355,7 @@ function HomeClientContent({
     setInput("");
     setIsLoading(true);
     try {
-      if (messageTransport === "livekit") {
+      if (activeMessageTransport === "livekit") {
         if (!liveKitSender) throw new Error("LiveKit agent is not ready");
         await liveKitSender({ content, attachments: liveKitAttachments });
       } else {
@@ -363,9 +371,9 @@ function HomeClientContent({
   }, [
     input,
     attachmentsUploading,
+    activeMessageTransport,
     clearPendingAttachments,
     isLoading,
-    messageTransport,
     onConnectionErrorChange,
     pendingAttachments,
     sendLiveKitMessage,
@@ -445,14 +453,17 @@ function HomeClientContent({
   }, [onConnectionErrorChange, onLiveKitCommandSenderChange]);
 
   const themeHue = getThemeHue(clientInstances);
-  const persistedAgentControls = getAgentControlsState(snapshot.root ? [snapshot.root] : []);
-  const persistedVoiceEnabled = Boolean(persistedAgentControls?.liveMode);
-  const persistedCameraEnabled = Boolean(persistedAgentControls?.cameraEnabled);
-  const liveKitEnabled = persistedVoiceEnabled || persistedCameraEnabled || messageTransport === "livekit";
+  const liveKitEnabled = persistedVoiceEnabled || persistedCameraEnabled || activeMessageTransport === "livekit";
   const liveKitWorkerReady = Boolean(
     liveKitWorkerStatus?.agentWorkerLeaseExpiresAt && liveKitWorkerStatus.agentWorkerLeaseExpiresAt > statusClock,
   );
   const combinedLiveKitStatus = formatLiveKitStatus(voiceStatus, liveKitWorkerStatus, liveKitEnabled, statusClock);
+
+  useEffect(() => {
+    if (persistedVoiceEnabled && messageTransport !== "livekit") {
+      setMessageTransport("livekit");
+    }
+  }, [messageTransport, persistedVoiceEnabled, setMessageTransport]);
 
   useEffect(() => {
     if (!liveKitEnabled) return;
@@ -511,7 +522,7 @@ function HomeClientContent({
       onTimeTravelFrame={handleTimeTravelFrame}
       onReturnToLatest={handleReturnToLatest}
       onSwitchSession={setSessionId}
-      messageTransport={messageTransport}
+      messageTransport={activeMessageTransport}
       onMessageTransportChange={setMessageTransport}
       liveKitStatus={combinedLiveKitStatus}
       liveKitReady={Boolean(sendLiveKitMessage) && liveKitWorkerReady}
@@ -541,7 +552,7 @@ function HomeClientContent({
           timeTravelFrameId={timeTravelFrameId}
           connectionError={connectionError}
           voiceStatus={voiceStatus}
-          messageTransport={messageTransport}
+          messageTransport={activeMessageTransport}
           liveKitEnabled={liveKitEnabled}
           liveKitReady={Boolean(sendLiveKitMessage) && liveKitWorkerReady}
           liveKitStatus={combinedLiveKitStatus}
@@ -580,7 +591,7 @@ type PendingAttachment = DemoAttachment & {
   previewUrl?: string;
 };
 
-type StoredAttachmentInput = Omit<DemoAttachment, "url" | "storageId"> & {
+type StoredAttachmentInput = Omit<DemoAttachment, "url" | "storageId" | "dataUrl"> & {
   storageId: Id<"_storage">;
 };
 
@@ -592,6 +603,23 @@ function toStoredAttachmentInput(attachment: DemoAttachment): StoredAttachmentIn
     size: attachment.size,
     kind: attachment.kind,
   };
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+      } else {
+        reject(new Error(`Unable to read ${file.name} as a data URL`));
+      }
+    });
+    reader.addEventListener("error", () => {
+      reject(reader.error ?? new Error(`Unable to read ${file.name}`));
+    });
+    reader.readAsDataURL(file);
+  });
 }
 
 function getAgentControlsState(instances: DemoClientInstance[]) {

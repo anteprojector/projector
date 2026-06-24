@@ -131,6 +131,9 @@ export function LiveVoiceClient({
       const payload = new TextEncoder().encode(JSON.stringify({ content, attachments, sentAt: Date.now() }));
       console.info("[demo/livekit] publish text message", {
         topic: MESSAGE_TOPIC,
+        bytes: payload.byteLength,
+        contentChars: content.length,
+        attachments: summarizeLiveKitAttachments(attachments),
         participants: [...room.remoteParticipants.values()].map((participant) => participant.identity),
       });
       await room.localParticipant.publishData(payload, {
@@ -353,4 +356,15 @@ function isAgentParticipant(participant: RemoteParticipant): boolean {
 
 function findAgentParticipant(room: Room): RemoteParticipant | undefined {
   return [...room.remoteParticipants.values()].find(isAgentParticipant);
+}
+
+function summarizeLiveKitAttachments(attachments: readonly DemoAttachment[]): unknown {
+  return attachments.map((attachment) => ({
+    kind: attachment.kind,
+    name: attachment.name,
+    contentType: attachment.contentType,
+    size: attachment.size,
+    hasUrl: Boolean(attachment.url),
+    hasDataUrl: Boolean(attachment.dataUrl),
+  }));
 }

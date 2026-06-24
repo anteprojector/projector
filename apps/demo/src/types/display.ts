@@ -9,6 +9,7 @@ export type DemoClientSnapshot = MachineClientSnapshot<DemoClientInstance | null
 export type DemoAttachment = {
   storageId: string;
   url: string | null;
+  dataUrl?: string;
   name: string;
   contentType: string;
   size: number;

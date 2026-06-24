@@ -301,6 +301,7 @@ export default defineAgent({
       activeSession = session;
       const agent = new DemoVoiceAgent();
       const liveKitExecutor = new LiveKitRealtimeExecutor({
+        debug: DEBUG_REALTIME_EVENTS,
         session: session as unknown as LiveKitSessionLike,
         agent: agent as unknown as LiveKitAgentLike,
         room: ctx.room as unknown as LiveKitRoomLike,
@@ -852,6 +853,12 @@ function summarizeRealtimeClientEvent(event: unknown): string | undefined {
   ) {
     return `${type} ${formatRecordSummary(record, ["item_id", "response_id", "audio_end_ms"])}`;
   }
+  if (type === "conversation.item.create") {
+    return `${type} item=${summarizeRealtimeItem(record.item)} previous_item_id=${String(record.previous_item_id ?? "<none>")}`;
+  }
+  if (type === "conversation.item.delete") {
+    return `${type} item_id=${String(record.item_id ?? "<none>")}`;
+  }
   return undefined;
 }
 
@@ -908,18 +915,7 @@ function summarizeRealtimeOutput(output: unknown): string {
   return output
     .map((item) => {
       const record = asRecord(item);
-      const content = Array.isArray(record.content) ? record.content : [];
-      const chars = content.reduce((sum, part) => {
-        const partRecord = asRecord(part);
-        const text =
-          typeof partRecord.text === "string"
-            ? partRecord.text
-            : typeof partRecord.transcript === "string"
-              ? partRecord.transcript
-              : "";
-        return sum + text.length;
-      }, 0);
-      return `${String(record.type ?? "<type>")}:${String(record.role ?? record.name ?? "<role>")}:chars=${chars}`;
+      return `${String(record.type ?? "<type>")}:${String(record.role ?? record.name ?? "<role>")}:${summarizeRealtimeContent(record.content)}`;
     })
     .join(",");
 }
@@ -934,20 +930,47 @@ function summarizeRealtimeItem(item: unknown): string {
     return `${type}:call_id=${String(record.call_id ?? "<none>")}:output_chars=${typeof record.output === "string" ? record.output.length : 0}`;
   }
   if (type === "message") {
-    const content = Array.isArray(record.content) ? record.content : [];
-    const chars = content.reduce((sum, part) => {
-      const partRecord = asRecord(part);
-      const text =
-        typeof partRecord.text === "string"
-          ? partRecord.text
-          : typeof partRecord.transcript === "string"
-            ? partRecord.transcript
-            : "";
-      return sum + text.length;
-    }, 0);
-    return `${type}:${String(record.role ?? "<role>")}:chars=${chars}`;
+    return `${type}:${String(record.role ?? "<role>")}:${summarizeRealtimeContent(record.content)} id=${String(record.id ?? "<none>")}`;
   }
   return type;
+}
+
+function summarizeRealtimeContent(contentValue: unknown): string {
+  const content = Array.isArray(contentValue) ? contentValue : contentValue ? [contentValue] : [];
+  let textChars = 0;
+  let transcriptChars = 0;
+  const types: string[] = [];
+  const images: string[] = [];
+  const imageUrls: string[] = [];
+  for (const part of content) {
+    const partRecord = asRecord(part);
+    const type = typeof partRecord.type === "string" ? partRecord.type : "<part>";
+    types.push(type);
+    if (typeof partRecord.text === "string") textChars += partRecord.text.length;
+    if (typeof partRecord.transcript === "string") transcriptChars += partRecord.transcript.length;
+    if (type === "input_image") {
+      images.push(describeRealtimeImageUrl(partRecord.image_url));
+      imageUrls.push(describeRawRealtimeImageUrl(partRecord.image_url));
+    }
+  }
+  return `parts=${types.join("|") || "<none>"} text_chars=${textChars} transcript_chars=${transcriptChars} images=${images.length}${images.length ? `[${images.join(",")}]` : ""}${imageUrls.length ? ` image_urls=${safeJson(imageUrls)}` : ""}`;
+}
+
+function describeRealtimeImageUrl(value: unknown): string {
+  if (typeof value !== "string") return "<missing>";
+  if (value.startsWith("data:")) return "data-url";
+  try {
+    const url = new URL(value);
+    return `${url.protocol}//${url.host}${url.pathname.slice(0, 80)}`;
+  } catch {
+    return value.slice(0, 80);
+  }
+}
+
+function describeRawRealtimeImageUrl(value: unknown): string {
+  if (typeof value !== "string") return "<missing>";
+  if (value.startsWith("data:")) return `data-url:${value.length}chars`;
+  return value;
 }
 
 function formatRecordSummary(record: Record<string, unknown>, keys: string[]): string {
@@ -988,6 +1011,11 @@ function parseLiveKitDemoMessage(payload: Uint8Array): string | FrameDraft<any> 
     };
     const content = typeof parsed.content === "string" ? parsed.content.trim() : "";
     const attachments = normalizeLiveKitAttachments(parsed.attachments);
+    if (DEBUG_REALTIME_EVENTS) {
+      console.log(
+        `[demo-agent] livekit data message parsed content_chars=${content.length} attachments=${summarizeDemoAttachments(attachments)}`,
+      );
+    }
     if (!content && attachments.length === 0) return undefined;
     const text = content || attachmentSummary(attachments);
     return {
@@ -1002,9 +1030,21 @@ function parseLiveKitDemoMessage(payload: Uint8Array): string | FrameDraft<any> 
         },
       ],
     };
-  } catch {
+  } catch (error) {
+    if (DEBUG_REALTIME_EVENTS) {
+      console.warn("[demo-agent] failed to parse livekit data message", error);
+    }
     return undefined;
   }
+}
+
+function summarizeDemoAttachments(attachments: readonly DemoAttachmentData[]): string {
+  if (attachments.length === 0) return "0";
+  return attachments
+    .map((attachment) =>
+      `${attachment.kind}:${attachment.name}:type=${attachment.contentType}:url=${attachment.url ? "yes" : "no"}:dataUrl=${attachment.dataUrl ? `${attachment.dataUrl.length}chars` : "no"}`
+    )
+    .join(",");
 }
 
 function normalizeLiveKitAttachments(value: unknown): DemoAttachmentData[] {
@@ -1021,8 +1061,11 @@ function normalizeLiveKitAttachments(value: unknown): DemoAttachmentData[] {
     const size = typeof record.size === "number" ? record.size : 0;
     const kind = record.kind === "image" ? "image" : "file";
     const url = typeof record.url === "string" && record.url ? record.url : null;
+    const dataUrl = typeof record.dataUrl === "string" && record.dataUrl.startsWith("data:image/")
+      ? record.dataUrl
+      : undefined;
     if (!storageId || !name) continue;
-    attachments.push({ storageId, url, name, contentType, size, kind });
+    attachments.push({ storageId, url, name, contentType, size, kind, ...(dataUrl ? { dataUrl } : {}) });
   }
   return attachments;
 }

@@ -383,6 +383,197 @@ describe("LiveKitRealtimeExecutor", () => {
     });
   });
 
+  it("forwards visible input data URLs as realtime image content", async () => {
+    const session = new FakeSession();
+    const realtimeSession = fakeRawRealtimeSession();
+    const executor = new LiveKitRealtimeExecutor({
+      session,
+      discreteExecutor: fakeDiscreteExecutor(),
+      agent: { _agentActivity: { realtimeLLMSession: realtimeSession } },
+    });
+    const visibleFrame: Frame = {
+      id: "user-image-1",
+      messages: [
+        {
+          type: "user",
+          text: "inspect this",
+          content: [
+            { type: "text", text: "inspect this" },
+            { type: "image", data: "data:image/png;base64,abc123", mediaType: "image/png", label: "image.png" },
+          ],
+        },
+      ],
+    };
+
+    await executor.syncRuntime(syncContext({ visibleFrames: [visibleFrame] }));
+
+    expect(realtimeSession.sendEvents[0]).toMatchObject({
+      type: "conversation.item.create",
+      item: {
+        role: "user",
+        content: [
+          { type: "input_text", text: "inspect this" },
+          { type: "input_image", image_url: "data:image/png;base64,abc123" },
+        ],
+      },
+    });
+  });
+
+  it("renders visible hosted image URLs as text metadata for realtime", async () => {
+    const session = new FakeSession();
+    const realtimeSession = fakeRawRealtimeSession();
+    const executor = new LiveKitRealtimeExecutor({
+      session,
+      discreteExecutor: fakeDiscreteExecutor(),
+      agent: { _agentActivity: { realtimeLLMSession: realtimeSession } },
+    });
+    const visibleFrame: Frame = {
+      id: "user-image-url-1",
+      messages: [
+        {
+          type: "user",
+          text: "inspect this",
+          content: [
+            { type: "text", text: "inspect this" },
+            { type: "image", data: "https://example.test/image.png", mediaType: "image/png", label: "image.png" },
+          ],
+        },
+      ],
+    };
+
+    await executor.syncRuntime(syncContext({ visibleFrames: [visibleFrame] }));
+
+    expect(realtimeSession.sendEvents[0]).toMatchObject({
+      type: "conversation.item.create",
+      item: {
+        role: "user",
+        content: [
+          { type: "input_text", text: "inspect this" },
+          {
+            type: "input_text",
+            text: "[Image content unavailable in LiveKit text prompt: image.png; mediaType=image/png; data=https://example.test/image.png]",
+          },
+        ],
+      },
+    });
+  });
+
+  it("replays missing assistant history before forwarding the next visible input", async () => {
+    const realtimeSession = fakeRawRealtimeSession();
+    const executor = new LiveKitRealtimeExecutor({
+      session: new FakeSession(),
+      discreteExecutor: fakeDiscreteExecutor(),
+      agent: { _agentActivity: { realtimeLLMSession: realtimeSession } },
+    });
+    const firstUser = { id: "user-1", messages: [{ ...textUserMessage("what is in this image?") }] };
+    const assistantTranscript: Frame = {
+      id: "assistant-1",
+      generatorId: REALTIME_GENERATOR_ID,
+      inert: true,
+      messages: [
+        {
+          type: "assistant",
+          text: "It is a screenshot.",
+          content: [{ type: "text", text: "It is a screenshot." }],
+          audience: "self",
+        },
+      ],
+    };
+    const nextUser = {
+      id: "user-2",
+      messages: [{ ...textUserMessage("what did you just say it was?") }],
+    };
+
+    await executor.syncRuntime(syncContext({ visibleFrames: [firstUser] }));
+    realtimeSession.sendEvents.length = 0;
+
+    await executor.syncRuntime(syncContext({
+      inference: inference({
+        history: [
+          firstUser.messages[0]!,
+          assistantTranscript.messages[0]!,
+          nextUser.messages[0]!,
+        ],
+      }),
+      visibleFrames: [nextUser],
+    }));
+
+    expect(realtimeSession.sendEvents.filter((event) => event.type === "conversation.item.create"))
+      .toMatchObject([
+        {
+          item: {
+            role: "assistant",
+            content: [{ type: "output_text", text: "It is a screenshot." }],
+          },
+        },
+        {
+          item: {
+            role: "user",
+            content: [{ type: "input_text", text: "what did you just say it was?" }],
+          },
+        },
+      ]);
+  });
+
+  it("replays missing image history when the realtime chat context lost image parts", async () => {
+    const realtimeSession = fakeRawRealtimeSession();
+    const executor = new LiveKitRealtimeExecutor({
+      session: new FakeSession(),
+      discreteExecutor: fakeDiscreteExecutor(),
+      agent: { _agentActivity: { realtimeLLMSession: realtimeSession } },
+    });
+    const imageUser = {
+      id: "user-image-1",
+      messages: [
+        {
+          type: "user",
+          text: "inspect this",
+          content: [
+            { type: "text", text: "inspect this" },
+            { type: "image", data: "data:image/png;base64,abc123", mediaType: "image/png", label: "image.png" },
+          ],
+        },
+      ],
+    } satisfies Frame;
+    const nextUser = {
+      id: "user-image-2",
+      messages: [{ ...textUserMessage("can you see the uploaded image?") }],
+    };
+
+    await executor.syncRuntime(syncContext({ visibleFrames: [imageUser] }));
+    realtimeSession.chatCtx.items = [];
+    realtimeSession.sendEvents.length = 0;
+
+    await executor.syncRuntime(syncContext({
+      inference: inference({
+        history: [
+          imageUser.messages[0]!,
+          nextUser.messages[0]!,
+        ],
+      }),
+      visibleFrames: [nextUser],
+    }));
+
+    expect(realtimeSession.sendEvents.filter((event) => event.type === "conversation.item.create"))
+      .toMatchObject([
+        {
+          item: {
+            role: "user",
+            content: [
+              { type: "input_text", text: "inspect this" },
+              { type: "input_image", image_url: "data:image/png;base64,abc123" },
+            ],
+          },
+        },
+        {
+          item: {
+            role: "user",
+            content: [{ type: "input_text", text: "can you see the uploaded image?" }],
+          },
+        },
+      ]);
+  });
+
   it("deletes the previous dynamic realtime item after the replacement is acknowledged", async () => {
     const realtimeSession = fakeRawRealtimeSession();
     const executor = new LiveKitRealtimeExecutor({
