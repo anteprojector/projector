@@ -6,6 +6,15 @@ export type DemoClientSnapshot = MachineClientSnapshot<DemoClientInstance | null
   projectionTree?: CompiledProjectionTree;
 };
 
+export type DemoAttachment = {
+  storageId: string;
+  url: string | null;
+  name: string;
+  contentType: string;
+  size: number;
+  kind: "image" | "file";
+};
+
 export type DemoMessage = {
   _id: string;
   role: "user" | "assistant";
@@ -13,4 +22,5 @@ export type DemoMessage = {
   createdAt: number;
   frameId: string;
   mode?: "text" | "voice";
+  attachments?: DemoAttachment[];
 };

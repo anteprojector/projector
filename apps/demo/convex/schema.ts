@@ -47,6 +47,13 @@ export default defineSchema({
     frameId: v.id("frames"),
     role: v.union(v.literal("user"), v.literal("assistant")),
     content: v.string(),
+    attachments: v.optional(v.array(v.object({
+      storageId: v.id("_storage"),
+      name: v.string(),
+      contentType: v.string(),
+      size: v.number(),
+      kind: v.union(v.literal("image"), v.literal("file")),
+    }))),
     createdAt: v.number(),
     // Voice mode fields
     mode: v.optional(v.union(v.literal("text"), v.literal("voice"))),

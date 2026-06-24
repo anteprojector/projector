@@ -776,6 +776,60 @@ describe("LiveKitRealtimeExecutor", () => {
     });
   });
 
+  it("enqueues parsed LiveKit data message frame drafts", async () => {
+    const session = new FakeSession();
+    const room = new FakeRoom();
+    const frames: FrameDraft[] = [];
+    const executor = new LiveKitRealtimeExecutor({
+      session,
+      room,
+      discreteExecutor: fakeDiscreteExecutor(),
+      input: {
+        messageTopic: "demo.message.v1",
+        parseDataMessage: () => ({
+          metadata: { mode: "text", transport: "livekit" },
+          messages: [
+            {
+              type: "user",
+              content: [
+                { type: "text", text: "inspect this" },
+                { type: "image", data: "https://example.test/image.png", mediaType: "image/png", label: "image.png" },
+              ],
+              text: "inspect this",
+              audience: "broadcast",
+              source: { external: true, transport: "livekit" },
+            } as any,
+          ],
+        }),
+      },
+    });
+    await executor.syncRuntime(syncContext({}, frames));
+
+    room.emit(
+      "data_received",
+      new TextEncoder().encode(JSON.stringify({ content: "ignored" })),
+      undefined,
+      undefined,
+      "demo.message.v1",
+    );
+    await flushPromises();
+
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({
+      metadata: { mode: "text", transport: "livekit" },
+      messages: [
+        {
+          type: "user",
+          text: "inspect this",
+          content: [
+            { type: "text", text: "inspect this" },
+            { type: "image", data: "https://example.test/image.png", mediaType: "image/png", label: "image.png" },
+          ],
+        },
+      ],
+    });
+  });
+
   it("emits assistant transcription output out-of-band and only enqueues the complete assistant frame", async () => {
     const originalOutput = new FakeTextOutput();
     const session = new FakeSession(originalOutput);

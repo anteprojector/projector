@@ -20,9 +20,17 @@ import {
   runMachine,
   type Executor,
   type Frame,
+  type FrameDraft,
   syncMachineRuntime,
 } from "@projectors/core";
 import type { ClientMachineMessage } from "@projectors/core/client";
+import {
+  attachmentSummary,
+  storedAttachmentsFromContentParts,
+  userContentPartsForAttachments,
+  type DemoAttachmentData,
+  type StoredDemoAttachmentData,
+} from "./attachments.js";
 import {
   createDemoCharter,
   getAgentControlsState,
@@ -228,6 +236,7 @@ export default defineAgent({
       const addDemoMessage = (args: {
         role: "user" | "assistant";
         content: string;
+        attachments?: StoredDemoAttachmentData[];
         frameId?: Id<"frames">;
         mode: "text" | "voice";
         idempotencyKey?: string;
@@ -299,7 +308,7 @@ export default defineAgent({
         realtime: { enabled: () => shouldUseRealtime() },
         input: {
           messageTopic: MESSAGE_TOPIC,
-          parseDataMessage: (payload) => parseLiveKitTextMessage(payload),
+          parseDataMessage: (payload) => parseLiveKitDemoMessage(payload),
         },
         eventNames: {
           dataReceived: RoomEvent.DataReceived as string,
@@ -334,9 +343,11 @@ export default defineAgent({
           const text = typeof message.text === "string" ? message.text : "";
           if (message.type === "user" && text.trim()) {
             const streamState = normalizeStreamState(message.streamState);
+            const attachments = storedAttachmentsFromContentParts(message.content);
             await addDemoMessage({
               role: "user",
               content: text,
+              ...(attachments.length ? { attachments } : {}),
               frameId,
               mode,
               idempotencyKey: idempotencyKey("user", message),
@@ -969,13 +980,51 @@ function assertEnv(name: string): void {
   }
 }
 
-function parseLiveKitTextMessage(payload: Uint8Array): string | undefined {
+function parseLiveKitDemoMessage(payload: Uint8Array): string | FrameDraft<any> | undefined {
   try {
-    const parsed = JSON.parse(new TextDecoder().decode(payload)) as { content?: unknown };
-    return typeof parsed.content === "string" && parsed.content.trim() ? parsed.content.trim() : undefined;
+    const parsed = JSON.parse(new TextDecoder().decode(payload)) as {
+      content?: unknown;
+      attachments?: unknown;
+    };
+    const content = typeof parsed.content === "string" ? parsed.content.trim() : "";
+    const attachments = normalizeLiveKitAttachments(parsed.attachments);
+    if (!content && attachments.length === 0) return undefined;
+    const text = content || attachmentSummary(attachments);
+    return {
+      metadata: { mode: "text", transport: "livekit" },
+      messages: [
+        {
+          type: "user",
+          content: userContentPartsForAttachments(content, attachments),
+          text,
+          audience: "broadcast",
+          source: { external: true, transport: "livekit" },
+        },
+      ],
+    };
   } catch {
     return undefined;
   }
+}
+
+function normalizeLiveKitAttachments(value: unknown): DemoAttachmentData[] {
+  if (!Array.isArray(value)) return [];
+  const attachments: DemoAttachmentData[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    const storageId = typeof record.storageId === "string" ? record.storageId : "";
+    const name = typeof record.name === "string" ? record.name : "";
+    const contentType = typeof record.contentType === "string" && record.contentType
+      ? record.contentType
+      : "application/octet-stream";
+    const size = typeof record.size === "number" ? record.size : 0;
+    const kind = record.kind === "image" ? "image" : "file";
+    const url = typeof record.url === "string" && record.url ? record.url : null;
+    if (!storageId || !name) continue;
+    attachments.push({ storageId, url, name, contentType, size, kind });
+  }
+  return attachments;
 }
 
 function parseCommandRpcPayload(payload: string): {

@@ -908,15 +908,14 @@ export class LiveKitRealtimeConnection<TDataContent = never> {
       const input = this.executor.config.input;
       if (!input?.parseDataMessage) return;
       if (input.messageTopic && parsedTopic && parsedTopic !== input.messageTopic) return;
-      const text = input.parseDataMessage(payload, {
+      const parsed = input.parseDataMessage(payload, {
         participant,
         kind,
         topic: parsedTopic,
       });
-      if (!text) return;
-      const trimmed = text.trim();
-      if (!trimmed) return;
-      this.enqueueExternalUserMessage(trimmed).catch((error) => {
+      const frame = normalizeExternalUserFrame(parsed);
+      if (!frame) return;
+      this.enqueueExternalUserFrame(frame).catch((error) => {
         this.executor.log("Failed to enqueue LiveKit data message", error);
       });
     };
@@ -963,19 +962,8 @@ export class LiveKitRealtimeConnection<TDataContent = never> {
     this.handlers.push({ target: "room", event, handler });
   }
 
-  private async enqueueExternalUserMessage(text: string): Promise<Frame<TDataContent>> {
-    return this.enqueueFrame({
-      metadata: { mode: "text", transport: "livekit" },
-      messages: [
-        {
-          type: "user",
-          content: [textContent(text)],
-          text,
-          audience: "broadcast",
-          source: { external: true, transport: "livekit" },
-        } satisfies FrameMessage<TDataContent>,
-      ],
-    });
+  private async enqueueExternalUserFrame(frame: FrameDraft<TDataContent>): Promise<Frame<TDataContent>> {
+    return this.enqueueFrame(frame);
   }
 
   private enqueueFrame(frame: FrameDraft<TDataContent>): Frame<TDataContent> {
@@ -985,6 +973,27 @@ export class LiveKitRealtimeConnection<TDataContent = never> {
     }
     return result;
   }
+}
+
+function normalizeExternalUserFrame<TDataContent>(
+  parsed: string | FrameDraft<TDataContent> | undefined,
+): FrameDraft<TDataContent> | undefined {
+  if (!parsed) return undefined;
+  if (typeof parsed !== "string") return parsed;
+  const trimmed = parsed.trim();
+  if (!trimmed) return undefined;
+  return {
+    metadata: { mode: "text", transport: "livekit" },
+    messages: [
+      {
+        type: "user",
+        content: [textContent(trimmed)],
+        text: trimmed,
+        audience: "broadcast",
+        source: { external: true, transport: "livekit" },
+      } satisfies FrameMessage<TDataContent>,
+    ],
+  };
 }
 
 class AssistantTranscriptStream<TDataContent> {

@@ -1,12 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useAction, useMutation, useQuery } from "convex/react";
+import { useAction, useConvex, useMutation, useQuery } from "convex/react";
 import { useAtom, useAtomValue } from "jotai";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { LocalVideoTrack } from "livekit-client";
 import type { ClientMachineMessage } from "@projectors/core/client";
+import {
+  attachmentKind,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  normalizeFileContentType,
+} from "@/src/attachments";
 import {
   activeAgentTabAtom,
   inputAtom,
@@ -18,7 +24,7 @@ import {
 } from "@/src/atoms";
 import { useKeyboardFocus, useSessionId } from "@/src/hooks";
 import { ProjectorProvider, useProjector } from "@/src/projector/ProjectorProvider";
-import type { DemoClientInstance, DemoClientSnapshot, DemoMessage } from "@/src/types/display";
+import type { DemoAttachment, DemoClientInstance, DemoClientSnapshot, DemoMessage } from "@/src/types/display";
 import { LiveVoiceClient } from "@/src/voice/LiveVoiceClient";
 import { TerminalPane } from "./components/terminal/TerminalPane";
 import { AgentPane } from "./components/agent/AgentPane";
@@ -28,6 +34,12 @@ export function HomeClient({ initialSessionId }: { initialSessionId: Id<"session
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const createSession = useAction(api.sessionActions.createSession);
   const sendMessage = useAction(api.sessionActions.sendMessage);
+  const generateAttachmentUploadUrl = useMutation(api.attachments.generateUploadUrl);
+  const convex = useConvex();
+  const resolveAttachmentUrls = useCallback(
+    (args: { attachments: StoredAttachmentInput[] }) => convex.query(api.attachments.resolveUrls, args),
+    [convex],
+  );
   const sendClientMessageToConvex = useAction(api.sessionActions.sendClientMessage);
   const ensureAgentDispatched = useAction(api.livekitAgentActions.ensureAgentDispatched);
   const cloneFromFrame = useMutation(api.sessions.cloneFromFrame);
@@ -113,6 +125,8 @@ export function HomeClient({ initialSessionId }: { initialSessionId: Id<"session
         setSessionId={setSessionId}
         createSession={createSession}
         sendMessage={sendMessage}
+        generateAttachmentUploadUrl={generateAttachmentUploadUrl}
+        resolveAttachmentUrls={resolveAttachmentUrls}
         cloneFromFrame={cloneFromFrame}
         ensureAgentDispatched={ensureAgentDispatched}
         serverMessages={serverMessages}
@@ -134,6 +148,8 @@ function HomeClientContent({
   setSessionId,
   createSession,
   sendMessage,
+  generateAttachmentUploadUrl,
+  resolveAttachmentUrls,
   cloneFromFrame,
   ensureAgentDispatched,
   serverMessages,
@@ -149,7 +165,9 @@ function HomeClientContent({
   sessionId: Id<"sessions"> | null;
   setSessionId: (id: Id<"sessions"> | null) => void;
   createSession: () => Promise<Id<"sessions">>;
-  sendMessage: (args: { sessionId: Id<"sessions">; content: string }) => Promise<unknown>;
+  sendMessage: (args: { sessionId: Id<"sessions">; content: string; attachments?: StoredAttachmentInput[] }) => Promise<unknown>;
+  generateAttachmentUploadUrl: () => Promise<string>;
+  resolveAttachmentUrls: (args: { attachments: StoredAttachmentInput[] }) => Promise<DemoAttachment[]>;
   cloneFromFrame: (args: {
     sourceSessionId: Id<"sessions">;
     targetFrameId: Id<"frames">;
@@ -181,11 +199,15 @@ function HomeClientContent({
   const [isLoading, setIsLoading] = useAtom(isLoadingAtom);
   const [messageTransport, setMessageTransport] = useAtom(messageTransportAtom);
   const [voiceStatus, setVoiceStatus] = useState<{ status: string; detail?: string }>({ status: "idle" });
-  const [sendLiveKitMessage, setSendLiveKitMessage] = useState<((content: string) => Promise<void>) | null>(null);
+  const [sendLiveKitMessage, setSendLiveKitMessage] = useState<((message: { content: string; attachments: DemoAttachment[] }) => Promise<void>) | null>(null);
   const [localCameraTrack, setLocalCameraTrack] = useState<LocalVideoTrack | null>(null);
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const [attachmentsUploading, setAttachmentsUploading] = useState(false);
+  const pendingAttachmentsRef = useRef<PendingAttachment[]>([]);
   const [agentDocked, setAgentDocked] = useState(false);
   const [agentVisible, setAgentVisible] = useState(true);
   const [statusClock, setStatusClock] = useState(() => Date.now());
+  const [messageHistoryCursor, setMessageHistoryCursor] = useState<number | null>(null);
   const scanlinesEnabled = useAtomValue(scanlinesEnabledAtom);
   const activeTab = useAtomValue(activeAgentTabAtom);
   const { instances: clientInstances, snapshot } = useProjector();
@@ -200,11 +222,121 @@ function HomeClientContent({
     setAgentVisible((visible) => !visible);
   }, []);
   useKeyboardFocus(terminalRef, agentRef, toggleAgentVisible);
-  const messages = ((serverMessages ?? []) as DemoMessage[]).slice().sort((a, b) => a.createdAt - b.createdAt);
+  const sortedMessages = ((serverMessages ?? []) as DemoMessage[])
+    .slice()
+    .sort((a, b) => a.createdAt - b.createdAt);
+  const messages = sortedMessages.filter(
+    (message) => messageHistoryCursor === null || message.createdAt > messageHistoryCursor,
+  );
+
+  useEffect(() => {
+    setMessageHistoryCursor(null);
+  }, [sessionId]);
+
+  useEffect(() => {
+    pendingAttachmentsRef.current = pendingAttachments;
+  }, [pendingAttachments]);
+
+  useEffect(() => {
+    return () => {
+      for (const attachment of pendingAttachmentsRef.current) {
+        if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+      }
+    };
+  }, []);
+
+  const handleAttachmentFiles = useCallback(
+    async (files: File[]) => {
+      if (attachmentsUploading) return;
+      const uploadableFiles = files.filter((file) => file.size > 0);
+      if (uploadableFiles.length === 0) return;
+      if (pendingAttachments.length + uploadableFiles.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+        onConnectionErrorChange(`Attach up to ${MAX_ATTACHMENTS_PER_MESSAGE} files per message`);
+        return;
+      }
+      const oversized = uploadableFiles.find((file) => file.size > MAX_ATTACHMENT_BYTES);
+      if (oversized) {
+        onConnectionErrorChange(`${oversized.name} is larger than 25 MB`);
+        return;
+      }
+
+      setAttachmentsUploading(true);
+      const previewUrls: string[] = [];
+      try {
+        const uploaded = await Promise.all(
+          uploadableFiles.map(async (file): Promise<PendingAttachment> => {
+            const contentType = normalizeFileContentType(file);
+            const kind = attachmentKind(contentType);
+            const previewUrl = kind === "image" ? URL.createObjectURL(file) : undefined;
+            if (previewUrl) previewUrls.push(previewUrl);
+            const uploadUrl = await generateAttachmentUploadUrl();
+            const response = await fetch(uploadUrl, {
+              method: "POST",
+              headers: { "Content-Type": contentType },
+              body: file,
+            });
+            if (!response.ok) {
+              throw new Error(`Upload failed for ${file.name}`);
+            }
+            const { storageId } = await response.json() as { storageId?: string };
+            if (!storageId) {
+              throw new Error(`Upload did not return a storage id for ${file.name}`);
+            }
+            return {
+              storageId: storageId as Id<"_storage">,
+              url: null,
+              name: file.name,
+              contentType,
+              size: file.size,
+              kind,
+              previewUrl,
+            };
+          }),
+        );
+        const resolved = await resolveAttachmentUrls({
+          attachments: uploaded.map(toStoredAttachmentInput),
+        });
+        const previewUrlByStorageId = new Map(uploaded.map((attachment) => [attachment.storageId, attachment.previewUrl]));
+        setPendingAttachments((attachments) => [
+          ...attachments,
+          ...resolved.map((attachment) => ({
+            ...attachment,
+            previewUrl: previewUrlByStorageId.get(attachment.storageId),
+          })),
+        ]);
+        onConnectionErrorChange(null);
+      } catch (error) {
+        for (const previewUrl of previewUrls) URL.revokeObjectURL(previewUrl);
+        onConnectionErrorChange(error instanceof Error ? error.message : "Unable to upload attachment");
+      } finally {
+        setAttachmentsUploading(false);
+      }
+    },
+    [attachmentsUploading, generateAttachmentUploadUrl, onConnectionErrorChange, pendingAttachments.length, resolveAttachmentUrls],
+  );
+
+  const handleRemoveAttachment = useCallback((storageId: string) => {
+    setPendingAttachments((attachments) => {
+      const removed = attachments.find((attachment) => attachment.storageId === storageId);
+      if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
+      return attachments.filter((attachment) => attachment.storageId !== storageId);
+    });
+  }, []);
+
+  const clearPendingAttachments = useCallback(() => {
+    setPendingAttachments((attachments) => {
+      for (const attachment of attachments) {
+        if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+      }
+      return [];
+    });
+  }, []);
 
   const handleSend = useCallback(async () => {
     const content = input.trim();
-    if (!content || !sessionId || isLoading || isTimeTraveling) return;
+    const liveKitAttachments = pendingAttachments.map(({ previewUrl: _previewUrl, ...attachment }) => attachment);
+    const storedAttachments = pendingAttachments.map(toStoredAttachmentInput);
+    if ((!content && liveKitAttachments.length === 0) || !sessionId || isLoading || isTimeTraveling || attachmentsUploading) return;
 
     if (messageTransport === "livekit" && !sendLiveKitMessage) {
       onConnectionErrorChange("LiveKit agent is not ready");
@@ -217,10 +349,11 @@ function HomeClientContent({
     try {
       if (messageTransport === "livekit") {
         if (!liveKitSender) throw new Error("LiveKit agent is not ready");
-        await liveKitSender(content);
+        await liveKitSender({ content, attachments: liveKitAttachments });
       } else {
-        await sendMessage({ sessionId, content });
+        await sendMessage({ sessionId, content, attachments: storedAttachments });
       }
+      clearPendingAttachments();
       onConnectionErrorChange(null);
     } catch (error) {
       onConnectionErrorChange(error instanceof Error ? error.message : "Unable to send message");
@@ -229,9 +362,12 @@ function HomeClientContent({
     }
   }, [
     input,
+    attachmentsUploading,
+    clearPendingAttachments,
     isLoading,
     messageTransport,
     onConnectionErrorChange,
+    pendingAttachments,
     sendLiveKitMessage,
     sendMessage,
     sessionId,
@@ -294,7 +430,7 @@ function HomeClientContent({
     setVoiceStatus({ status, detail });
   }, []);
 
-  const handleLiveKitSenderChange = useCallback((sender: ((content: string) => Promise<void>) | null) => {
+  const handleLiveKitSenderChange = useCallback((sender: ((message: { content: string; attachments: DemoAttachment[] }) => Promise<void>) | null) => {
     setSendLiveKitMessage(sender ? () => sender : null);
     if (sender) {
       onConnectionErrorChange(null);
@@ -350,6 +486,17 @@ function HomeClientContent({
     }
   }, [agentDocked, agentVisible]);
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!event.metaKey || event.key.toLowerCase() !== "k") return;
+      event.preventDefault();
+      setMessageHistoryCursor((cursor) => messages.at(-1)?.createdAt ?? cursor);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [messages]);
+
   const agentPane = (
     <AgentPane
       ref={agentRef}
@@ -381,7 +528,11 @@ function HomeClientContent({
           ref={terminalRef}
           messages={messages}
           input={input}
+          attachments={pendingAttachments}
+          attachmentsUploading={attachmentsUploading}
           onInputChange={setInput}
+          onAttachmentFiles={handleAttachmentFiles}
+          onRemoveAttachment={handleRemoveAttachment}
           onSend={handleSend}
           onForkSession={handleForkSession}
           onReturnToLatest={handleReturnToLatest}
@@ -390,6 +541,10 @@ function HomeClientContent({
           timeTravelFrameId={timeTravelFrameId}
           connectionError={connectionError}
           voiceStatus={voiceStatus}
+          messageTransport={messageTransport}
+          liveKitEnabled={liveKitEnabled}
+          liveKitReady={Boolean(sendLiveKitMessage) && liveKitWorkerReady}
+          liveKitStatus={combinedLiveKitStatus}
           localCameraTrack={localCameraTrack}
         />
         {!agentDocked && agentVisible && agentPane}
@@ -419,6 +574,24 @@ function HomeClientContent({
       </div>
     </main>
   );
+}
+
+type PendingAttachment = DemoAttachment & {
+  previewUrl?: string;
+};
+
+type StoredAttachmentInput = Omit<DemoAttachment, "url" | "storageId"> & {
+  storageId: Id<"_storage">;
+};
+
+function toStoredAttachmentInput(attachment: DemoAttachment): StoredAttachmentInput {
+  return {
+    storageId: attachment.storageId as Id<"_storage">,
+    name: attachment.name,
+    contentType: attachment.contentType,
+    size: attachment.size,
+    kind: attachment.kind,
+  };
 }
 
 function getAgentControlsState(instances: DemoClientInstance[]) {

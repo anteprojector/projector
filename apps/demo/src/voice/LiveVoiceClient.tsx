@@ -15,9 +15,10 @@ import {
 import type { ClientMachineMessage } from "@projectors/core/client";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import type { DemoAttachment } from "@/src/types/display";
 
 type VoiceStatus = "idle" | "connecting" | "connected" | "disconnected" | "error";
-type SendLiveKitMessage = (content: string) => Promise<void>;
+type SendLiveKitMessage = (message: { content: string; attachments: DemoAttachment[] }) => Promise<void>;
 type SendLiveKitCommand = (message: ClientMachineMessage) => Promise<unknown>;
 const MESSAGE_TOPIC = "demo.message.v1";
 const COMMAND_RPC_METHOD = "demo.command.v1";
@@ -118,7 +119,7 @@ export function LiveVoiceClient({
       return;
     }
 
-    onSendMessageChange?.(async (content: string) => {
+    onSendMessageChange?.(async ({ content, attachments }) => {
       if (
         roomRef.current !== room ||
         roomSessionIdRef.current !== sessionId ||
@@ -127,7 +128,7 @@ export function LiveVoiceClient({
         onSendMessageChange?.(null);
         throw new Error("LiveKit room changed before the message was sent");
       }
-      const payload = new TextEncoder().encode(JSON.stringify({ content, sentAt: Date.now() }));
+      const payload = new TextEncoder().encode(JSON.stringify({ content, attachments, sentAt: Date.now() }));
       console.info("[demo/livekit] publish text message", {
         topic: MESSAGE_TOPIC,
         participants: [...room.remoteParticipants.values()].map((participant) => participant.identity),
