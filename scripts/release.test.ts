@@ -114,6 +114,9 @@ describe("release flow", () => {
       if (command === "git" && joined === "symbolic-ref --short HEAD") {
         return { status: 0, stdout: "main\n", stderr: "" };
       }
+      if (command === "jj" && joined === "status") {
+        return { status: 1, stdout: "", stderr: "no jj repo" };
+      }
       if (command === "git" && joined === "merge-base --is-ancestor origin/main HEAD") {
         return { status: 0, stdout: "", stderr: "" };
       }
@@ -152,7 +155,10 @@ describe("release flow", () => {
       if (command === "jj" && joined === "log -r conflicts() & @ --no-graph -T commit_id") {
         return { status: 0, stdout: "", stderr: "" };
       }
-      if (command === "git" && joined === "switch main") {
+      if (command === "jj" && joined === "log -r @ & main:: --no-graph -T commit_id") {
+        return { status: 0, stdout: "abc", stderr: "" };
+      }
+      if (command === "git" && joined === "symbolic-ref HEAD refs/heads/main") {
         attached = true;
         return { status: 0, stdout: "", stderr: "" };
       }
@@ -185,13 +191,63 @@ describe("release flow", () => {
 
     expect(calls).toEqual(
       expect.arrayContaining([
-        "jj rebase -r main..@ -d main@origin",
+        "jj log -r @ & main:: --no-graph -T commit_id",
         "jj bookmark move main --to @",
         "jj git export",
-        "git switch main",
+        "git symbolic-ref HEAD refs/heads/main",
+        "git reset",
         "npm pack --dry-run",
       ]),
     );
+  });
+
+  it("moves attached jj main to @ before checking Git cleanliness", async () => {
+    const root = fixtureRepo();
+    const calls: string[] = [];
+    const runner = (command: string, args: string[]) => {
+      calls.push([command, ...args].join(" "));
+      const joined = args.join(" ");
+      if (command === "git" && joined === "symbolic-ref --short HEAD") {
+        return { status: 0, stdout: "main\n", stderr: "" };
+      }
+      if (command === "jj" && joined === "status") {
+        return { status: 0, stdout: "Working copy changes:\n", stderr: "" };
+      }
+      if (command === "jj" && joined === "log -r conflicts() & @ --no-graph -T commit_id") {
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      if (command === "jj" && joined === "log -r @ & main:: --no-graph -T commit_id") {
+        return { status: 0, stdout: "abc", stderr: "" };
+      }
+      if (command === "git" && joined === "merge-base --is-ancestor origin/main HEAD") {
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      if (command === "git" && joined === "status --porcelain") {
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      if (command === "git" && joined.startsWith("rev-parse -q --verify refs/tags/")) {
+        return { status: 1, stdout: "", stderr: "" };
+      }
+      if (command === "git" && joined.startsWith("ls-remote --exit-code --tags origin refs/tags/")) {
+        return { status: 2, stdout: "", stderr: "" };
+      }
+      if (command === "npm" && joined === "view @projectors/core version --json") {
+        return { status: 0, stdout: JSON.stringify("0.0.0"), stderr: "" };
+      }
+      if (command === "npm" && joined === "whoami") {
+        return { status: 0, stdout: "zack\n", stderr: "" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    };
+
+    await runRelease({ cwd: root, dryRun: true, bump: "patch" }, runner, {
+      bump: async () => "patch",
+      preid: async () => "alpha",
+      confirm: async () => true,
+    });
+
+    expect(calls).toEqual(expect.arrayContaining(["jj bookmark move main --to @", "jj git export", "git reset"]));
+    expect(calls).not.toContain("git symbolic-ref HEAD refs/heads/main");
   });
 
   it("dry run verifies and packs without editing package versions", async () => {
@@ -257,6 +313,9 @@ function releaseRunner(calls: string[], state: { published: boolean }) {
 
     if (command === "git" && joined === "symbolic-ref --short HEAD") {
       return { status: 0, stdout: "main\n", stderr: "" };
+    }
+    if (command === "jj" && joined === "status") {
+      return { status: 1, stdout: "", stderr: "no jj repo" };
     }
     if (command === "git" && joined === "merge-base --is-ancestor origin/main HEAD") {
       return { status: 0, stdout: "", stderr: "" };

@@ -23,7 +23,7 @@ Use this skill to release publishable Projectors workspace packages. The human-f
    - dirty Git worktree after jj attach/prep
    - release `HEAD` does not contain `origin/main`
    - npm auth cannot be established
-4. If Git is detached in a jj repo, let `scripts/release.ts` snapshot `@`, rebase `main..@` onto `main@origin`, move the `main` bookmark to `@`, export to Git, and attach Git to `main`. If that rebase produces conflicts, stop and ask the user to resolve them.
+4. If this is a jj repo, let `scripts/release.ts` snapshot `@`, require `@` to descend from `main`, move the `main` bookmark to `@`, export to Git, attach Git to `main` when needed, and refresh the Git index. If `@` has conflicts or is not on top of `main`, stop and ask the user to resolve/rebase explicitly.
 5. If the Git worktree remains dirty after jj attach/prep, summarize changed files and ask the user how to handle them. Do not release from that state.
 6. Run checks before invoking the release script:
    - `bun run typecheck`
@@ -37,7 +37,7 @@ Use this skill to release publishable Projectors workspace packages. The human-f
 ## Release Rules
 
 - Publish every non-private workspace package. Today this is `@projectors/core`.
-- Require attached `main` before npm publish. Detached jj working copies may be attached automatically when `@` can be rebased onto `main@origin` without conflicts.
+- Require attached `main` before npm publish. Detached jj working copies may be attached automatically when `@` descends from `main` and has no conflicts.
 - Require release `HEAD` to contain `origin/main`; local `main` may be ahead when releasing a jj stack.
 - Use unified versions across publishable packages.
 - Use tags named `v<version>`.

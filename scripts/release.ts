@@ -304,19 +304,22 @@ function prepareReleaseCheckout(context: ReleaseContext): string {
     allowFailure: true,
   });
   const branch = branchResult.stdout.trim();
-  if (branch === DEFAULT_BRANCH) {
-    return branch;
-  }
-  if (branchResult.status === 0) {
+
+  if (branchResult.status === 0 && branch !== DEFAULT_BRANCH) {
     fail(context, `Release requires ${DEFAULT_BRANCH}; current branch is ${branch || "<unknown>"}.`);
   }
 
-  if (!hasJjRepository(context)) {
+  const hasJj = hasJjRepository(context);
+  if (hasJj) {
+    if (branchResult.status !== 0) {
+      console.log(`Detached Git checkout detected in a jj repo. Moving ${DEFAULT_BRANCH} to @ and attaching Git.`);
+    } else {
+      console.log(`jj repo detected. Moving ${DEFAULT_BRANCH} to @ before release checks.`);
+    }
+    attachJjWorkingCopyToMain(context, branchResult.status !== 0);
+  } else if (branchResult.status !== 0) {
     fail(context, `Release requires attached ${DEFAULT_BRANCH}; current checkout is detached.`);
   }
-
-  console.log(`Detached Git checkout detected in a jj repo. Moving ${DEFAULT_BRANCH} to @ and attaching Git.`);
-  attachJjWorkingCopyToMain(context);
 
   const attached = context.runner("git", ["symbolic-ref", "--short", "HEAD"], {
     cwd: context.options.cwd,
@@ -337,15 +340,15 @@ function hasJjRepository(context: ReleaseContext): boolean {
   return result.status === 0;
 }
 
-function attachJjWorkingCopyToMain(context: ReleaseContext): void {
+function attachJjWorkingCopyToMain(context: ReleaseContext, attachHead: boolean): void {
   ensureJjConflictFree(context);
-  checkedRun(context, "jj", ["rebase", "-r", `${DEFAULT_BRANCH}..@`, "-d", `${DEFAULT_BRANCH}@${DEFAULT_REMOTE}`], {
-    cwd: context.options.cwd,
-  });
-  ensureJjConflictFree(context);
+  ensureJjWorkingCopyDescendsFromMain(context);
   checkedRun(context, "jj", ["bookmark", "move", DEFAULT_BRANCH, "--to", "@"], { cwd: context.options.cwd });
   checkedRun(context, "jj", ["git", "export"], { cwd: context.options.cwd });
-  checkedRun(context, "git", ["switch", DEFAULT_BRANCH], { cwd: context.options.cwd });
+  if (attachHead) {
+    checkedRun(context, "git", ["symbolic-ref", "HEAD", `refs/heads/${DEFAULT_BRANCH}`], { cwd: context.options.cwd });
+  }
+  checkedRun(context, "git", ["reset"], { cwd: context.options.cwd });
 }
 
 function ensureJjConflictFree(context: ReleaseContext): void {
@@ -354,6 +357,15 @@ function ensureJjConflictFree(context: ReleaseContext): void {
   }).trim();
   if (conflicts.length > 0) {
     fail(context, "jj working copy has conflicts; resolve them before release.");
+  }
+}
+
+function ensureJjWorkingCopyDescendsFromMain(context: ReleaseContext): void {
+  const descendants = capture(context.runner, "jj", ["log", "-r", `@ & ${DEFAULT_BRANCH}::`, "--no-graph", "-T", "commit_id"], {
+    cwd: context.options.cwd,
+  }).trim();
+  if (descendants.length === 0) {
+    fail(context, `jj working copy @ must descend from ${DEFAULT_BRANCH} before release.`);
   }
 }
 
