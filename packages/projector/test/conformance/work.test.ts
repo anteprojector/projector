@@ -30,7 +30,7 @@ describe("conformance: work scheduling", () => {
     });
     const machine = createMachine({
       id: "work-demo",
-      root: { id: "r", isSource: true, node: root },
+      instance: { id: "r", isSource: true, node: root },
       charter: charter({ executor }),
     });
     const userFrame = machine.enqueueFrame({
@@ -101,7 +101,7 @@ describe("conformance: work scheduling", () => {
     });
     const machine = createMachine({
       id: "self-trigger-demo",
-      root: { id: "r", isSource: true, node: root },
+      instance: { id: "r", isSource: true, node: root },
       charter: charter(),
     });
     const assistantFrame = machine.enqueueFrame({
@@ -133,7 +133,7 @@ describe("conformance: work scheduling", () => {
     });
     const machine = createMachine({
       id: "generator-output-demo",
-      root: { id: "r", isSource: true, node: root },
+      instance: { id: "r", isSource: true, node: root },
       charter: charter({ executor }),
     });
     machine.enqueueFrame({ messages: [{ ...textUserMessage("remember my name") }] });
@@ -188,7 +188,7 @@ describe("conformance: work scheduling", () => {
     const root = createNode({ key: "root", members: [generator] });
     const machine = createMachine({
       id: "trigger-demo",
-      root: { id: "r", isSource: true, node: root },
+      instance: { id: "r", isSource: true, node: root },
       charter: charter(),
     });
     machine.enqueueFrame({ messages: [{ ...textUserMessage("visible but wrong trigger") }] });
@@ -217,7 +217,7 @@ describe("conformance: work scheduling", () => {
     } as Frame;
     const machine = createMachine({
       id: "inclusive-cursor-demo",
-      root: { id: "r", isSource: true, node: root },
+      instance: { id: "r", isSource: true, node: root },
       charter: charter(),
       frames: [
         { id: "user-frame", messages: [{ ...textUserMessage("hi") }] },
@@ -252,7 +252,7 @@ describe("conformance: work scheduling", () => {
     });
     const source = createMachine({
       id: "source-session",
-      root: { id: "r", isSource: true, node: root },
+      instance: { id: "r", isSource: true, node: root },
       charter: charter({ executor }),
     });
     source.enqueueFrame({
@@ -263,7 +263,7 @@ describe("conformance: work scheduling", () => {
     await drain(runMachine(source));
     const fork = createMachine({
       id: "forked-session",
-      root: { id: "r", isSource: true, node: root },
+      instance: { id: "r", isSource: true, node: root },
       charter: charter({ executor }),
       frames: source.frames.map((frame) => ({ ...frame, messages: [...frame.messages] })),
     });
@@ -287,7 +287,7 @@ async function activationRuntimeIdsFor(message: FrameMessage): Promise<string[]>
   });
   const machine = createMachine({
     id: "audience-demo",
-    root: { id: "r", isSource: true, node: root },
+    instance: { id: "r", isSource: true, node: root },
     charter: charter(),
   });
   machine.enqueueFrame({ messages: [message] });

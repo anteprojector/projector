@@ -359,6 +359,7 @@ type Instance<TDataContent = never> = {
   id: string;
   node: Node<TDataContent>;
   isSource?: boolean;
+  params?: JsonObject;
   states?: Record<string, StateContainer>;
   children?: Instance<TDataContent>[]; // removable runtime children
 };
@@ -422,6 +423,7 @@ type NodeConfig<TDataContent = never> = {
   key?: string;
   sourceNodeKey?: string;
   name?: string;
+  params?: AnyParamsSchema;
   instructions?: string;
   tools?: ActionConfigEntry[];
   commands?: ActionConfigEntry[];
@@ -436,6 +438,7 @@ type Node<TDataContent = never> = {
   key: string;
   sourceNodeKey?: string;
   name?: string;
+  params: AnyParamsSchema;
   instructions?: string;
   toolBindings: ActionBindings;
   toolRefs: ActionRef[];
@@ -478,6 +481,7 @@ Refs are dry, stable identifiers that hydrate through a compatible charter.
 type Charter<TDataContent = never> = {
   key?: string;
   version?: string;
+  params: AnyParamsSchema;
   executor: Executor<TDataContent>;
   nodes: Record<string, Node<TDataContent>>;
   tools: Record<string, Action>;
@@ -490,6 +494,7 @@ type Charter<TDataContent = never> = {
 type CharterConfig<TDataContent = never> = {
   key?: string;
   version?: string;
+  params?: AnyParamsSchema;
   executor: Executor<TDataContent>;
   nodes: readonly Node<TDataContent>[];
   tools: readonly Action[];
@@ -510,6 +515,121 @@ that need structured content should pass the app-owned data payload type and use
 `createCharter(config)` accepts array inputs for executable registries, validates
 unique names/keys, and normalizes the hydrated charter to record registries for
 field-specific ref lookup.
+
+## Params
+
+Params are the framework's typed environment mechanism. They are separate from
+state: params are supplied by the app at instance boundaries, while state is
+owned and mutated by the machine.
+
+Zod params schemas should stay in the JSON Schema-compatible object subset:
+plain object shapes, shallow top-level keys, and no transforms/refinements as a
+design dependency.
+
+```ts
+type JsonObject = Record<string, unknown>;
+type AnyParamsSchema = z.ZodObject<any>;
+```
+
+`Charter.params` is the external machine-level contract. It is optional in
+`createCharter(config)` and defaults to `z.object({})`.
+
+```ts
+const charter = createCharter({
+  params: z.object({
+    userId: z.string(),
+    orgId: z.string(),
+  }),
+  nodes: [profileNode],
+  // existing charter fields...
+});
+```
+
+`Node.params` is the node-local view over effective params. It is optional in
+`createNode(config)` and defaults to an empty object schema. Nodes do not receive
+the full machine params object; they receive only the keys declared by
+`node.params`.
+
+```ts
+const profileNode = createNode({
+  key: "profile",
+  params: z.object({
+    userId: z.string(),
+  }),
+});
+```
+
+`Action.params` is the action-local view over node params. It is optional in
+`createAction(config)` and defaults to an empty object schema. `ctx.params` in
+an action is typed from `action.params`, not from `node.params`.
+
+```ts
+const loadProfile = createAction({
+  state: null,
+  name: "loadProfile",
+  params: z.object({
+    userId: z.string(),
+  }),
+  run: async (_input, ctx) => {
+    ctx.params.userId;
+  },
+});
+```
+
+Static compatibility is intentionally strict in the first pass:
+
+- `charter.params` must satisfy every registered node's `node.params`;
+- member nodes are included recursively in that type check;
+- `node.params` must satisfy every inline attached action's `action.params`;
+- string action refs are resolved later through the charter, so their params are
+  validated when real params are parsed into action contexts rather than through
+  runtime schema comparison.
+
+The runtime does not compare params schemas to each other. Instead, it parses
+real values at the points where they matter:
+
+- `createRoot(charter, instances, params)` parses `params` with
+  `charter.params`;
+- `createMachine({ charter, instance })` parses the top-level instance's
+  effective params with `charter.params`;
+- node-local behavior parses the effective params through `node.params`;
+- action contexts parse the node-local params through `action.params`.
+
+The resolution chain is:
+
+```txt
+effective params -> node params -> action params
+```
+
+Effective params are formed by walking from the top-level machine instance to
+the current concrete instance and shallowly merging `Instance.params`.
+
+```ts
+function resolveEffectiveParams(instancePath: Instance[]): JsonObject {
+  const result: JsonObject = {};
+
+  for (const instance of instancePath) {
+    if (!instance.params) continue;
+
+    for (const [key, value] of Object.entries(instance.params)) {
+      if (key in result) {
+        throw new Error(`Param override is not supported yet: ${key}`);
+      }
+
+      result[key] = value;
+    }
+  }
+
+  return result;
+}
+```
+
+Params are shallow. There is no deep merge. Any duplicate key along the path is
+an unsupported override and throws, even if the value is identical.
+
+Member nodes do not create params boundaries. Like state and runtime identity,
+members fold into the nearest concrete owner instance. A member's `node.params`
+is a view over the owning concrete instance's effective params.
 
 Refs are compact, plain strings. They are resolved by field context rather than
 by a generic namespaced grammar:
@@ -539,10 +659,12 @@ is future work.
 
 ## Projection Nodes And Runtime Frames
 
-`createRoot(instances: Instance[])` is a helper API for idiomatic application
-composition. It returns a helper root `Instance` with id `"root"` and a hidden
-generator runtime. The id `"root"` is not globally reserved; it is only the id
-this helper chooses for the root instance it creates.
+`createRoot(charter, instances, params)` is a helper API for idiomatic
+application composition. It parses `params` with `charter.params`, then returns
+an ordinary helper `Instance` with id `"root"`, the current synthetic root
+generator node, `params` set to the parsed charter params, and `children` set to
+the supplied instance array. The id `"root"` is not globally reserved; it is
+only the id this helper chooses for the instance it creates.
 
 The helper is especially useful when an app wants to merge multiple independent
 durable instances into one machine tree. A common split is an `agentInstance`
@@ -550,11 +672,13 @@ that owns agent behavior and an independent `threadInstance` that owns
 conversation/thread state:
 
 ```ts
-const root = createRoot([agentInstance, threadInstance]);
+const instance = createRoot(charter, [agentInstance, threadInstance], {
+  userId: "user_123",
+});
 ```
 
-After this normalization there is still no separate wrapper type. Traversal,
-runtime ancestry, projection, and scheduling see the returned root as an
+After this normalization there is still no separate root/wrapper type. Traversal,
+runtime ancestry, projection, and scheduling see the returned value as an
 ordinary instance. State ownership is controlled by source instances:
 `scope: "hoist"` state beneath `agentInstance` targets `agentInstance` when that
 instance is marked `isSource: true`, and `scope: "hoist"` state beneath
@@ -575,7 +699,7 @@ instance.children, left to right
 Example:
 
 ```ts
-createRoot([instanceA, instanceB]);
+createRoot(charter, [instanceA, instanceB], params);
 // root.node.members = []
 // instanceA.node.members = [criticNode]
 // instanceA.children = [instanceFoo, instanceBar]
@@ -973,6 +1097,41 @@ projection compilation validate that the action's declared state is compatible
 with the owner node's state before execution. Stateless actions use
 `state: null` and receive no mutation helpers.
 
+Actions may also declare `params`. Action contexts always include `ctx.params`,
+typed from the action's own params schema. The action does not receive the full
+node params object unless it declares the same keys.
+
+```ts
+type ActionContext<
+  S = undefined,
+  TDataContent = never,
+  TParams extends JsonObject = {},
+> = {
+  params: TParams;
+  getState?: (address: InferenceStateAddress) => unknown;
+  instance: ActionInstanceContext<TDataContent>;
+} & ActionStateContext<S>;
+
+type Action<
+  S = undefined,
+  I = unknown,
+  O = unknown,
+  TName extends string = string,
+  TDataContent = never,
+  TParams extends AnyParamsSchema = AnyParamsSchema,
+> = {
+  state: StateDescriptor<S> | null;
+  params?: TParams;
+  name: TName;
+  description?: string;
+  inputSchema?: z.ZodType<I>;
+  run?: (
+    input: I,
+    ctx: ActionContext<S, TDataContent, z.output<TParams>>,
+  ) => O | Promise<O>;
+};
+```
+
 The singular public API is sugar over the plural keyed runtime model. When
 `ctx.updateState(update)` emits a durable mutation, the mutation must include the
 resolved `stateKey`. Future plural helpers can accept structured `StateAddress`
@@ -1220,6 +1379,7 @@ type SerializedInstance<TDataContent = never> = {
   id: InstanceId;
   node: SerializedNodeRef<TDataContent>;
   isSource?: boolean;
+  params?: JsonObject;
   states?: Record<StateKey, StateContainer>;
   children?: SerializedInstance<TDataContent>[];
 };
@@ -1242,6 +1402,11 @@ type WorkMessage =
       reason: "end-turn" | "done" | "cancelled" | "delegated";
     };
 ```
+
+Frame `spawn` and `transition` messages do not carry params in the first pass.
+Scoped params are represented in the `Instance.params` data model, but public
+spawn/transition helpers do not expose them yet. `attach` can carry params only
+because it mounts already-materialized `SerializedInstance` subtrees.
 
 Frames must be supplied to the runtime in stable durable append order. The
 framework does not require a dense global sequence number. Storage adapters may
@@ -1894,12 +2059,12 @@ not assume a single continuous, well-ordered turn timeline.
 
 The client integration boundary should be a realized public read model, not the
 durable frame log. Applications may keep the frame log private, noisy, or
-server-only. A browser or other client should subscribe to fully realized client
-instances plus small synchronization metadata:
+server-only. A browser or other client should subscribe to a fully realized
+client instance plus small synchronization metadata:
 
 ```ts
-type MachineClientSnapshot<TInstances = unknown> = {
-  instances: TInstances;
+type MachineClientSnapshot<TInstance = unknown> = {
+  instance: TInstance;
   recentCommandResidue: string[];
 };
 ```
@@ -2221,20 +2386,20 @@ substantially, split heavier inspection or form-generation utilities later.
 Serialization means resumability, not just `JSON.stringify` compatibility. A
 resumable machine is reconstructed from two inputs:
 
-- a current, already-materialized root instance snapshot; and
+- a current, already-materialized top-level instance snapshot; and
 - a durable frame log in stable append order.
 
-`createMachine({ root, frames })` treats `root` as the current canonical machine
-view supplied by the host. It preserves `frames` for projection history and work
-reconstruction, but it does not replay historical `InstanceMessage`s into
-`root`. Replaying arbitrary instance mutations into a current snapshot would be
-unsafe because the framework cannot know which mutations are already reflected in
-that snapshot.
+`createMachine({ instance, frames })` treats `instance` as the current canonical
+machine view supplied by the host. It preserves `frames` for projection history
+and work reconstruction, but it does not replay historical `InstanceMessage`s
+into `instance`. Replaying arbitrary instance mutations into a current snapshot
+would be unsafe because the framework cannot know which mutations are already
+reflected in that snapshot.
 
 If an application wants replay-from-initial semantics, it must provide an initial
-root snapshot and a frame log whose instance mutations have not yet been applied,
-or introduce explicit snapshot cursor metadata and replay only frames after that
-cursor. That mode is out of scope for the first pass.
+top-level instance snapshot and a frame log whose instance mutations have not yet
+been applied, or introduce explicit snapshot cursor metadata and replay only
+frames after that cursor. That mode is out of scope for the first pass.
 
 Use these terms consistently:
 
@@ -2311,6 +2476,7 @@ type DryNode<TDataContent = never> = {
   key: string;
   sourceNodeKey?: string;
   name?: string;
+  params?: unknown;
   instructions?: string;
   tools?: Ref[];
   commands?: Ref[];
@@ -2447,6 +2613,13 @@ Add focused tests for:
   virtual projection addresses, duplicate sibling member node keys throw, member
   runtimes create work identities from those addresses, and member state or spawn
   operations resolve to the nearest concrete owner instance.
+- Params behavior: `createRoot(charter, instances, params)` parses and stores
+  charter params on the synthetic top-level instance, `createMachine` validates
+  real top-level params against `charter.params`, effective params shallowly
+  merge down instance paths and reject overrides, node and action contexts see
+  only their declared local param views, and static type tests cover charter to
+  node compatibility including member descendants plus node to action
+  compatibility.
 - State descriptor resolution and conflicts: `hoist` state resolves to the
   nearest source instance, duplicate state keys reuse valid existing
   values, incompatible `scope`, schema, or non-equivalent `init` values throw,
@@ -2517,7 +2690,7 @@ Add focused tests for:
   activation history, and does not invoke enqueue hooks, yield from `runMachine`,
   reconcile activation work, or schedule executors.
 - Client integration smoke coverage, if included in the first implementation
-  pass: client snapshots expose realized instances plus command residue without
+  pass: client snapshots expose a realized instance plus command residue without
   public frame-log synchronization, command and state addresses are stable for
   concrete instances and member projection nodes, recent command residue remains
   machine-level sync metadata, optimistic overlays retire and rebase by residue,

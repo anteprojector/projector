@@ -65,10 +65,14 @@ import type {
   WorkCompletionReason,
 } from "./types.ts";
 import { compileProjection } from "./compile.ts";
+import {
+  resolveActionParamsForBinding,
+  resolveEffectiveParams,
+} from "./params.ts";
 
 export type Machine<TDataContent = never> = {
   id: string;
-  root: Instance<TDataContent>;
+  instance: Instance<TDataContent>;
   charter: Charter<TDataContent>;
   frames: Frame<TDataContent>[];
   enqueueFrame(frame: FrameDraft<TDataContent> | Frame<TDataContent>): Frame<TDataContent>;
@@ -78,7 +82,7 @@ export type Machine<TDataContent = never> = {
 
 export type MachineOptions<TDataContent = never> = {
   id?: string;
-  root: Instance<TDataContent>;
+  instance: Instance<TDataContent>;
   charter: Charter<TDataContent>;
   frames?: Frame<TDataContent>[];
 };
@@ -148,13 +152,13 @@ type HydratableNodeRef<TDataContent> =
 
 export function createMachine<TDataContent = never>({
   id = "machine",
-  root,
+  instance,
   charter,
   frames = [],
 }: MachineOptions<TDataContent>): Machine<TDataContent> {
   const machine: ProjectorMachine<TDataContent> = {
     id,
-    root,
+    instance,
     charter,
     frames: [...frames],
     pendingFrames: [],
@@ -195,9 +199,10 @@ export function createMachine<TDataContent = never>({
       };
     },
   };
-  assertUniqueInstanceIds(machine.root);
-  assertHasSourceInstance(machine.root);
-  validateMachineActionStateCompatibility(machine.root, machine.charter);
+  assertUniqueInstanceIds(machine.instance);
+  assertHasSourceInstance(machine.instance);
+  charter.params.parse(resolveEffectiveParams([machine.instance]));
+  validateMachineActionStateCompatibility(machine.instance, machine.charter);
   return machine;
 }
 
@@ -231,8 +236,8 @@ export async function syncMachineRuntime<TDataContent = never>(
   const syncRuntime = (machine.charter.executor as SyncableExecutor<TDataContent>).syncRuntime;
   if (!syncRuntime) return undefined;
 
-  const generatorId = validateGeneratorId(machine.root, options.generatorId);
-  const inference = compileProjection(machine.root, {
+  const generatorId = validateGeneratorId(machine.instance, options.generatorId);
+  const inference = compileProjection(machine.instance, {
     charter: machine.charter,
     targetGeneratorId: generatorId,
     frameHistory: machine.frames,
@@ -403,7 +408,7 @@ export function collectRunnableActivations<TDataContent = never>(
   const state = foldWork(machine);
   const candidates = [...state.activations.values()]
     .filter((activation) => !state.completions.has(activation.activationId))
-    .filter((activation) => findContributorById(machine.root, activation.generatorId));
+    .filter((activation) => findContributorById(machine.instance, activation.generatorId));
 
   const serialByKey = new Map<string, Activation>();
   const runnable: Activation[] = [];
@@ -431,7 +436,7 @@ export async function runActivation<TDataContent = never>(
   if (!activation) return undefined;
   if (initialState.completions.has(activationId)) return undefined;
 
-  const contributor = findContributorById(machine.root, activation.generatorId);
+  const contributor = findContributorById(machine.instance, activation.generatorId);
   if (!contributor) {
     machine.enqueueFrame(createCompletionFrame({
       activationId,
@@ -446,7 +451,7 @@ export async function runActivation<TDataContent = never>(
     generatorId: activation.generatorId,
     activationId,
   };
-  const inference = compileProjection(machine.root, {
+  const inference = compileProjection(machine.instance, {
     charter: machine.charter,
     targetGeneratorId: activation.generatorId,
     activationId,
@@ -527,7 +532,12 @@ export async function executeCommand<
         machine.enqueueFrame({ messages });
       },
       run: () => {
-        const context = createContributorActionContext(machine, resolved.contributor, {});
+        const context = createContributorActionContext(
+          machine,
+          resolved.contributor,
+          resolved.command,
+          {},
+        );
         return resolved.command.run?.(input as never, context as never);
       },
     });
@@ -563,7 +573,7 @@ function resolveCommand<TDataContent>(
   machine: Machine<TDataContent>,
   message: ActionRequestMessage & { action: "command" },
 ): { command: AnyAction; contributor: Contributor<TDataContent> } | undefined {
-  const contributors = collectContributors(machine.root);
+  const contributors = collectContributors(machine.instance);
   if (message.target) {
     const targetRuntimeId = encodeProjectionAddress(message.target);
     const contributor = contributors.find((candidate) => candidate.id === targetRuntimeId);
@@ -609,12 +619,12 @@ function createMachineActionContext<TDataContent>(
 ): ActionContext<unknown, TDataContent> {
   const binding = getActionBinding(action);
   const contributor = binding
-    ? findContributorById(machine.root, binding.generatorId)
+    ? findContributorById(machine.instance, binding.generatorId)
     : undefined;
   if (!contributor) {
     return createUnboundActionContext(getState);
   }
-  const context = createContributorActionContext(machine, contributor, frameDefaults);
+  const context = createContributorActionContext(machine, contributor, action, frameDefaults);
   if (getState) {
     context.getState = getState;
   }
@@ -633,30 +643,37 @@ function createRetrievableStateGetter<TDataContent>(
     if (!target) {
       throw new Error(`Unknown retrievable state address "${address}"`);
     }
-    return readStateValue(machine.root, target);
+    return readStateValue(machine.instance, target);
   };
 }
 
 function createContributorActionContext<TDataContent>(
   machine: Machine<TDataContent>,
   contributor: Contributor<TDataContent>,
+  action: AnyAction,
   frameDefaults: Partial<Pick<FrameDraft<TDataContent>, "generatorId" | "activationId">>,
 ): ActionContext<unknown, TDataContent> {
   const stateAddress = stateAddressForContributor(contributor);
   const instance = createActionInstanceContext(machine, contributor, frameDefaults);
+  const params = resolveActionParamsForBinding(
+    contributor.node,
+    action,
+    resolveEffectiveParams(instancePathForContributor(contributor)),
+  );
   if (!stateAddress) {
-    return { instance };
+    return { params, instance };
   }
 
-  const readState = () => readStateValue(machine.root, stateAddress);
+  const readState = () => readStateValue(machine.instance, stateAddress);
   const context: ActionContext<unknown, TDataContent> = {
+    params,
     instance,
     state: readState(),
     updateState: (updateInput) => {
       const current = readState();
       const update = resolveStateUpdate(current, updateInput);
       const next = applyStateUpdate(current, update);
-      validateStateValue(machine.root, stateAddress, next);
+      validateStateValue(machine.instance, stateAddress, next);
       machine.enqueueFrame({
         ...frameDefaults,
         messages: [
@@ -706,7 +723,7 @@ function createActionInstanceContext<TDataContent>(
     },
     cede: (node) => {
       const messages: InstanceMessage<TDataContent>[] = node
-        ? childInstanceIdsByNodeKey(machine.root, ownerInstanceId, node.key).map((instanceId) => ({
+        ? childInstanceIdsByNodeKey(machine.instance, ownerInstanceId, node.key).map((instanceId) => ({
             type: "instance",
             kind: "remove",
             instanceId,
@@ -744,6 +761,21 @@ function createActionInstanceContext<TDataContent>(
       });
     },
   };
+}
+
+function instancePathForContributor<TDataContent>(
+  contributor: Contributor<TDataContent>,
+): Instance<TDataContent>[] {
+  const reversed: Instance<TDataContent>[] = [];
+  let current: Contributor<TDataContent> | undefined = contributor;
+  while (current) {
+    const instance = current.concreteInstance;
+    if (reversed[reversed.length - 1] !== instance) {
+      reversed.push(instance);
+    }
+    current = current.parent;
+  }
+  return reversed.reverse();
 }
 
 function childInstanceIdsByNodeKey(
@@ -919,11 +951,11 @@ function foldFrameIntoMachine<TDataContent>(
 ): void {
   for (const message of frame.messages) {
     if (isInstanceMessage(message)) {
-      applyInstanceMessage(machine.root, message, machine.charter);
+      applyInstanceMessage(machine.instance, message, machine.charter);
     }
   }
-  assertUniqueInstanceIds(machine.root);
-  validateMachineActionStateCompatibility(machine.root, machine.charter);
+  assertUniqueInstanceIds(machine.instance);
+  validateMachineActionStateCompatibility(machine.instance, machine.charter);
 }
 
 export function applyInstanceMessage<TDataContent>(
@@ -1388,7 +1420,7 @@ function reconcileWorkOnce<TDataContent>(
   for (const activation of state.activations.values()) {
     if (
       !state.completions.has(activation.activationId) &&
-      !findContributorById(machine.root, activation.generatorId)
+      !findContributorById(machine.instance, activation.generatorId)
     ) {
       const frame = machine.enqueueFrame(createCompletionFrame({
         activationId: activation.activationId,
@@ -1491,7 +1523,7 @@ function generatorCandidatesForSource<TDataContent>(
   state: WorkState,
 ): GeneratorCandidate[] {
   const candidates: GeneratorCandidate[] = [];
-  for (const contributor of collectContributors(machine.root)) {
+  for (const contributor of collectContributors(machine.instance)) {
     if (contributor.node.runtime.type !== "generator") {
       continue;
     }
@@ -1543,7 +1575,7 @@ function triggerMatches<TDataContent>(
   if (trigger.type === "parent-activation") {
     return sourceFrame.messages.some((message) =>
       isWorkActivationMessage(message) &&
-      message.generatorId === nearestAncestorGeneratorId(machine.root, generatorId)
+      message.generatorId === nearestAncestorGeneratorId(machine.instance, generatorId)
     );
   }
 
@@ -1551,7 +1583,7 @@ function triggerMatches<TDataContent>(
     return sourceFrame.messages.some((message) => {
       if (!isWorkCompletionMessage(message)) return false;
       const completed = state.activations.get(message.activationId);
-      return completed?.generatorId === nearestAncestorGeneratorId(machine.root, generatorId);
+      return completed?.generatorId === nearestAncestorGeneratorId(machine.instance, generatorId);
     });
   }
 
@@ -1569,7 +1601,7 @@ function foldWork<TDataContent>(machine: Machine<TDataContent>): WorkState {
   machine.frames.forEach((frame, frameIndex) => {
     for (const message of frame.messages) {
       if (isWorkActivationMessage(message) && !activations.has(message.activationId)) {
-        const contributor = findContributorById(machine.root, message.generatorId);
+        const contributor = findContributorById(machine.instance, message.generatorId);
         const runtimeType = contributor?.node.runtime.type;
         if (runtimeType !== "generator") continue;
         activations.set(message.activationId, {

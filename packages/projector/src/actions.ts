@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { assertProjectorIdentifier } from "./identifiers.ts";
+import { emptyParamsSchema, normalizeParamsSchema, type AnyParamsSchema } from "./params.ts";
 import type {
   Action,
   ActionRequestMessage,
@@ -51,34 +52,39 @@ type ActionStateRequirement = StateDescriptor<any> | null;
 
 type ActionConfig<
   TState extends ActionStateRequirement,
+  TParams extends AnyParamsSchema,
   I,
   O,
   TName extends string,
   TDataContent,
 > = {
   state: TState;
+  params?: TParams;
   name: TName;
   description?: string;
-  run?: (input: I, ctx: ActionContext<StateOf<TState>, TDataContent>) => O | Promise<O>;
+  run?: (input: I, ctx: ActionContext<StateOf<TState>, TDataContent, z.output<TParams>>) => O | Promise<O>;
 };
 
 type CreatedAction<
   TState extends ActionStateRequirement,
+  TParams extends AnyParamsSchema,
   I,
   O,
   TName extends string,
   TDataContent,
-> = Action<StateOf<TState>, I, O, TName, TDataContent> & {
+> = Action<StateOf<TState>, I, O, TName, TDataContent, TParams> & {
   state: TState;
+  params: TParams;
 };
 
 type ActionWithSchema<
   TState extends ActionStateRequirement,
+  TParams extends AnyParamsSchema,
   TSchema extends z.ZodType,
   O,
   TName extends string,
   TDataContent,
-> = CreatedAction<TState, InputOf<TSchema>, O, TName, TDataContent> & {
+> = CreatedAction<TState, TParams, InputOf<TSchema>, O, TName, TDataContent> & {
   inputSchema: TSchema;
 };
 
@@ -86,24 +92,27 @@ export function createAction<
   const TName extends string,
   const TState extends ActionStateRequirement,
   const TSchema extends z.ZodType,
+  const TParams extends AnyParamsSchema = typeof emptyParamsSchema,
   O = unknown,
   TDataContent = never,
 >(
-  action: ActionConfig<TState, InputOf<TSchema>, O, TName, TDataContent> & { inputSchema: TSchema },
-): ActionWithSchema<TState, TSchema, O, TName, TDataContent>;
+  action: ActionConfig<TState, TParams, InputOf<TSchema>, O, TName, TDataContent> & { inputSchema: TSchema },
+): ActionWithSchema<TState, TParams, TSchema, O, TName, TDataContent>;
 export function createAction<
   const TName extends string,
   const TState extends ActionStateRequirement,
+  const TParams extends AnyParamsSchema = typeof emptyParamsSchema,
   O = unknown,
   TDataContent = never,
 >(
-  action: ActionConfig<TState, unknown, O, TName, TDataContent>,
-): CreatedAction<TState, unknown, O, TName, TDataContent>;
+  action: ActionConfig<TState, TParams, unknown, O, TName, TDataContent>,
+): CreatedAction<TState, TParams, unknown, O, TName, TDataContent>;
 export function createAction(action: AnyAction): AnyAction {
   assertProjectorIdentifier(action.name, "Action name");
   if (action.state) {
     assertProjectorIdentifier(action.state.key, "State key");
   }
+  action.params = normalizeParamsSchema(action.params);
   return action;
 }
 
@@ -388,6 +397,7 @@ export function createUnboundActionContext<
     throw new Error("Action has no source instance");
   };
   return {
+    params: {},
     ...(getState ? { getState } : {}),
     instance: {
       generatorId: "",

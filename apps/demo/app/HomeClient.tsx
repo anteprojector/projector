@@ -212,7 +212,7 @@ function HomeClientContent({
   const activeTab = useAtomValue(activeAgentTabAtom);
   const { instances: clientInstances, snapshot } = useProjector();
   const isTimeTraveling = Boolean(timeTravelFrameId);
-  const persistedAgentControls = getAgentControlsState(snapshot.root ? [snapshot.root] : []);
+  const persistedAgentControls = getAgentControlsState(snapshot.instance ? [snapshot.instance] : []);
   const persistedVoiceEnabled = Boolean(persistedAgentControls?.liveMode);
   const persistedCameraEnabled = Boolean(persistedAgentControls?.cameraEnabled);
   const activeMessageTransport: MessageTransport = persistedVoiceEnabled ? "livekit" : messageTransport;

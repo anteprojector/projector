@@ -62,7 +62,7 @@ export const sendMessage = action({
       throw new Error("Session not found");
     }
 
-    const rootInstance = hydrateDemoInstance(session.instance);
+    const rootInstance = hydrateDemoInstance(session.instance, sessionId);
     const contextFrames = (await ctx.runQuery(api.sessions.listMachineContextFrames, { sessionId })) as Frame<DemoAttachmentData>[];
     const memoryExecutor = new AiSdkExecutor<DemoAttachmentData>({
       model: aiSdkOpenAI(DISCRETE_MODEL),
@@ -83,7 +83,7 @@ export const sendMessage = action({
     };
     const machine = createMachine<DemoAttachmentData>({
       id: sessionId,
-      root: rootInstance,
+      instance: rootInstance,
       charter: { ...createDemoCharter(), executor },
       frames: contextFrames,
     });
@@ -141,18 +141,18 @@ export const sendClientMessage = action({
       throw new Error("Session not found");
     }
 
-    const rootInstance = hydrateDemoInstance(session.instance);
-    const contextFrames = (await ctx.runQuery(api.sessions.listMachineContextFrames, { sessionId })) as Frame[];
-    const machine = createMachine({
+    const rootInstance = hydrateDemoInstance(session.instance, sessionId);
+    const contextFrames = (await ctx.runQuery(api.sessions.listMachineContextFrames, { sessionId })) as Frame<DemoAttachmentData>[];
+    const machine = createMachine<DemoAttachmentData>({
       id: sessionId,
-      root: rootInstance,
+      instance: rootInstance,
       charter: createDemoCharter(),
       frames: contextFrames,
     });
     const command = message as ClientMachineMessage;
     const result = await executeCommand(machine, command);
 
-    const producedFrames: Frame[] = [];
+    const producedFrames: Frame<DemoAttachmentData>[] = [];
     for await (const frame of runMachine(machine, { scheduleWork: false })) {
       producedFrames.push(frame);
     }
@@ -254,7 +254,7 @@ async function persistClientCommandAssistantMessages(
   }: {
     sessionId: Id<"sessions">;
     message: ClientMachineMessage;
-    frames: Frame[];
+    frames: Frame<DemoAttachmentData>[];
     frameIds: Id<"frames">[];
   },
 ): Promise<void> {

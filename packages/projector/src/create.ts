@@ -12,8 +12,14 @@ import type {
 } from "./types.ts";
 import { defaultProjection, hiddenProjection, isProjectionFunction } from "./projection-functions.ts";
 import { assertProjectorIdentifier } from "./identifiers.ts";
+import {
+  emptyParamsSchema,
+  normalizeParamsSchema,
+  type AnyParamsSchema,
+  type EnsureParamsSatisfy,
+} from "./params.ts";
 
-type InferActions<TConfig, TKey extends "tools" | "commands"> = TConfig extends Record<
+export type InferActions<TConfig, TKey extends "tools" | "commands"> = TConfig extends Record<
   TKey,
   infer TActions extends readonly ActionConfigEntry[]
 >
@@ -34,13 +40,57 @@ type InferState<TConfig> = TConfig extends { state: StateDescriptor<infer S> }
   ? NormalizedStateDescriptor<S>
   : undefined;
 
+type InferParamsSchema<TConfig> = TConfig extends { params: infer TParams extends AnyParamsSchema }
+  ? TParams
+  : typeof emptyParamsSchema;
+
+export type ActionEntryParams<TEntry> = TEntry extends AnyAction<infer TParams>
+  ? TParams
+  : typeof emptyParamsSchema;
+
+export type ValidateAttachedActionParams<TConfig, TKey extends "tools" | "commands"> =
+  [InferActions<TConfig, TKey>[number]] extends [never]
+    ? unknown
+    : InferActions<TConfig, TKey>[number] extends infer TEntry
+      ? TEntry extends string
+        ? unknown
+        : EnsureParamsSatisfy<InferParamsSchema<TConfig>, ActionEntryParams<TEntry>>
+      : unknown;
+
+export type NodeParamsSchemaOf<TNode> =
+  TNode extends Node<any, infer TParams> ? TParams : typeof emptyParamsSchema;
+
+export type NodeMemberParamsSchema<TNode> =
+  TNode extends { __config: infer TConfig }
+    ? TConfig extends { members: readonly (infer TMember)[] }
+      ? NodeParamsSchemaOf<TMember> | NodeMemberParamsSchema<TMember>
+      : never
+    : never;
+
+export type NodeTreeParamsSchema<TNode> =
+  NodeParamsSchemaOf<TNode> | NodeMemberParamsSchema<TNode>;
+
+export type ValidateNodeTreeParams<
+  TSuper extends AnyParamsSchema,
+  TNode,
+> =
+  EnsureParamsSatisfy<TSuper, NodeParamsSchemaOf<TNode>>
+  & (
+    TNode extends { __config: infer TConfig }
+      ? TConfig extends { members: readonly (infer TMember)[] }
+        ? ValidateNodeTreeParams<TSuper, TMember>
+        : unknown
+      : unknown
+  );
+
 export type CreatedNode<
   TDataContent,
   TConfig extends NodeConfig<TDataContent>,
-> = Node<TDataContent> & {
+> = Node<TDataContent, InferParamsSchema<TConfig>> & {
   state: InferState<TConfig>;
   __tools?: InferActionMetas<TConfig, "tools">;
   __commands?: InferActionMetas<TConfig, "commands">;
+  __config: TConfig;
 };
 
 export function normalizeProjection<TDataContent = never>(
@@ -112,7 +162,11 @@ function normalizeProjectionValue<TDataContent = never>(
 export function createNode<
   TDataContent = never,
   const TConfig extends NodeConfig<TDataContent> = NodeConfig<TDataContent>,
->(config: TConfig): CreatedNode<TDataContent, TConfig> {
+>(
+  config: TConfig
+    & ValidateAttachedActionParams<TConfig, "tools">
+    & ValidateAttachedActionParams<TConfig, "commands">,
+): CreatedNode<TDataContent, TConfig> {
   const key = config.key ?? config.name;
   if (!key) {
     throw new Error("Node requires key or name");
@@ -125,6 +179,7 @@ export function createNode<
     key,
     sourceNodeKey: config.sourceNodeKey,
     name: config.name,
+    params: normalizeParamsSchema(config.params),
     instructions: config.instructions,
     toolBindings: tools.bindings,
     toolRefs: tools.refs,

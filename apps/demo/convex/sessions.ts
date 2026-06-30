@@ -38,6 +38,7 @@ import {
   restoreFrame,
 } from "./frameHistory";
 import { listMessagesForSession } from "./messages";
+import type { DemoAttachmentData } from "@projectors/demo-agent/src/attachments.js";
 
 const DISCRETE_MODEL =
   typeof process !== "undefined"
@@ -113,7 +114,7 @@ export const get = query({
     const syncState = restoreConvexJson(
       session.syncState ?? { recentCommandResidue: [] },
     ) as MachineSyncState;
-    const clientSnapshot = createDemoClientSnapshot(instance, syncState);
+    const clientSnapshot = createDemoClientSnapshot(instance, id, syncState);
 
     return {
       sessionId: id,
@@ -200,9 +201,9 @@ type RuntimeInspectionTarget = {
 
 type ObservabilityState = {
   root: ReturnType<typeof hydrateDemoInstance>;
-  charter: Charter;
-  frames: Frame[];
-  executor: Executor;
+  charter: Charter<DemoAttachmentData>;
+  frames: Frame<DemoAttachmentData>[];
+  executor: Executor<DemoAttachmentData>;
   runtimes: RuntimeInspectionTarget[];
 };
 
@@ -218,7 +219,7 @@ async function getObservabilityState(
   const instance = await getInstanceForFramePath(ctx, session, latestFrame._id);
   if (!instance) return null;
 
-  const root = hydrateDemoInstance(instance);
+  const root = hydrateDemoInstance(instance, sessionId);
   const frames = await getMachineContextFrames(ctx, session);
   const executor = createObservabilityExecutor();
   const charter = createDemoCharter({ executor });
@@ -237,10 +238,10 @@ async function getObservabilityState(
 }
 
 function collectRuntimeInspectionTargets(
-  nodes: CompiledContributor[],
+  nodes: CompiledContributor<DemoAttachmentData>[],
 ): RuntimeInspectionTarget[] {
   const targets: RuntimeInspectionTarget[] = [];
-  const visit = (node: CompiledContributor) => {
+  const visit = (node: CompiledContributor<DemoAttachmentData>) => {
     targets.push({
       generatorId: node.id,
       kind: node.kind,
@@ -256,7 +257,7 @@ function collectRuntimeInspectionTargets(
 function compileRuntimeInference(
   state: ObservabilityState,
   runtime: RuntimeInspectionTarget,
-): CompiledInference {
+): CompiledInference<DemoAttachmentData> {
   return compileProjection(state.root, {
     charter: state.charter,
     targetGeneratorId: runtime.generatorId,
@@ -264,12 +265,12 @@ function compileRuntimeInference(
   });
 }
 
-function createObservabilityExecutor(): Executor {
-  const discreteExecutor = new AiSdkExecutor({
+function createObservabilityExecutor(): Executor<DemoAttachmentData> {
+  const discreteExecutor = new AiSdkExecutor<DemoAttachmentData>({
     model: modelRef(DISCRETE_MODEL),
     maxOutputTokens: 4096,
   });
-  const memoryExecutor = new AiSdkExecutor({
+  const memoryExecutor = new AiSdkExecutor<DemoAttachmentData>({
     model: modelRef(DISCRETE_MODEL),
     maxOutputTokens: 1024,
     maxSteps: 3,

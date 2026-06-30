@@ -188,7 +188,7 @@ export const AgentPane = forwardRef<HTMLDivElement, AgentPaneProps>(
           {activeTab === "playground" && (
             <PlaygroundTab
               instances={instances}
-              canonicalInstances={snapshot.root ? [snapshot.root] : []}
+              canonicalInstances={snapshot.instance ? [snapshot.instance] : []}
               effigy={effigy}
               readOnly={readOnly}
             />
@@ -2148,7 +2148,8 @@ function InstanceNode({
   defaultExpanded?: boolean;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
-  const details = instance.states.length + instance.commands.length;
+  const details =
+    instance.states.length + instance.tools.length + instance.commands.length;
   const childCount = instance.members.length + instance.children.length;
 
   return (
@@ -2198,6 +2199,7 @@ function InstanceNode({
             />
           </TreeDisclosure>
           <StateList states={instance.states} />
+          <ActionList title="tools" actions={instance.tools} />
           <ActionList title="commands" actions={instance.commands} />
           {instance.members.length > 0 ? (
             <TreeSection title={`members ${instance.members.length}`}>

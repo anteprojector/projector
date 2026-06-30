@@ -16,7 +16,7 @@ describe("conformance: projected tools", () => {
     });
     const machine = createMachine({
       id: "tools-demo",
-      root: { id: "r", isSource: true, node: root },
+      instance: { id: "r", isSource: true, node: root },
       charter: charter({ executor }),
     });
     machine.enqueueFrame({ messages: [{ ...textUserMessage("search") }] });
@@ -43,7 +43,7 @@ describe("conformance: projected tools", () => {
       runtime: { type: "generator", trigger: { type: "actor-frame" } },
     });
     const machine = createMachine({
-      root: { id: "r", isSource: true, node: root },
+      instance: { id: "r", isSource: true, node: root },
       charter: charter({ executor, nodes: [source], tools: [charterSearch] }),
     });
 
@@ -72,7 +72,7 @@ describe("conformance: projected tools", () => {
       runtime: { type: "generator", trigger: { type: "actor-frame" } },
     });
     const machine = createMachine({
-      root: { id: "r", isSource: true, node: root },
+      instance: { id: "r", isSource: true, node: root },
       charter: charter({ executor, tools: [baseSearch] }),
     });
 
@@ -97,7 +97,7 @@ describe("conformance: projected tools", () => {
       runtime: { type: "generator", trigger: { type: "actor-frame" } },
     });
     const machine = createMachine({
-      root: { id: "r", isSource: true, node: root },
+      instance: { id: "r", isSource: true, node: root },
       charter: charter({ executor, tools: [baseSearch] }),
     });
 

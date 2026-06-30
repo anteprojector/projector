@@ -1672,7 +1672,7 @@ function fakeMachine(frames: FrameDraft[]): RuntimeSyncContext["machine"] {
   const storedFrames: Frame[] = [];
   return {
     id: "machine",
-    root: { id: "root", node: createNode({ key: "root" }) },
+    instance: { id: "root", node: createNode({ key: "root" }) },
     charter: {} as RuntimeSyncContext["machine"]["charter"],
     frames: storedFrames,
     enqueueFrame(frame) {

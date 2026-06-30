@@ -7,7 +7,7 @@ import {
 } from "./actions.ts";
 import {
   collectContributors,
-  createRoot,
+  createRootInstance,
   directContributorChildren,
   findContributorById,
   hoistStateInstance,
@@ -163,7 +163,7 @@ export function compileProjection<TDataContent = never>(
   options: CompileProjectionOptions<TDataContent> = {},
 ): CompiledInference<TDataContent> {
   assertActivationCompileOptions(options);
-  const root = Array.isArray(rootOrInstances) ? createRoot(rootOrInstances) : rootOrInstances;
+  const root = Array.isArray(rootOrInstances) ? createRootInstance(rootOrInstances) : rootOrInstances;
   const states = resolveStates(root);
   const stateByContributor = groupStatesByContributor(states);
   const draft = emptyProjectionIR<TDataContent>();
@@ -205,7 +205,7 @@ export function inspectCompiledProjectionTree<TDataContent = never>(
   rootOrInstances: Instance<TDataContent> | Instance<TDataContent>[],
   options: Omit<CompileProjectionOptions<TDataContent>, "targetGeneratorId"> = {},
 ): CompiledProjectionTree<TDataContent> {
-  const root = Array.isArray(rootOrInstances) ? createRoot(rootOrInstances) : rootOrInstances;
+  const root = Array.isArray(rootOrInstances) ? createRootInstance(rootOrInstances) : rootOrInstances;
   const states = resolveStates(root);
   const stateByContributor = groupStatesByContributor(states);
   const rootContributor = directRootContributor(root);

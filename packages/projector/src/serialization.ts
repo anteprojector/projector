@@ -46,6 +46,7 @@ export function serializeInstance<TDataContent>(
     id: instance.id,
     node: serializeNode(instance.node, charter),
     ...(instance.isSource ? { isSource: true } : {}),
+    ...(instance.params ? { params: structuredClone(instance.params) } : {}),
     states: cloneStates(instance.states),
     children: instance.children?.map((child) => serializeInstance(child, charter)),
   };
@@ -59,6 +60,7 @@ export function hydrateInstance<TDataContent = never>(
     id: serialized.id,
     node: hydrateNode(serialized.node, charter),
     ...(serialized.isSource ? { isSource: true } : {}),
+    ...(serialized.params ? { params: structuredClone(serialized.params) } : {}),
     states: cloneStates(serialized.states),
     children: serialized.children?.map((child) => hydrateInstance(child, charter)),
   };
@@ -78,6 +80,7 @@ export function serializeNode<TDataContent>(
     key: node.key,
     sourceNodeKey,
     name: node.name,
+    params: serializeParams(node.params),
     instructions: node.instructions,
     tools: serializeActionRefs(node.toolRefs, node.toolBindings, charter, "tool", sourceNodeKey),
     commands: serializeActionRefs(
@@ -107,6 +110,7 @@ export function hydrateNode<TDataContent = never>(
     key: serialized.key,
     sourceNodeKey: serialized.sourceNodeKey,
     name: serialized.name,
+    params: serialized.params ? hydrateParams(serialized.params) : undefined,
     instructions: serialized.instructions,
     tools: hydrateActionRefs(serialized.tools, charter, "tool", serialized.sourceNodeKey),
     commands: hydrateActionRefs(
@@ -138,6 +142,14 @@ export function serializeOutputConfig(output: AnyOutputConfig): SerializedOutput
     audience: output.audience,
     schema: output.schema ? z.toJSONSchema(output.schema) : undefined,
   };
+}
+
+function serializeParams(params: Node["params"]): unknown {
+  return z.toJSONSchema(params);
+}
+
+function hydrateParams(params: unknown): Node["params"] {
+  return z.fromJSONSchema(params as Parameters<typeof z.fromJSONSchema>[0]) as Node["params"];
 }
 
 export function hydrateOutputConfig(output: SerializedOutputConfig): AnyOutputConfig {

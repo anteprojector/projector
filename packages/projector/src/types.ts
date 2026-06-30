@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { AnyParamsSchema, JsonObject } from "./params.ts";
 
 export type ProjectionMode = "hidden" | "augment" | "replace";
 
@@ -314,7 +315,9 @@ export type ActionInstanceContext<TDataContent = never> = {
 export type ActionContext<
   S = undefined,
   TDataContent = never,
+  TParams extends JsonObject = {},
 > = {
+  params: TParams;
   getState?: (address: InferenceStateAddress) => unknown;
   instance: ActionInstanceContext<TDataContent>;
 } & ActionStateContext<S>;
@@ -325,16 +328,19 @@ export type Action<
   O = unknown,
   TName extends string = string,
   TDataContent = never,
+  TParams extends AnyParamsSchema = AnyParamsSchema,
 > = {
   state: StateDescriptor<S> | null;
+  params?: TParams;
   name: TName;
   description?: string;
   inputSchema?: z.ZodType<I>;
-  run?: (input: I, ctx: ActionContext<S, TDataContent>) => O | Promise<O>;
+  run?: (input: I, ctx: ActionContext<S, TDataContent, z.output<TParams>>) => O | Promise<O>;
 };
 
-export type AnyAction = {
+export type AnyAction<TParams extends AnyParamsSchema = AnyParamsSchema> = {
   state: StateDescriptor<any> | null;
+  params?: TParams;
   name: string;
   description?: string;
   inputSchema?: z.ZodType<any>;
@@ -349,6 +355,7 @@ export type NodeConfig<TDataContent = never> = {
   key?: string;
   sourceNodeKey?: string;
   name?: string;
+  params?: AnyParamsSchema;
   instructions?: string;
   tools?: ActionConfigEntry[];
   commands?: ActionConfigEntry[];
@@ -359,10 +366,14 @@ export type NodeConfig<TDataContent = never> = {
   runtime?: Runtime<TDataContent>;
 };
 
-export type Node<TDataContent = never> = {
+export type Node<
+  TDataContent = never,
+  TParams extends AnyParamsSchema = AnyParamsSchema,
+> = {
   key: string;
   sourceNodeKey?: string;
   name?: string;
+  params: TParams;
   instructions?: string;
   toolBindings: ActionBindings;
   toolRefs: ActionRef[];
@@ -379,6 +390,7 @@ export type Instance<TDataContent = never> = {
   id: InstanceId;
   node: Node<TDataContent>;
   isSource?: boolean;
+  params?: JsonObject;
   states?: Record<string, StateContainer>;
   children?: Instance<TDataContent>[];
 };
@@ -563,9 +575,13 @@ export type ProjectorExecutor<TDataContent = never> = {
 export type Executor<TDataContent = never> =
   ProjectorExecutor<TDataContent>;
 
-export type Charter<TDataContent = never> = {
+export type Charter<
+  TDataContent = never,
+  TParams extends AnyParamsSchema = AnyParamsSchema,
+> = {
   key?: string;
   version?: string;
+  params: TParams;
   executor: ProjectorExecutor<TDataContent>;
   nodes: Record<string, Node<TDataContent>>;
   tools: Record<string, AnyAction>;
@@ -578,6 +594,7 @@ export type Charter<TDataContent = never> = {
 export type CharterConfig<TDataContent = never> = {
   key?: string;
   version?: string;
+  params?: AnyParamsSchema;
   executor: ProjectorExecutor<TDataContent>;
   nodes: readonly Node<TDataContent>[];
   tools: readonly AnyAction[];
@@ -614,6 +631,7 @@ export type DryNode<TDataContent = never> = {
   key: string;
   sourceNodeKey?: string;
   name?: string;
+  params?: unknown;
   instructions?: string;
   tools?: DryAction[];
   commands?: DryAction[];
@@ -628,6 +646,7 @@ export type SerializedInstance<TDataContent = never> = {
   id: InstanceId;
   node: DryNode<TDataContent> | Ref;
   isSource?: boolean;
+  params?: JsonObject;
   states?: Record<StateKey, StateContainer>;
   children?: SerializedInstance<TDataContent>[];
 };

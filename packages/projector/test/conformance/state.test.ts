@@ -32,7 +32,7 @@ describe("conformance: state access", () => {
     });
     const machine = createMachine({
       id: "local-state-demo",
-      root: { id: "root", isSource: true, node: root, children: [{ id: "child", isSource: true, node: child }] },
+      instance: { id: "root", isSource: true, node: root, children: [{ id: "child", isSource: true, node: child }] },
       charter: charter({ executor }),
     });
     machine.enqueueFrame({ messages: [{ ...textUserMessage("run") }] });
@@ -75,7 +75,7 @@ describe("conformance: state access", () => {
     const rootInstance: Instance = { id: "root", isSource: true, node: root };
     const machine = createMachine({
       id: "hoist-state-demo",
-      root: rootInstance,
+      instance: rootInstance,
       charter: charter({ executor }),
     });
     machine.enqueueFrame({ messages: [{ ...textUserMessage("run") }] });
@@ -106,12 +106,12 @@ describe("conformance: state access", () => {
     });
     const machineA = createMachine({
       id: "root-a-demo",
-      root: { id: "a", isSource: true, node, states: { session: { value: { owner: "a" } } } },
+      instance: { id: "a", isSource: true, node, states: { session: { value: { owner: "a" } } } },
       charter: charter({ executor: first.executor }),
     });
     const machineB = createMachine({
       id: "root-b-demo",
-      root: { id: "b", isSource: true, node, states: { session: { value: { owner: "b" } } } },
+      instance: { id: "b", isSource: true, node, states: { session: { value: { owner: "b" } } } },
       charter: charter({ executor: second.executor }),
     });
     machineA.enqueueFrame({ messages: [{ ...textUserMessage("run") }] });

@@ -222,11 +222,11 @@ export default defineAgent({
       }
       console.log(`[demo-agent] loaded session ${init.sessionId} with ${init.messages.length} messages`);
 
-      let root = hydrateDemoInstance(init.instance);
+      let root = hydrateDemoInstance(init.instance, init.sessionId);
       let referenceFrameId = init.frameId;
       const contextFrames = (await convex.query(api.sessions.listMachineContextFrames, {
         sessionId: init.sessionId,
-      })) as Frame[];
+      })) as Frame<any>[];
       console.log(`[demo-agent] initialized machine with ${contextFrames.length} context frame(s)`);
 
       const isLiveMode = (): boolean => getAgentControlsState(root).liveMode;
@@ -272,14 +272,14 @@ export default defineAgent({
           streamSeq: update.streamSeq,
         });
       };
-      const agentDiscreteExecutor = new AiSdkExecutor({
+      const agentDiscreteExecutor = new AiSdkExecutor<DemoAttachmentData>({
         model: aiSdkOpenAI(DISCRETE_MODEL),
         maxOutputTokens: 4096,
         stream: shouldStreamText,
         providerOptions: OPENAI_NO_REASONING_OPTIONS,
         onStreamUpdate: (update) => persistStreamingMessageUpdate("assistant", "text", update),
       });
-      const memoryExecutor = new AiSdkExecutor({
+      const memoryExecutor = new AiSdkExecutor<DemoAttachmentData>({
         model: aiSdkOpenAI(DISCRETE_MODEL),
         maxOutputTokens: 1024,
         maxSteps: 3,
@@ -287,7 +287,7 @@ export default defineAgent({
       });
       const isMemoryRequest = (request: { inference: { tools: Array<{ name: string }> } }) =>
         request.inference.tools.some((tool) => tool.name === "saveMemories");
-      const discreteExecutor: Executor = {
+      const discreteExecutor: Executor<any> = {
         run: (request) =>
           isMemoryRequest(request)
             ? memoryExecutor.run(request)
@@ -325,10 +325,10 @@ export default defineAgent({
           console.warn("[demo-agent] failed to stop camera sampler", error);
         });
       });
-      const createDemoMachine = (frames: Frame[]) =>
+      const createDemoMachine = (frames: Frame<any>[]) =>
         createMachine({
           id: init.sessionId,
-          root,
+          instance: root,
           charter: createDemoCharter({ executor: liveKitExecutor, cameraSensor }),
           frames,
         });
@@ -336,7 +336,7 @@ export default defineAgent({
       let unsubscribeMachine: (() => void) | undefined;
 
       const persistFrameMessages = async (
-        frame: Frame,
+        frame: Frame<any>,
         frameId: Id<"frames">,
       ) => {
         const mode = frameMessageMode(frame);
@@ -382,11 +382,11 @@ export default defineAgent({
           throw new Error(`No demo session is associated with LiveKit room "${roomName}"`);
         }
 
-        root = hydrateDemoInstance(refreshed.instance);
+        root = hydrateDemoInstance(refreshed.instance, init.sessionId);
         referenceFrameId = refreshed.frameId;
         const refreshedFrames = (await convex.query(api.sessions.listMachineContextFrames, {
           sessionId: init.sessionId,
-        })) as Frame[];
+        })) as Frame<any>[];
 
         unsubscribeMachine?.();
         machine = createDemoMachine(refreshedFrames);
@@ -398,7 +398,7 @@ export default defineAgent({
         console.warn(`[demo-agent] refreshed durable session state after ${reason}`);
       };
 
-      const persistMachineFrame = async (frame: Frame): Promise<Id<"frames"> | undefined> => {
+      const persistMachineFrame = async (frame: Frame<any>): Promise<Id<"frames"> | undefined> => {
         await assertLease();
         let frameId: Id<"frames">;
         try {
@@ -714,11 +714,11 @@ function participantJoinedAtMs(participant: RemoteParticipant): bigint {
   return 0n;
 }
 
-function frameMessageMode(frame: Frame): "text" | "voice" {
+function frameMessageMode(frame: Frame<any>): "text" | "voice" {
   return frame.metadata?.mode === "voice" ? "voice" : "text";
 }
 
-function shouldPersistAssistantMessage(frame: Frame, message: Frame["messages"][number]): boolean {
+function shouldPersistAssistantMessage(frame: Frame<any>, message: Frame<any>["messages"][number]): boolean {
   if (message.audience === "self") return false;
   return !frame.generatorId || frame.generatorId === ROOT_GENERATOR_ID;
 }
