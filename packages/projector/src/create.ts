@@ -93,6 +93,20 @@ export type CreatedNode<
   __config: TConfig;
 };
 
+const NODE_BRAND: unique symbol = Symbol.for("projector.node") as never;
+
+/**
+ * True for hydrated Node objects produced by createNode, as opposed to dry
+ * (serialized) node data or refs.
+ */
+export function isNode<TDataContent = never>(value: unknown): value is Node<TDataContent> {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      (value as { [NODE_BRAND]?: unknown })[NODE_BRAND] === true,
+  );
+}
+
 export function normalizeProjection<TDataContent = never>(
   projection: Projection<TDataContent> | undefined,
 ): Projection<TDataContent> {
@@ -176,6 +190,7 @@ export function createNode<
   const commands = normalizeActionEntries(config.commands ?? []);
 
   return {
+    [NODE_BRAND]: true,
     key,
     sourceNodeKey: config.sourceNodeKey,
     name: config.name,
@@ -190,7 +205,7 @@ export function createNode<
     output: config.output,
     projection: normalizeProjection(config.projection),
     runtime: normalizeRuntime(config.runtime),
-  } as CreatedNode<TDataContent, TConfig>;
+  } as unknown as CreatedNode<TDataContent, TConfig>;
 }
 
 function normalizeActionEntries(entries: readonly ActionConfigEntry[]): {

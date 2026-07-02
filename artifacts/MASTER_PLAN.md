@@ -1017,6 +1017,7 @@ type ExecutorRunRequest<TDataContent = never> = {
   createActionContext?: (action: AnyAction) => ActionContext<unknown, TDataContent>;
   output?: OutputConfig<TDataContent>;
   signal?: AbortSignal;
+  refreshInference?: () => CompiledInference<TDataContent>;
 };
 
 type ExecutorRunResult<TDataContent = never> = {
@@ -1044,6 +1045,18 @@ type Executor<TDataContent = never> = {
   ): ExecutorRealizedPrompt | Promise<ExecutorRealizedPrompt>;
 };
 ```
+
+Multi-step executors should call `refreshInference()` before each inference
+step after the first. It re-projects `CompiledInference` against the current
+frame log under the running activation's normal visibility rules, so
+`delivery: "immediate"` messages that arrived mid-run surface to the model on
+the next step while `delivery: "queued"` messages stay hidden. The re-projected
+history excludes the activation's own frames; the executor re-appends its
+in-flight step messages (tool calls and results from earlier steps of the same
+run) itself. Every frame returned by a refresh is recorded as consumed by the
+activation and its pending work is absorbed on completion; see Mid-Generation
+Messages And Absorption. Executors that never refresh simply answer the initial
+inference, and messages they did not see trigger follow-up work.
 
 When an executor returns `frames`, the framework enqueues them in result order,
 applying the current generator and activation metadata where omitted.
@@ -1571,7 +1584,8 @@ history after it starts:
 
 - `"live"`: default. Each inference frame compiles history from the current frame
   log. Immediate visible messages can steer an already-open activation's next
-  inference frame.
+  inference frame. Executors realize this by calling the run request's
+  `refreshInference()` before each step.
 - `"snapshot"`: the activation is isolated from later external actor messages.
   It sees actor messages that were eligible at activation start, plus actor
   messages produced by that same activation.
@@ -1608,13 +1622,15 @@ work frames. The runtime reconstructs pending work by folding the frame log.
 - `activation` opens a durable unit of work.
 - `completion` closes a durable unit of work.
 
-`completion.reason` records why the activation closed. End-turn, normal
-completion, cancellation, and delegation all mean the current activation is
-closed and should not run again. `delegated` means framework-owned execution for
-the activation was handed to an external runtime or provider, and the framework
-should not expect the executor to emit ordinary completion output for that
-activation. If future blocked/retry behavior is needed, it should be added as a
-separate non-terminal work message with deterministic wake conditions.
+`completion.reason` records why the activation closed. Every reason means the
+activation is closed and should not run again. `delegated` means
+framework-owned execution for the activation was handed to an external runtime
+or provider, and the framework should not expect the executor to emit ordinary
+completion output for that activation. `absorbed` means another same-generator
+generation projected the activation's source frame before this activation ran,
+so its work was completed by that generation instead of a redundant run. If
+future blocked/retry behavior is needed, it should be added as a separate
+non-terminal work message with deterministic wake conditions.
 
 Activation IDs must be deterministic. Activation messages are emitted in their
 own frames, but each activation records the source frame that triggered it. A
@@ -1627,11 +1643,13 @@ activationId = hash(machineId, generatorId, triggerKey, sourceFrameId)
 
 Work frames are appended by framework reconciliation, not by mutating the frame
 that caused the work. Enqueueing a frame assigns its identity and appends it to
-the log. Reconciliation folds the full work log, then evaluates trigger source
-frames from a scheduling suffix. The suffix starts at the latest durable work
-frame, inclusive; if no work frame exists, it starts at the beginning of the
-frame log. Reconciliation appends any missing deterministic activation or
-completion work frames after their source frame has been persisted.
+the log. Reconciliation folds the full work log, then evaluates every durable
+frame as a potential trigger source. A candidate activation is appended only
+when no activation exists for its deterministic ID or generator/source pair and
+no completion exists for that ID; the completion check keeps source frames that
+were absorbed by a running generation from spawning stale activations after the
+fact. Reconciliation appends any missing deterministic activation or completion
+work frames after their source frame has been persisted.
 
 A non-inert frame matching generator runtime triggers will be followed by
 separate activation work frames for those runtimes. Work frames may themselves be
@@ -1644,18 +1662,18 @@ inputs and there is at most one terminal completion for a given activation ID.
 The exact frame IDs may come from storage, but the semantic work identity must be
 stable.
 
-The latest work frame acts as a durable scheduling cursor, but is included in
-the next reconciliation pass so `parent-activation` and `parent-completion`
-follow-up work can be recovered after a crash. Frames before that cursor are not
-searched for additional activation work. Cancellation is separate: open
-activations whose runtime no longer exists may be completed with
-`reason: "cancelled"` regardless of where their activation frame appears in
-history.
+There is no scheduling cursor: reconciliation rescans the full frame log each
+pass, and idempotence comes from deterministic activation IDs plus the
+activation and completion existence checks. This guarantees frames appended
+while a generation is running still receive durable work — either an activation
+frame or an absorbed completion — instead of being silently skipped once a
+later work frame lands. Cancellation is separate: open activations whose
+runtime no longer exists may be completed with `reason: "cancelled"` regardless
+of where their activation frame appears in history.
 
 Reconciliation must also be deterministic:
 
-- Process source frames from the scheduling suffix in stable durable append
-  order.
+- Process source frames in stable durable append order.
 - For each source frame, derive candidate work frames in `ProjectionNode`
   traversal order.
 - Append newly derived activation work frames and schedule runnable executor work
@@ -1675,6 +1693,35 @@ can run pending work directly. Multi-runner systems should dispatch activations
 externally and use their own queue, lease, or partitioning infrastructure. The
 framework exposes deterministic activation IDs and concurrency keys so external
 dispatchers can enforce exclusivity when needed.
+
+### Mid-Generation Messages And Absorption
+
+Messages that arrive while a generation is running always get durable work.
+Whether that work runs as a fresh generation depends on whether an existing
+same-generator generation actually projected the message:
+
+- Every activation records the frames it projected — the initial compile plus
+  every `refreshInference()` call — as consumed, using the same visibility
+  rules as projection compilation. A frame counts as consumed only if at least
+  one of its actor messages survived visibility filtering.
+- When the activation completes, the framework appends `reason: "absorbed"`
+  completion messages, in the same frame as the activation's own completion,
+  for pending same-generator work whose source frame was consumed. Inert
+  frames, the activation's own source frame, self-produced frames, and frames
+  that do not match the generator's trigger are never absorbed.
+- `delivery: "immediate"` messages projected by a live activation are therefore
+  absorbed and do not retrigger. Immediate messages the generation never
+  projected keep their pending work and run as a new generation.
+- `delivery: "queued"` messages are invisible to already-open activations, so
+  they are never consumed mid-run and always produce follow-up work.
+- Cancelled runs absorb nothing, so messages they projected retrigger; this is
+  the crash and cancel recovery path.
+
+Absorption is recorded per absorbed activation as an ordinary singular
+completion message — a completion frame may carry several completion messages —
+so folding, first-completion-wins, and per-activation reasons stay uniform. An
+absorbed completion may precede its activation frame in the log; reconciliation
+then skips creating the activation frame entirely.
 
 ### Generator Discovery And Projection
 
@@ -1813,7 +1860,7 @@ The high-level run algorithm is:
 runMachine(machine, options) creates a MachineRun whose drain loop:
   syncGenerators(machine)
   yield any previously pending frames before using them as trigger sources
-  reconcile deterministic work frames from the scheduling suffix
+  reconcile deterministic work frames from the full frame log
   fold work messages to derive open and completed activations
   identify runnable activations
 
@@ -2667,8 +2714,10 @@ Add focused tests for:
   activations still see actor messages produced by the same activation.
 - Work reconciliation: generator triggers append deterministic
   activation work frames separate from the source frame, activation messages
-  record `sourceFrameId`, reconciliation processes source frames from the latest
-  durable work frame inclusively and derives work in projection traversal order,
+  record `sourceFrameId`, reconciliation rescans the full frame log
+  idempotently and derives work in projection traversal order, immediate
+  messages projected mid-generation via `refreshInference` are absorbed while
+  unseen immediate messages and queued messages produce follow-up generations,
   work-only and instance-only frames do not trigger `actor-frame`,
   nearest-ancestor rules apply to parent activation/completion triggers, a serial
   runtime's own assistant and tool frames derive no new activations for that

@@ -435,9 +435,9 @@ function actorMessageFromUnknown<TDataContent>(
 }
 
 function isCompletionReason(value: unknown): value is CompletionReason {
-  return value === "done" || value === "cancelled" || value === "delegated" || value === "error";
+  return value === "done" || value === "cancelled" || value === "delegated" || value === "error" || value === "terminal-action";
 }
 
 function isWorkCompletionReason(value: unknown): value is WorkCompletionReason {
-  return value === "end-turn" || value === "done" || value === "cancelled" || value === "delegated";
+  return value === "end-turn" || value === "done" || value === "cancelled" || value === "delegated" || value === "terminal-action" || value === "absorbed";
 }

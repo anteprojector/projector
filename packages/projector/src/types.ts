@@ -395,9 +395,9 @@ export type Instance<TDataContent = never> = {
   children?: Instance<TDataContent>[];
 };
 
-export type CompletionReason = "done" | "cancelled" | "delegated" | "error";
+export type CompletionReason = "done" | "cancelled" | "delegated" | "error" | "terminal-action";
 
-export type WorkCompletionReason = "end-turn" | "done" | "cancelled" | "delegated";
+export type WorkCompletionReason = "end-turn" | "done" | "cancelled" | "delegated" | "terminal-action" | "absorbed";
 
 export type WorkActivationMessage = {
   type: "work";
@@ -478,6 +478,7 @@ export type ActionRequestMessage = {
   input: unknown;
   target?: ProjectionAddress;
   callId: string;
+  audience?: Audience;
 };
 
 export type ActionResultMessage<TDataContent = never> = {
@@ -490,7 +491,9 @@ export type ActionResultMessage<TDataContent = never> = {
   success: boolean;
   value?: unknown;
   error?: string;
+  terminal?: boolean;
   outputMessageIndices?: number[];
+  audience?: Audience;
 };
 
 export type ActionMessage<TDataContent = never> =
@@ -498,8 +501,8 @@ export type ActionMessage<TDataContent = never> =
   | ActionResultMessage<TDataContent>;
 
 export type ExecuteActionResult<T = unknown, TDataContent = never> =
-  | { success: true; value?: T; messages?: FrameMessage<TDataContent>[]; callId: string }
-  | { success: false; error: string; value?: T; messages?: FrameMessage<TDataContent>[]; callId: string };
+  | { success: true; value?: T; messages?: FrameMessage<TDataContent>[]; terminal?: boolean; callId: string }
+  | { success: false; error: string; value?: T; messages?: FrameMessage<TDataContent>[]; terminal?: boolean; callId: string };
 
 export type FrameMessage<TDataContent = never> = (
   | ActorMessage<TDataContent>
@@ -545,6 +548,14 @@ export type ExecutorRunRequest<TDataContent = never> = {
   createActionContext?: (action: AnyAction) => ActionContext<unknown, TDataContent>;
   output?: OutputConfig<TDataContent>;
   signal?: AbortSignal;
+  /**
+   * Re-projects the inference against the current frame log (visibility rules
+   * applied, this activation's own frames excluded). Executors that support
+   * multi-step runs should call this before each step; every frame returned by
+   * a refresh is treated as seen by this activation and its pending work is
+   * absorbed on completion.
+   */
+  refreshInference?: () => CompiledInference<TDataContent>;
 };
 
 export type ExecutorRunResult<TDataContent = never> = {

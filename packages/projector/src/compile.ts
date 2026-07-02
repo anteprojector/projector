@@ -22,14 +22,9 @@ import {
 } from "./projection-functions.ts";
 import { encodeProjectionAddress } from "./projection-address.ts";
 import { resolveFrameCommands, resolveFrameTools } from "./scoped-actions.ts";
+import { sourceNodeKeyFor, sourceNodeProjectionSlot } from "./serialization.ts";
 import { resolveStates, type ResolvedState } from "./state.ts";
-import {
-  activationFrameIndexFor,
-  actorMessageVisibleByDelivery,
-  actorMessageVisibleToGenerator,
-  frameVisibleByActivationHistory,
-  isActorMessage,
-} from "./visibility.ts";
+import { visibleFramesForGenerator } from "./visibility.ts";
 import type {
   AnyAction,
   ActivationHistory,
@@ -615,33 +610,7 @@ function visibleHistoryForTarget<TDataContent>(
   }
 
   const rawHistory = options.frameHistory ?? framesFromMessages(options.history ?? [], targetGeneratorId);
-  const activationFrameIndex = activationFrameIndexFor(rawHistory, options.activationId, {
-    requireActivationFrame: options.activationId !== undefined,
-  });
-
-  return rawHistory.flatMap((frame, frameIndex) => {
-    if (!frameVisibleByActivationHistory(
-      frame,
-      frameIndex,
-      activationFrameIndex,
-      runtime,
-      options.activationId,
-    )) {
-      return [];
-    }
-
-    const frameMessages = frame.messages.filter((message) => {
-      if (!isActorMessage(message)) {
-        return true;
-      }
-      return (
-        actorMessageVisibleToGenerator(message, frame, targetGeneratorId) &&
-        actorMessageVisibleByDelivery(message, frameIndex, activationFrameIndex)
-      );
-    });
-
-    return frameMessages.length > 0 ? [{ ...frame, messages: frameMessages }] : [];
-  });
+  return visibleFramesForGenerator(rawHistory, targetGeneratorId, runtime, options.activationId);
 }
 
 function resolveHistoryProjection<TDataContent>(
@@ -850,7 +819,9 @@ function resolveProjectionValue<TDataContent>(
     return projection;
   }
 
-  const sourceProjection = sourceNodeProjectionSlot(node, slot, charter);
+  const sourceProjection = charter
+    ? sourceNodeProjectionSlot(charter, slot, sourceNodeKeyFor(node, charter))
+    : undefined;
   if (sourceProjection?.name === projection) {
     return sourceProjection;
   }
@@ -863,38 +834,6 @@ function resolveProjectionValue<TDataContent>(
     throw new Error(`Unknown projection ref "${projection}"`);
   }
   return fn;
-}
-
-function sourceNodeProjectionSlot<TDataContent>(
-  node: ProjectionContext<TDataContent>["originNode"],
-  slot: "projection" | "boundaryProjection",
-  charter: Charter<TDataContent> | undefined,
-): ProjectionFunction<TDataContent> | undefined {
-  const sourceNode = sourceNodeForProjectionSlot(node, charter);
-  if (!sourceNode) {
-    return undefined;
-  }
-
-  const value = slot === "projection"
-    ? sourceNode.projection
-    : sourceNode.runtime.type === "generator"
-      ? sourceNode.runtime.boundaryProjection
-      : undefined;
-  return isProjectionFunction<TDataContent>(value) ? value : undefined;
-}
-
-function sourceNodeForProjectionSlot<TDataContent>(
-  node: ProjectionContext<TDataContent>["originNode"],
-  charter: Charter<TDataContent> | undefined,
-): ProjectionContext<TDataContent>["originNode"] | undefined {
-  if (!charter) {
-    return undefined;
-  }
-  if (node.sourceNodeKey) {
-    return charter.nodes[node.sourceNodeKey];
-  }
-  const sourceNode = charter.nodes[node.key];
-  return sourceNode && sourceNode !== node ? sourceNode : undefined;
 }
 
 function inspectProjectionPolicy<TDataContent>(

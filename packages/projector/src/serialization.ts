@@ -10,6 +10,7 @@ import {
   isProjectionFunction,
 } from "./projection-functions.ts";
 import { hydrateNodeRef } from "./refs.ts";
+import { actionBinding } from "./scoped-actions.ts";
 import type {
   ActionBindings,
   ActionKind,
@@ -258,7 +259,7 @@ function assertProjectionSlotRef<TDataContent>(
   assertProjectionRef(projection, charter);
 }
 
-function sourceNodeProjectionSlot<TDataContent>(
+export function sourceNodeProjectionSlot<TDataContent>(
   charter: Charter<TDataContent>,
   slot: "projection" | "boundaryProjection",
   sourceNodeKey: string | undefined,
@@ -510,7 +511,7 @@ function serializeActionRef<TDataContent>(
   return key;
 }
 
-function sourceNodeKeyFor<TDataContent>(
+export function sourceNodeKeyFor<TDataContent>(
   node: Node<TDataContent>,
   charter: Pick<Charter<TDataContent>, "nodes">,
 ): string | undefined {
@@ -519,14 +520,6 @@ function sourceNodeKeyFor<TDataContent>(
   }
   const sourceNode = charter.nodes[node.key];
   return sourceNode && sourceNode !== node ? node.key : undefined;
-}
-
-function actionBinding(
-  node: Node<any>,
-  ref: string,
-  kind: ActionKind,
-): AnyAction | undefined {
-  return kind === "tool" ? node.toolBindings[ref] : node.commandBindings[ref];
 }
 
 function isActorHistoryProjection(

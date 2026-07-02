@@ -34,12 +34,14 @@ export type ActionResultEnvelope<T = unknown, TDataContent = never> = (
       success?: true;
       value?: T;
       messages?: FrameMessage<TDataContent>[];
+      terminal?: boolean;
     }
   | {
       success: false;
       error: string;
       value?: T;
       messages?: FrameMessage<TDataContent>[];
+      terminal?: boolean;
     }
 ) & {
   [ACTION_RESULT]: true;
@@ -151,12 +153,14 @@ export function actionResult<T = unknown, TDataContent = never>(
         success?: true;
         value?: T;
         messages?: FrameMessage<TDataContent>[];
+        terminal?: boolean;
       }
     | {
         success: false;
         error: string;
         value?: T;
         messages?: FrameMessage<TDataContent>[];
+        terminal?: boolean;
       },
 ): ActionResultEnvelope<T, TDataContent> {
   return {
@@ -240,25 +244,34 @@ export function createActionResultMessage<TDataContent = never>(
     success: result.success,
     ...("value" in result && result.value !== undefined ? { value: result.value } : {}),
     ...(!result.success ? { error: result.error } : {}),
+    ...(result.terminal ? { terminal: true } : {}),
     ...(options.outputMessageIndices?.length ? { outputMessageIndices: options.outputMessageIndices } : {}),
   };
 }
 
+/**
+ * True when the frame carries more than the action's own request/result
+ * bookkeeping: either a message from outside this action call, or a result
+ * that references appended output messages.
+ */
 export function hasActionOutputMessages<TDataContent = never>(
   messages: readonly FrameMessage<TDataContent>[],
   request: ActionRequestMessage,
 ): boolean {
-  return messages.some((message) =>
-    !(message.type === "action" && message.action === request.action && message.callId === request.callId) ||
-      (
-        message.type === "action" &&
-        message.kind === "result" &&
-        message.action === request.action &&
-        message.callId === request.callId &&
-        Array.isArray(message.outputMessageIndices) &&
-        message.outputMessageIndices.length > 0
-      )
-  );
+  return messages.some((message) => {
+    const belongsToCall =
+      message.type === "action" &&
+      message.action === request.action &&
+      message.callId === request.callId;
+    if (!belongsToCall) {
+      return true;
+    }
+    return (
+      message.kind === "result" &&
+      Array.isArray(message.outputMessageIndices) &&
+      message.outputMessageIndices.length > 0
+    );
+  });
 }
 
 export function createActionTerminalMessages<T, TDataContent>(
@@ -292,6 +305,7 @@ function normalizeActionReturn<T, TDataContent>(
         error: value.error,
         ...(value.value !== undefined ? { value: value.value } : {}),
         ...(value.messages !== undefined ? { messages: value.messages } : {}),
+        ...(value.terminal ? { terminal: true } : {}),
         callId,
       };
     }
@@ -299,6 +313,7 @@ function normalizeActionReturn<T, TDataContent>(
       success: true,
       ...(value.value !== undefined ? { value: value.value } : {}),
       ...(value.messages !== undefined ? { messages: value.messages } : {}),
+      ...(value.terminal ? { terminal: true } : {}),
       callId,
     };
   }
@@ -321,7 +336,7 @@ function actionErrorResult<T, TDataContent>(
   };
 }
 
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+export function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   return Boolean(
     value &&
       (typeof value === "object" || typeof value === "function") &&
