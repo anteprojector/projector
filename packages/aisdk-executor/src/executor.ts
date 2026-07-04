@@ -24,6 +24,7 @@ import type {
   AnyAction,
   CompiledInference,
   ContentPart,
+  ExecutionReport,
   ExecutorRealizedPrompt,
   ExecutorRealizePromptRequest,
   ExecutorRunRequest,
@@ -32,7 +33,7 @@ import type {
   ProjectorExecutor,
 } from "@projectors/core";
 import { z } from "zod";
-import type { AiSdkExecutorConfig, AiSdkStreamUpdate } from "./types.ts";
+import type { AiSdkExecutorConfig, AiSdkExecutorNodeConfig, AiSdkStreamUpdate } from "./types.ts";
 
 const DEFAULT_MAX_STEPS = 5;
 const DYNAMIC_CONTEXT_TAG = "dynamic-context";
@@ -52,10 +53,18 @@ type AiSdkUserContent = string | Array<AiSdkTextPart | AiSdkImagePart>;
 
 type RunState = { terminal: boolean };
 
+const nodeConfigSchema = z.object({
+  maxOutputTokens: z.number().int().positive().optional(),
+  maxSteps: z.number().int().positive().optional(),
+  temperature: z.number().optional(),
+});
+
 export class AiSdkExecutor<
   TDataContent = never,
 > implements ProjectorExecutor<TDataContent> {
   readonly type = "aisdk";
+  readonly identity = { name: "aisdk" };
+  readonly configSchema = nodeConfigSchema;
 
   constructor(readonly config: AiSdkExecutorConfig<TDataContent>) {}
 
@@ -68,6 +77,7 @@ export class AiSdkExecutor<
     const stream = this.config.streamText ?? streamText;
     const runState: RunState = { terminal: false };
     const input = buildAiSdkInput(request, this.config, runState);
+    const startedAt = Date.now();
 
     try {
       if (shouldStream(this.config.stream, request)) {
@@ -80,6 +90,7 @@ export class AiSdkExecutor<
       return {
         completionReason: completionReasonForFinish(runState, result.finishReason, this.config),
         ...(text.trim() ? { value: text } : {}),
+        execution: executionReport(this.config, startedAt, result.usage),
       };
     } catch (error) {
       if (isAbortError(error) || request.signal?.aborted) {
@@ -105,6 +116,7 @@ export class AiSdkExecutor<
     input: Parameters<NonNullable<AiSdkExecutorConfig<TDataContent>["streamText"]>>[0],
     runState: RunState,
   ): Promise<ExecutorRunResult<TDataContent>> {
+    const startedAt = Date.now();
     const messageId = crypto.randomUUID();
     let seq = 0;
     let text = "";
@@ -148,6 +160,7 @@ export class AiSdkExecutor<
     const finalText = text || await result.text;
     const finalSeq = seq + 1;
     const finishReason = await result.finishReason;
+    const usage = await Promise.resolve(result.usage).catch(() => undefined);
 
     return {
       completionReason: completionReasonForFinish(runState, finishReason, this.config),
@@ -166,8 +179,45 @@ export class AiSdkExecutor<
             ],
           }
         : {}),
+      execution: executionReport(this.config, startedAt, usage),
     };
   }
+}
+
+function executionReport<TDataContent>(
+  config: AiSdkExecutorConfig<TDataContent>,
+  startedAt: number,
+  usage: unknown,
+): ExecutionReport {
+  const model = config.model;
+  const modelId =
+    typeof model === "string"
+      ? model
+      : typeof (model as { modelId?: unknown })?.modelId === "string"
+        ? (model as { modelId: string }).modelId
+        : undefined;
+  const usageRecord =
+    usage && typeof usage === "object" ? (usage as Record<string, unknown>) : undefined;
+  const tokens = (key: string): number | undefined => {
+    const value = usageRecord?.[key];
+    return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  };
+  const inputTokens = tokens("inputTokens");
+  const outputTokens = tokens("outputTokens");
+  const cachedInputTokens = tokens("cachedInputTokens");
+  return {
+    latencyMs: Date.now() - startedAt,
+    ...(modelId ? { model: modelId } : {}),
+    ...(inputTokens !== undefined || outputTokens !== undefined || cachedInputTokens !== undefined
+      ? {
+          usage: {
+            ...(inputTokens !== undefined ? { inputTokens } : {}),
+            ...(outputTokens !== undefined ? { outputTokens } : {}),
+            ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+          },
+        }
+      : {}),
+  };
 }
 
 function buildAiSdkInput<TDataContent = never>(
@@ -175,6 +225,7 @@ function buildAiSdkInput<TDataContent = never>(
   config: AiSdkExecutorConfig<TDataContent>,
   runState: RunState = { terminal: false },
 ) {
+  const nodeConfig = parseNodeConfig(request.config);
   const tools = buildAiSdkTools(request, config, runState);
   const hasTools = Object.keys(tools).length > 0;
   return {
@@ -186,8 +237,8 @@ function buildAiSdkInput<TDataContent = never>(
       : undefined,
     tools: hasTools ? tools : undefined,
     abortSignal: request.signal,
-    maxOutputTokens: config.maxOutputTokens,
-    temperature: config.temperature,
+    maxOutputTokens: nodeConfig.maxOutputTokens ?? config.maxOutputTokens,
+    temperature: nodeConfig.temperature ?? config.temperature,
     topP: config.topP,
     topK: config.topK,
     presencePenalty: config.presencePenalty,
@@ -199,9 +250,17 @@ function buildAiSdkInput<TDataContent = never>(
     providerOptions: config.providerOptions as never,
     toolChoice: config.toolChoice as never,
     stopWhen: hasTools
-      ? [stepCountIs(config.maxSteps ?? DEFAULT_MAX_STEPS), () => runState.terminal]
+      ? [
+          stepCountIs(nodeConfig.maxSteps ?? config.maxSteps ?? DEFAULT_MAX_STEPS),
+          () => runState.terminal,
+        ]
       : undefined,
   };
+}
+
+function parseNodeConfig(config: unknown): AiSdkExecutorNodeConfig {
+  if (config === undefined) return {};
+  return nodeConfigSchema.parse(config);
 }
 
 /**

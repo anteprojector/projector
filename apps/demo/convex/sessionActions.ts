@@ -84,7 +84,8 @@ export const sendMessage = action({
     const machine = createMachine<DemoAttachmentData>({
       id: sessionId,
       instance: rootInstance,
-      charter: { ...createDemoCharter(), executor },
+      charter: createDemoCharter(),
+      executor,
       frames: contextFrames,
     });
 
@@ -97,7 +98,6 @@ export const sendMessage = action({
     }
 
     machine.enqueueFrame({
-      metadata: { mode: "text", transport: "convex" },
       messages: [{ type: "user", content: userContent, text: userText }],
     });
 
@@ -174,15 +174,16 @@ export const sendClientMessage = action({
 
 export const createSessionAtFoo = createSession;
 
-function prepareMachineFrame(frame: Frame<DemoAttachmentData>, rootGeneratorId: string): Frame<DemoAttachmentData> {
+type DurableFrame = Frame<DemoAttachmentData> & { metadata?: Record<string, unknown> };
+
+function prepareMachineFrame(frame: Frame<DemoAttachmentData>, rootGeneratorId: string): DurableFrame {
   const mode =
-    frame.metadata?.mode === "text" || frame.generatorId === rootGeneratorId
+    frame.generatorId === undefined || frame.generatorId === rootGeneratorId
       ? "text"
       : "memory";
   return {
     ...frame,
     metadata: {
-      ...frame.metadata,
       mode,
       transport: "convex",
     },

@@ -17,7 +17,8 @@ describe("conformance: projected tools", () => {
     const machine = createMachine({
       id: "tools-demo",
       instance: { id: "r", isSource: true, node: root },
-      charter: charter({ executor }),
+      charter: charter(),
+      executor,
     });
     machine.enqueueFrame({ messages: [{ ...textUserMessage("search") }] });
 
@@ -44,7 +45,8 @@ describe("conformance: projected tools", () => {
     });
     const machine = createMachine({
       instance: { id: "r", isSource: true, node: root },
-      charter: charter({ executor, nodes: [source], tools: [charterSearch] }),
+      charter: charter({ nodes: [source], tools: [charterSearch] }),
+      executor,
     });
 
     machine.enqueueFrame({ messages: [{ ...textUserMessage("search") }] });
@@ -73,7 +75,8 @@ describe("conformance: projected tools", () => {
     });
     const machine = createMachine({
       instance: { id: "r", isSource: true, node: root },
-      charter: charter({ executor, tools: [baseSearch] }),
+      charter: charter({ tools: [baseSearch] }),
+      executor,
     });
 
     machine.enqueueFrame({ messages: [{ ...textUserMessage("search") }] });
@@ -98,7 +101,8 @@ describe("conformance: projected tools", () => {
     });
     const machine = createMachine({
       instance: { id: "r", isSource: true, node: root },
-      charter: charter({ executor, tools: [baseSearch] }),
+      charter: charter({ tools: [baseSearch] }),
+      executor,
     });
 
     machine.enqueueFrame({ messages: [{ ...textUserMessage("search") }] });

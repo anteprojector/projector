@@ -47,8 +47,12 @@ import type {
   GeneratorId,
   Instance,
   InstanceMessage,
+  ExecutionReport,
+  FrameProducer,
+  Node,
   NormalizedRuntime,
   OutputConfig,
+  ProjectorExecutor,
   RetrievableState,
   RuntimeConcurrency,
   RuntimeTrigger,
@@ -75,6 +79,13 @@ export type Machine<TDataContent = never> = {
   id: string;
   instance: Instance<TDataContent>;
   charter: Charter<TDataContent>;
+  /**
+   * The generator runtime. Optional: a machine without one can hydrate and
+   * fold frames (read-only replay, inspection), but scheduling work throws.
+   */
+  executor?: ProjectorExecutor<TDataContent>;
+  /** Runner/claim info stamped into the provenance of frames this machine produces. */
+  runner?: Record<string, unknown>;
   frames: Frame<TDataContent>[];
   enqueueFrame(frame: FrameDraft<TDataContent> | Frame<TDataContent>): Frame<TDataContent>;
   ingestInertFrame(frame: Frame<TDataContent>): void;
@@ -85,6 +96,8 @@ export type MachineOptions<TDataContent = never> = {
   id?: string;
   instance: Instance<TDataContent>;
   charter: Charter<TDataContent>;
+  executor?: ProjectorExecutor<TDataContent>;
+  runner?: Record<string, unknown>;
   frames?: Frame<TDataContent>[];
 };
 
@@ -111,7 +124,10 @@ export type RuntimeSyncContext<TDataContent = never> = {
   inference: CompiledInference<TDataContent>;
   visibleFrames: Frame<TDataContent>[];
   createActionContext(action: AnyAction): ActionContext<unknown, TDataContent>;
-  enqueueFrame(frame: FrameDraft<TDataContent> | Frame<TDataContent>): Frame<TDataContent>;
+  enqueueFrame(
+    frame: FrameDraft<TDataContent> | Frame<TDataContent>,
+    report?: ExecutionReport,
+  ): Frame<TDataContent>;
 };
 
 export type SyncableExecutor<TDataContent = never> = {
@@ -155,12 +171,16 @@ export function createMachine<TDataContent = never>({
   id = "machine",
   instance,
   charter,
+  executor,
+  runner,
   frames = [],
 }: MachineOptions<TDataContent>): Machine<TDataContent> {
   const machine: ProjectorMachine<TDataContent> = {
     id,
     instance,
     charter,
+    ...(executor ? { executor } : {}),
+    ...(runner ? { runner } : {}),
     frames: [...frames],
     pendingFrames: [],
     nextFrameIndex: nextFrameIndex(frames),
@@ -210,7 +230,59 @@ export function createMachine<TDataContent = never>({
   assertHasSourceInstance(machine.instance);
   charter.params.parse(resolveEffectiveParams([machine.instance]));
   validateMachineActionStateCompatibility(machine.instance, machine.charter);
+  validateExecutorConfig(machine.instance, machine.charter, executor);
   return machine;
+}
+
+/**
+ * Validates every reachable node's `executorConfig` namespace against the
+ * bound executor's schema, so misconfiguration fails at bind time rather than
+ * mid-activation.
+ */
+function validateExecutorConfig<TDataContent>(
+  root: Instance<TDataContent>,
+  charter: Charter<TDataContent>,
+  executor: ProjectorExecutor<TDataContent> | undefined,
+): void {
+  const schema = executor?.configSchema;
+  const namespace = executor?.identity?.name;
+  if (!schema || !namespace) {
+    return;
+  }
+
+  const seen = new Set<Node<TDataContent>>();
+  const validate = (node: Node<TDataContent>): void => {
+    if (seen.has(node)) return;
+    seen.add(node);
+    const config = node.executorConfig?.[namespace];
+    if (config !== undefined) {
+      try {
+        schema.parse(config);
+      } catch (error) {
+        throw new Error(
+          `Invalid executorConfig["${namespace}"] on node "${node.key}": ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+    node.members.forEach(validate);
+  };
+
+  Object.values(charter.nodes).forEach(validate);
+  const visitInstance = (instance: Instance<TDataContent>): void => {
+    validate(instance.node);
+    instance.children?.forEach(visitInstance);
+  };
+  visitInstance(root);
+}
+
+function executorNodeConfig<TDataContent>(
+  node: Node<TDataContent>,
+  executor: ProjectorExecutor<TDataContent>,
+): unknown {
+  const namespace = executor.identity?.name;
+  return namespace ? node.executorConfig?.[namespace] : undefined;
 }
 
 export function runMachine<TDataContent = never>(
@@ -232,7 +304,7 @@ export async function syncMachineRuntime<TDataContent = never>(
   machine: Machine<TDataContent>,
   options: SyncMachineRuntimeOptions<TDataContent>,
 ): Promise<RuntimeSyncContext<TDataContent> | undefined> {
-  const syncRuntime = (machine.charter.executor as SyncableExecutor<TDataContent>).syncRuntime;
+  const syncRuntime = (machine.executor as SyncableExecutor<TDataContent> | undefined)?.syncRuntime;
   if (!syncRuntime) return undefined;
 
   const generatorId = validateGeneratorId(machine.instance, options.generatorId);
@@ -248,6 +320,7 @@ export async function syncMachineRuntime<TDataContent = never>(
   const frameDefaults = {
     generatorId,
   };
+  const producer = executorProducer(machine.executor);
   const context: RuntimeSyncContext<TDataContent> = {
     machine,
     generatorId,
@@ -255,14 +328,14 @@ export async function syncMachineRuntime<TDataContent = never>(
     visibleFrames: options.visibleFrames ?? [],
     createActionContext: (action) =>
       createMachineActionContext(machine, action, frameDefaults, getState),
-    enqueueFrame: (frame) =>
-      machine.enqueueFrame({
-        ...frame,
-        generatorId: frame.generatorId ?? frameDefaults.generatorId,
-      }),
+    // No generatorId default: sync-enqueued frames are not generation output
+    // unless the producer says so. External user frames must stay ungenerated
+    // or the self-trigger exclusion would suppress their activations.
+    enqueueFrame: (frame, report) =>
+      machine.enqueueFrame(signFrame(frame, producer, report, machine.runner)),
   };
 
-  await syncRuntime.call(machine.charter.executor, context);
+  await syncRuntime.call(machine.executor, context);
   return context;
 }
 
@@ -377,6 +450,52 @@ function hasSourceInstance(instance: Instance<any>): boolean {
   return Boolean(instance.isSource) || (instance.children ?? []).some(hasSourceInstance);
 }
 
+function requireExecutor<TDataContent>(
+  machine: Machine<TDataContent>,
+): ProjectorExecutor<TDataContent> {
+  if (!machine.executor) {
+    throw new Error(
+      "Machine has no executor; pass one to createMachine to run generator work",
+    );
+  }
+  return machine.executor;
+}
+
+function executorProducer(
+  executor: ProjectorExecutor<any> | undefined,
+): FrameProducer | undefined {
+  return executor?.identity ? { executor: executor.identity } : undefined;
+}
+
+/**
+ * The single provenance write path: frames are signed by the framework at the
+ * production boundary. A producer supplied here overrides anything a draft
+ * carries — provenance is framework-owned.
+ */
+function signFrame<TFrame extends FrameDraft<any>>(
+  frame: TFrame,
+  producer: FrameProducer | undefined,
+  report?: ExecutionReport,
+  runner?: Record<string, unknown>,
+): TFrame {
+  if (!producer && !report && !runner) {
+    return frame;
+  }
+  return {
+    ...frame,
+    provenance: {
+      ...frame.provenance,
+      ...(producer ? { producer } : {}),
+      ...(report
+        ? { execution: { ...frame.provenance?.execution, ...report } }
+        : {}),
+      ...(runner ? { runner } : {}),
+    },
+  };
+}
+
+const MACHINE_SCHEDULER: FrameProducer = { machine: "scheduler" };
+
 function validateGeneratorId<TDataContent>(
   root: Instance<TDataContent>,
   generatorId: GeneratorId,
@@ -426,13 +545,17 @@ export async function runActivation<TDataContent = never>(
 
   const contributor = findContributorById(machine.instance, activation.generatorId);
   if (!contributor || contributor.node.runtime.type !== "generator") {
-    machine.enqueueFrame(createCompletionFrame({
+    machine.enqueueFrame(signFrame(createCompletionFrame({
       activationId,
+      generatorId: activation.generatorId,
       sourceFrameId: activation.sourceFrameId,
       reason: "cancelled",
-    }));
+    }), MACHINE_SCHEDULER, undefined, machine.runner));
     return { completionReason: "cancelled" };
   }
+
+  const executor = requireExecutor(machine);
+  const producer = executorProducer(executor);
 
   const runtime = contributor.node.runtime;
   const generatorRuntime = runtime as GeneratorRuntime<TDataContent>;
@@ -471,16 +594,17 @@ export async function runActivation<TDataContent = never>(
   const request: ExecutorRunRequest<TDataContent> = {
     generatorId: activation.generatorId,
     activationId,
+    config: executorNodeConfig(contributor.node, executor),
     inference,
     output,
     createActionContext: (action) =>
       createMachineActionContext(machine, action, frameDefaults, getState),
-    enqueueFrame: (draft) =>
-      machine.enqueueFrame({
+    enqueueFrame: (draft, report) =>
+      machine.enqueueFrame(signFrame({
         ...draft,
         generatorId: draft.generatorId ?? frameDefaults.generatorId,
         activationId: draft.activationId ?? frameDefaults.activationId,
-      }),
+      }, producer, report, machine.runner)),
     refreshInference: () => {
       // The executor supplies its own in-flight step messages, so its frames
       // are excluded from the re-projected history to avoid duplicating them.
@@ -490,8 +614,8 @@ export async function runActivation<TDataContent = never>(
     },
   };
 
-  const result = await machine.charter.executor.run(request);
-  enqueueExecutorResult(machine, result, output, frameDefaults);
+  const result = await executor.run(request);
+  enqueueExecutorResult(machine, result, output, frameDefaults, producer);
   const workState = foldWork(machine);
   const completionMessages: FrameMessage<TDataContent>[] = [];
   if (!workState.completions.has(activationId)) {
@@ -499,6 +623,7 @@ export async function runActivation<TDataContent = never>(
       type: "work",
       kind: "completion",
       activationId,
+      generatorId: activation.generatorId,
       sourceFrameId: activation.sourceFrameId,
       reason: completionReasonForRuntime(runtime, result.completionReason),
     } satisfies WorkCompletionMessage) as FrameMessage<TDataContent>);
@@ -509,7 +634,7 @@ export async function runActivation<TDataContent = never>(
     );
   }
   if (completionMessages.length > 0) {
-    machine.enqueueFrame({ messages: completionMessages });
+    machine.enqueueFrame(signFrame({ messages: completionMessages }, producer, result.execution, machine.runner));
   }
   return result;
 }
@@ -546,6 +671,7 @@ function absorbedCompletionMessages<TDataContent>(
       type: "work",
       kind: "completion",
       activationId: absorbedActivationId,
+      generatorId: activation.generatorId,
       sourceFrameId: frame.id,
       reason: "absorbed",
     } satisfies WorkCompletionMessage) as FrameMessage<TDataContent>);
@@ -880,19 +1006,20 @@ function enqueueExecutorResult<TDataContent>(
   result: ExecutorRunResult<TDataContent>,
   output: OutputConfig<TDataContent> | undefined,
   frameDefaults: Partial<Pick<FrameDraft<TDataContent>, "generatorId" | "activationId">>,
+  producer: FrameProducer | undefined,
 ): void {
   for (const frame of result.frames ?? []) {
-    enqueueFrameWithDefaults(machine, frame, frameDefaults);
+    enqueueFrameWithDefaults(machine, signFrame(frame, producer, undefined, machine.runner), frameDefaults);
   }
 
   if (result.value !== undefined) {
     enqueueFrameWithDefaults(
       machine,
-      {
+      signFrame({
         messages: [
           assistantMessageFromTextOutput(result.value, output) as FrameMessage<TDataContent>,
         ],
-      },
+      }, producer, result.execution, machine.runner),
       frameDefaults,
     );
   }
@@ -1070,7 +1197,7 @@ function stateResetFrame<TDataContent>(resets: StateReset[]): FrameDraft<TDataCo
         update: { op: "replace", value: reset.value },
       } satisfies InstanceMessage) as FrameMessage<TDataContent>,
     ),
-    metadata: { type: "projector.state-reset" },
+    provenance: { producer: { machine: "state-reconciliation" } },
   };
 }
 
@@ -1524,16 +1651,18 @@ function reconcileWorkOnce<TDataContent>(
       !state.completions.has(activation.activationId) &&
       !generatorIds.has(activation.generatorId)
     ) {
-      const frame = machine.enqueueFrame(createCompletionFrame({
+      const frame = machine.enqueueFrame(signFrame(createCompletionFrame({
         activationId: activation.activationId,
+        generatorId: activation.generatorId,
         sourceFrameId: activation.sourceFrameId,
         reason: "cancelled",
-      }));
+      }), MACHINE_SCHEDULER, undefined, machine.runner));
       appended.push(frame);
       state.completions.set(activation.activationId, {
         type: "work",
         kind: "completion",
         activationId: activation.activationId,
+        generatorId: activation.generatorId,
         sourceFrameId: activation.sourceFrameId,
         reason: "cancelled",
         frameId: frame.id,
@@ -1563,13 +1692,13 @@ function reconcileWorkOnce<TDataContent>(
         hasActivationForGeneratorSource(state, candidate.generatorId, sourceFrame.id)
       ) continue;
 
-      const frame = machine.enqueueFrame(createActivationFrame({
+      const frame = machine.enqueueFrame(signFrame(createActivationFrame({
         activationId,
         generatorId: candidate.generatorId,
         sourceFrameId: sourceFrame.id,
         concurrencyKey: candidate.concurrencyKey,
         concurrency: candidate.concurrency,
-      }));
+      }), MACHINE_SCHEDULER, undefined, machine.runner));
       appended.push(frame);
       state.activations.set(activationId, {
         type: "work",
@@ -1803,8 +1932,7 @@ function completionReasonForRuntime(
   runtime: NormalizedRuntime<any>,
   reason: ExecutorRunResult["completionReason"],
 ): WorkCompletionReason {
-  if (reason === "cancelled" || reason === "delegated" || reason === "terminal-action") return reason;
-  if (reason === "error") return "cancelled";
+  if (reason === "cancelled" || reason === "delegated" || reason === "error" || reason === "terminal-action") return reason;
   return runtime.type === "generator" && runtime.trigger.type === "actor-frame" ? "end-turn" : "done";
 }
 

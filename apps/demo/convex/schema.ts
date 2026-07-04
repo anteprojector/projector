@@ -18,6 +18,7 @@ export default defineSchema({
     activationId: v.optional(v.string()),
     inert: v.optional(v.boolean()),
     metadata: v.optional(v.any()),
+    provenance: v.optional(v.any()),
     messages: v.array(v.any()),
     createdAt: v.number(),
   }).index("by_reference", ["referenceFrameId"]),

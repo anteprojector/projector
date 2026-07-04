@@ -49,7 +49,6 @@ export function createCharter<
     key: config.key,
     version: config.version,
     params,
-    executor: config.executor,
     nodes: registryFrom(nodes, "node", (node) => node.key),
     tools: registryFrom(tools, "tool", (tool) => tool.name),
     commands: registryFrom(commands, "command", (command) => command.name),

@@ -329,7 +329,8 @@ export default defineAgent({
         createMachine({
           id: init.sessionId,
           instance: root,
-          charter: createDemoCharter({ executor: liveKitExecutor, cameraSensor }),
+          charter: createDemoCharter({ cameraSensor }),
+          executor: liveKitExecutor,
           frames,
         });
       let machine = createDemoMachine(contextFrames);
@@ -715,7 +716,7 @@ function participantJoinedAtMs(participant: RemoteParticipant): bigint {
 }
 
 function frameMessageMode(frame: Frame<any>): "text" | "voice" {
-  return frame.metadata?.mode === "voice" ? "voice" : "text";
+  return frame.provenance?.execution?.mode === "voice" ? "voice" : "text";
 }
 
 function shouldPersistAssistantMessage(frame: Frame<any>, message: Frame<any>["messages"][number]): boolean {
@@ -1019,7 +1020,6 @@ function parseLiveKitDemoMessage(payload: Uint8Array): string | FrameDraft<any> 
     if (!content && attachments.length === 0) return undefined;
     const text = content || attachmentSummary(attachments);
     return {
-      metadata: { mode: "text", transport: "livekit" },
       messages: [
         {
           type: "user",

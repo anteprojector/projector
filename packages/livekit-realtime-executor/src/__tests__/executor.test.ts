@@ -886,7 +886,7 @@ describe("LiveKitRealtimeExecutor", () => {
       text: "what should I remember?",
     });
     expectRealtimeTurnFrame(frames[1], frames[0]);
-    expect(frames[1]?.metadata).toMatchObject({
+    expect(frames[1]?.provenance?.execution).toMatchObject({
       responseDone: true,
       responseId: "response-1",
     });
@@ -923,7 +923,12 @@ describe("LiveKitRealtimeExecutor", () => {
       type: "assistant",
       text: "Got it.",
     });
-    expect(frames.filter((frame) => frame.metadata?.type === "projector.runtime-turn")).toHaveLength(1);
+    const turnFrames = frames.filter((frame) =>
+      frame.messages.some(
+        (message) => message.type === "work" && message.kind === "completion",
+      ),
+    );
+    expect(turnFrames).toHaveLength(1);
   });
 
   it("enqueues parsed LiveKit data messages as active user frames", async () => {
@@ -954,7 +959,7 @@ describe("LiveKitRealtimeExecutor", () => {
     expect(frames).toHaveLength(1);
     expect(frames[0]?.inert).toBeUndefined();
     expect(frames[0]).toMatchObject({
-      metadata: { mode: "text", transport: "livekit" },
+      provenance: { execution: { mode: "text", transport: "livekit" } },
       messages: [
         {
           type: "user",
@@ -1659,7 +1664,18 @@ function syncContext(
     generatorId: ROOT_GENERATOR_ID,
     inference: inference(),
     createActionContext: () => createUnboundActionContext(),
-    enqueueFrame: (frame) => machine.enqueueFrame(frame),
+    enqueueFrame: (frame, report) =>
+      machine.enqueueFrame(
+        report
+          ? {
+              ...frame,
+              provenance: {
+                ...frame.provenance,
+                execution: { ...frame.provenance?.execution, ...report },
+              },
+            }
+          : frame,
+      ),
     ...overrides,
     visibleFrames: (overrides.visibleFrames ?? []).map((frame) => ({
       ...frame,
@@ -1708,14 +1724,12 @@ function expectRealtimeTurnFrame(
   expect(frame).toMatchObject({
     generatorId: REALTIME_GENERATOR_ID,
     activationId: expect.stringMatching(/^activation:realtime:/),
-    metadata: {
-      type: "projector.runtime-turn",
-      generatorId: REALTIME_GENERATOR_ID,
-      sourceFrameId,
-      completionReason: "end-turn",
-      mode: "voice",
-      transport: "livekit",
-      realtimeTurn: true,
+    provenance: {
+      execution: {
+        mode: "voice",
+        transport: "livekit",
+        realtimeTurn: true,
+      },
     },
     messages: [
       {
@@ -1729,6 +1743,7 @@ function expectRealtimeTurnFrame(
       {
         type: "work",
         kind: "completion",
+        generatorId: REALTIME_GENERATOR_ID,
         sourceFrameId,
         reason: "end-turn",
       },

@@ -15,7 +15,6 @@ import {
   createInstance,
   createProjectionFunction,
   createStandardProjectionFunction,
-  createRuntimeCompletionFrame,
   createRuntimeTurnFrame,
   createNode,
   createRoot,
@@ -73,7 +72,6 @@ function charter<TDataContent = never>(
   overrides: Partial<CharterConfig<TDataContent>> = {},
 ): Charter<TDataContent> {
   return createCharter<TDataContent>({
-    executor: executor as Charter<TDataContent>["executor"],
     nodes: [],
     tools: [],
     commands: [],
@@ -114,8 +112,7 @@ describe("actor message typing", () => {
     });
 
     const appCharter = createCharter<AppDataContent>({
-      executor: executor as Charter<AppDataContent>["executor"],
-      nodes: [appNode],
+        nodes: [appNode],
       tools: [],
       commands: [],
       states: [],
@@ -137,8 +134,7 @@ describe("actor message typing", () => {
       output: { schema: z.string() },
     });
     createCharter<AppDataContent>({
-      executor: executor as Charter<AppDataContent>["executor"],
-      nodes: [
+        nodes: [
         // @ts-expect-error registered nodes must use the charter data content type.
         stringOutputNode,
       ],
@@ -1382,10 +1378,10 @@ describe("history projection", () => {
         frame("before", [{ ...textUserMessage("old") }]),
         {
           id: "completion",
-          ...createRuntimeCompletionFrame({
+          ...createCompletionFrame({
             generatorId: "member:r/memory",
             activationId: "activation-1",
-            completionReason: "done",
+            reason: "done",
           }),
         },
         frame("after", [{ ...textUserMessage("new") }]),
@@ -2056,7 +2052,8 @@ describe("work scheduling", () => {
     const machine = createMachine({
       id: "demo",
       instance: { id: "r", isSource: true, node: root },
-      charter: charter({ executor: runtimeExecutor }),
+      charter: charter(),
+      executor: runtimeExecutor,
     });
     const userFrame = machine.enqueueFrame({
       messages: [{ ...textUserMessage("remember my name") }],
@@ -2145,7 +2142,8 @@ describe("work scheduling", () => {
     const machine = createMachine({
       id: "gated-demo",
       instance: { id: "r", isSource: true, node: root },
-      charter: charter({ executor: runtimeExecutor }),
+      charter: charter(),
+      executor: runtimeExecutor,
     });
     machine.enqueueFrame({ messages: [{ ...textUserMessage("go") }] });
 
@@ -2216,7 +2214,8 @@ describe("work scheduling", () => {
     const machine = createMachine({
       id: "stop-demo",
       instance: { id: "r", isSource: true, node: root },
-      charter: charter({ executor: runtimeExecutor }),
+      charter: charter(),
+      executor: runtimeExecutor,
     });
     machine.enqueueFrame({ messages: [{ ...textUserMessage("go") }] });
 
@@ -2322,7 +2321,8 @@ describe("work scheduling", () => {
     const machine = createMachine({
       id: "root-completion-demo",
       instance: createRootInstance([{ id: "r", isSource: true, node: createNode({ key: "root" }) }]),
-      charter: charter({ executor: runtimeExecutor }),
+      charter: charter(),
+      executor: runtimeExecutor,
     });
     machine.enqueueFrame({
       messages: [{ ...textUserMessage("hi") }],
@@ -2361,7 +2361,8 @@ describe("work scheduling", () => {
     const machine = createMachine({
       id: "external-turn-demo",
       instance: createRootInstance([{ id: "r", isSource: true, node: root }]),
-      charter: charter({ executor: runtimeExecutor }),
+      charter: charter(),
+      executor: runtimeExecutor,
     });
     const userTranscript = machine.enqueueFrame({
       id: "user-transcript",
@@ -2414,7 +2415,8 @@ describe("work scheduling", () => {
     const machine = createMachine({
       id: "root-generator-demo",
       instance: createRootInstance([{ id: "r", isSource: true, node: root }]),
-      charter: charter({ executor: runtimeExecutor }),
+      charter: charter(),
+      executor: runtimeExecutor,
     });
     machine.enqueueFrame({ messages: [{ ...textUserMessage("hi") }] });
 
@@ -2444,7 +2446,8 @@ describe("work scheduling", () => {
     const machine = createMachine({
       id: "root-nearest-boundary-demo",
       instance: createRootInstance([{ id: "r", isSource: true, node: root }]),
-      charter: charter({ executor: runtimeExecutor }),
+      charter: charter(),
+      executor: runtimeExecutor,
     });
     const userFrame = machine.enqueueFrame({ messages: [{ ...textUserMessage("hi") }] });
     const activationId = "root-activation";
@@ -2495,7 +2498,8 @@ describe("work scheduling", () => {
     const machine = createMachine({
       id: "root-component-child-demo",
       instance: createRootInstance([{ id: "r", isSource: true, node: root }]),
-      charter: charter({ executor: runtimeExecutor }),
+      charter: charter(),
+      executor: runtimeExecutor,
     });
     machine.enqueueFrame({ messages: [{ ...textUserMessage("hi") }] });
 
@@ -2522,7 +2526,8 @@ describe("work scheduling", () => {
     const machine = createMachine({
       id: "host-sync-demo",
       instance: createRootInstance([{ id: "r", isSource: true, node: createNode({ key: "root" }) }]),
-      charter: charter({ executor: runtimeExecutor }),
+      charter: charter(),
+      executor: runtimeExecutor,
     });
     const transcriptFrame = machine.enqueueFrame({
       id: "transcript-1",
@@ -2638,7 +2643,8 @@ describe("work scheduling", () => {
     const machine = createMachine({
       id: "external-action-context-demo",
       instance: createRootInstance([instance]),
-      charter: charter({ executor: runtimeExecutor }),
+      charter: charter(),
+      executor: runtimeExecutor,
     });
 
     await syncMachineRuntime(machine, {
@@ -2692,7 +2698,8 @@ describe("work scheduling", () => {
     const machine = createMachine({
       id: "external-action-spawn-demo",
       instance: createRootInstance([instance]),
-      charter: charter({ executor: runtimeExecutor }),
+      charter: charter(),
+      executor: runtimeExecutor,
     });
 
     await syncMachineRuntime(machine, {
@@ -2752,7 +2759,8 @@ describe("work scheduling", () => {
     const machine = createMachine({
       id: "unbound-action-context-demo",
       instance: createRootInstance([instance]),
-      charter: charter({ executor: runtimeExecutor }),
+      charter: charter(),
+      executor: runtimeExecutor,
     });
 
     await syncMachineRuntime(machine, {
@@ -2796,7 +2804,8 @@ describe("work scheduling", () => {
     const machine = createMachine({
       id: "output-demo",
       instance: { id: "r", isSource: true, node: root },
-      charter: charter({ executor: runtimeExecutor }),
+      charter: charter(),
+      executor: runtimeExecutor,
     });
     machine.enqueueFrame({ messages: [{ ...textUserMessage("hi") }] });
 
@@ -2851,7 +2860,8 @@ describe("work scheduling", () => {
     const machine = createMachine({
       id: "structured-output-demo",
       instance: { id: "r", isSource: true, node: root },
-      charter: charter<StructuredDataContent>({ executor: runtimeExecutor }),
+      charter: charter<StructuredDataContent>(),
+      executor: runtimeExecutor,
     });
     machine.enqueueFrame({ messages: [{ ...textUserMessage("hi") }] });
 

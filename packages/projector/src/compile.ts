@@ -610,7 +610,20 @@ function visibleHistoryForTarget<TDataContent>(
   }
 
   const rawHistory = options.frameHistory ?? framesFromMessages(options.history ?? [], targetGeneratorId);
-  return visibleFramesForGenerator(rawHistory, targetGeneratorId, runtime, options.activationId);
+  const visible = visibleFramesForGenerator(rawHistory, targetGeneratorId, runtime, options.activationId);
+  return visible.map(stripProvenance);
+}
+
+/**
+ * Provenance is observational: history-projection code never sees it, so the
+ * fold cannot come to depend on it and persistence remains free to drop it.
+ */
+function stripProvenance<TDataContent>(frame: Frame<TDataContent>): Frame<TDataContent> {
+  if (!frame.provenance) {
+    return frame;
+  }
+  const { provenance: _omitted, ...rest } = frame;
+  return rest;
 }
 
 function resolveHistoryProjection<TDataContent>(

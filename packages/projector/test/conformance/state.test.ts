@@ -33,7 +33,8 @@ describe("conformance: state access", () => {
     const machine = createMachine({
       id: "local-state-demo",
       instance: { id: "root", isSource: true, node: root, children: [{ id: "child", isSource: true, node: child }] },
-      charter: charter({ executor }),
+      charter: charter(),
+      executor,
     });
     machine.enqueueFrame({ messages: [{ ...textUserMessage("run") }] });
 
@@ -76,7 +77,8 @@ describe("conformance: state access", () => {
     const machine = createMachine({
       id: "hoist-state-demo",
       instance: rootInstance,
-      charter: charter({ executor }),
+      charter: charter(),
+      executor,
     });
     machine.enqueueFrame({ messages: [{ ...textUserMessage("run") }] });
 
@@ -107,12 +109,14 @@ describe("conformance: state access", () => {
     const machineA = createMachine({
       id: "root-a-demo",
       instance: { id: "a", isSource: true, node, states: { session: { value: { owner: "a" } } } },
-      charter: charter({ executor: first.executor }),
+      charter: charter(),
+      executor: first.executor,
     });
     const machineB = createMachine({
       id: "root-b-demo",
       instance: { id: "b", isSource: true, node, states: { session: { value: { owner: "b" } } } },
-      charter: charter({ executor: second.executor }),
+      charter: charter(),
+      executor: second.executor,
     });
     machineA.enqueueFrame({ messages: [{ ...textUserMessage("run") }] });
     machineB.enqueueFrame({ messages: [{ ...textUserMessage("run") }] });

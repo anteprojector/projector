@@ -222,7 +222,7 @@ async function getObservabilityState(
   const root = hydrateDemoInstance(instance, sessionId);
   const frames = await getMachineContextFrames(ctx, session);
   const executor = createObservabilityExecutor();
-  const charter = createDemoCharter({ executor });
+  const charter = createDemoCharter();
   const tree = inspectCompiledProjectionTree(root, {
     charter,
   });
@@ -489,7 +489,7 @@ async function appendMachineFrameInternal(
   }: {
     sessionId: Id<"sessions">;
     session: SessionDoc;
-    frame: FrameDraft | Frame;
+    frame: (FrameDraft | Frame) & { metadata?: Record<string, unknown> };
     referenceFrameId?: Id<"frames">;
   },
 ) {
@@ -508,6 +508,7 @@ async function appendMachineFrameInternal(
     ...(frame.activationId !== undefined ? { activationId: frame.activationId } : {}),
     ...(frame.inert !== undefined ? { inert: frame.inert } : {}),
     ...(metadata !== undefined ? { metadata: escapeConvexJson(metadata) } : {}),
+    ...(frame.provenance !== undefined ? { provenance: escapeConvexJson(frame.provenance) } : {}),
     messages: escapeConvexJson(frame.messages),
     createdAt: Date.now(),
   });

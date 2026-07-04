@@ -9,6 +9,7 @@ import {
   textUserMessage,
   type Frame,
   type FrameMessage,
+  type ProjectorExecutor,
 } from "../../index.ts";
 import { charter, createRecordingExecutor, drain } from "./helpers.ts";
 
@@ -31,7 +32,8 @@ describe("conformance: work scheduling", () => {
     const machine = createMachine({
       id: "work-demo",
       instance: { id: "r", isSource: true, node: root },
-      charter: charter({ executor }),
+      charter: charter(),
+      executor,
     });
     const userFrame = machine.enqueueFrame({
       messages: [{ ...textUserMessage("remember my name") }],
@@ -105,7 +107,8 @@ describe("conformance: work scheduling", () => {
     const machine = createMachine({
       id: "terminal-action-demo",
       instance: { id: "r", isSource: true, node: root },
-      charter: charter({ executor }),
+      charter: charter(),
+      executor,
     });
     machine.enqueueFrame({ messages: [{ ...textUserMessage("finish up") }] });
 
@@ -160,7 +163,8 @@ describe("conformance: work scheduling", () => {
     const machine = createMachine({
       id: "generator-output-demo",
       instance: { id: "r", isSource: true, node: root },
-      charter: charter({ executor }),
+      charter: charter(),
+      executor,
     });
     machine.enqueueFrame({ messages: [{ ...textUserMessage("remember my name") }] });
 
@@ -344,7 +348,8 @@ describe("conformance: work scheduling", () => {
     const source = createMachine({
       id: "source-session",
       instance: { id: "r", isSource: true, node: root },
-      charter: charter({ executor }),
+      charter: charter(),
+      executor,
     });
     source.enqueueFrame({
       id: "user-1",
@@ -355,7 +360,8 @@ describe("conformance: work scheduling", () => {
     const fork = createMachine({
       id: "forked-session",
       instance: { id: "r", isSource: true, node: root },
-      charter: charter({ executor }),
+      charter: charter(),
+      executor,
       frames: source.frames.map((frame) => ({ ...frame, messages: [...frame.messages] })),
     });
 
@@ -386,7 +392,7 @@ async function activationRuntimeIdsFor(message: FrameMessage): Promise<string[]>
   return workActivationRuntimeIds(await drain(runMachine(machine, { scheduleWork: false })));
 }
 
-function actorFrameMachine(id: string, executor: ReturnType<typeof charter>["executor"]) {
+function actorFrameMachine(id: string, executor: ProjectorExecutor) {
   const root = createNode({
     key: "root",
     runtime: { type: "generator", trigger: { type: "actor-frame" } },
@@ -394,7 +400,8 @@ function actorFrameMachine(id: string, executor: ReturnType<typeof charter>["exe
   return createMachine({
     id,
     instance: { id: "r", isSource: true, node: root },
-    charter: charter({ executor }),
+    charter: charter(),
+      executor,
   });
 }
 

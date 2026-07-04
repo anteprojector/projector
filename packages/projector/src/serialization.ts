@@ -96,6 +96,7 @@ export function serializeNode<TDataContent>(
     output: node.output ? serializeOutputConfig(node.output) : undefined,
     projection: serializeNodeProjection(node, charter, sourceNodeKey),
     runtime: serializeRuntime(node.runtime, charter, sourceNodeKey),
+    executorConfig: node.executorConfig,
   };
 }
 
@@ -131,6 +132,7 @@ export function hydrateNode<TDataContent = never>(
     runtime: serialized.runtime
       ? hydrateRuntime(serialized.runtime, charter, serialized.sourceNodeKey)
       : undefined,
+    executorConfig: serialized.executorConfig,
   });
 }
 

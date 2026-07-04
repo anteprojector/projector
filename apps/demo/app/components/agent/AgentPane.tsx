@@ -1978,14 +1978,6 @@ function generatorMatchesGenerator(
 }
 
 function frameTypeForFrame(frame: FrameDoc, messages: FrameMessage[]): FrameType {
-  const metadata = recordValue(frame.metadata);
-  const metadataType = stringValue(metadata?.type);
-  if (
-    metadataType === "projector.runtime-completion" ||
-    metadataType === "projector.runtime-turn"
-  ) {
-    return "work";
-  }
   if (messages.some((message) => message.type === "work")) return "work";
   if (messages.length === 0) return "instance";
   if (messages.some((message) => message.type === "instance")) return "instance";

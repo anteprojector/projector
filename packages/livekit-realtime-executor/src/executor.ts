@@ -18,6 +18,7 @@ import type {
   AnyAction,
   CompiledInference,
   ContentPart,
+  ExecutionReport,
   ExecutorRealizedPrompt,
   ExecutorRealizePromptRequest,
   RuntimeSyncContext,
@@ -131,6 +132,7 @@ export class LiveKitRealtimeExecutor<
   TDataContent = never,
 > implements ProjectorExecutor<TDataContent> {
   readonly type = "livekit-realtime";
+  readonly identity = { name: "livekit-realtime" };
 
   readonly connection: LiveKitRealtimeConnection<TDataContent>;
 
@@ -358,7 +360,6 @@ export class LiveKitRealtimeConnection<TDataContent = never> {
     return this.enqueueFrame({
       generatorId: this.executor.realtimeGeneratorId(),
       inert: true,
-      metadata: { mode: "voice", transport: "livekit", transcript: true },
       messages: [
         {
           ...metadata,
@@ -369,7 +370,7 @@ export class LiveKitRealtimeConnection<TDataContent = never> {
           source: { external: true },
         } satisfies FrameMessage<TDataContent>,
       ],
-    });
+    }, { mode: "voice", transport: "livekit", transcript: true });
   }
 
   async enqueueUserTranscript(
@@ -379,7 +380,6 @@ export class LiveKitRealtimeConnection<TDataContent = never> {
     return this.enqueueFrame({
       generatorId: this.executor.realtimeGeneratorId(),
       inert: true,
-      metadata: { mode: "voice", transport: "livekit", transcript: true },
       messages: [
         {
           ...metadata,
@@ -390,12 +390,12 @@ export class LiveKitRealtimeConnection<TDataContent = never> {
           source: { external: true },
         } satisfies FrameMessage<TDataContent>,
       ],
-    });
+    }, { mode: "voice", transport: "livekit", transcript: true });
   }
 
   async enqueueRealtimeTurnCompletion(
     sourceFrame: Frame<TDataContent>,
-    metadata: Record<string, unknown> = {},
+    report: Record<string, unknown> = {},
   ): Promise<Frame<TDataContent> | undefined> {
     if (!this.isRealtimeActive()) return undefined;
 
@@ -406,13 +406,12 @@ export class LiveKitRealtimeConnection<TDataContent = never> {
       activationId,
       sourceFrameId: sourceFrame.id,
       reason: "end-turn",
-      metadata: {
-        mode: "voice",
-        transport: "livekit",
-        realtimeTurn: true,
-        ...metadata,
-      },
-    }));
+    }), {
+      mode: "voice",
+      transport: "livekit",
+      realtimeTurn: true,
+      ...report,
+    });
   }
 
   beginRealtimeTurn(): void {
@@ -1036,15 +1035,18 @@ export class LiveKitRealtimeConnection<TDataContent = never> {
   }
 
   private async enqueueExternalUserFrame(frame: FrameDraft<TDataContent>): Promise<Frame<TDataContent>> {
-    return this.enqueueFrame(frame);
+    return this.enqueueFrame(frame, { mode: "text", transport: "livekit" });
   }
 
-  private enqueueFrame(frame: FrameDraft<TDataContent>): Frame<TDataContent> {
-    const result = this.currentSyncContext?.machine.enqueueFrame(frame);
-    if (!result) {
+  private enqueueFrame(
+    frame: FrameDraft<TDataContent>,
+    report?: ExecutionReport,
+  ): Frame<TDataContent> {
+    const context = this.currentSyncContext;
+    if (!context) {
       throw new Error("LiveKitRealtimeConnection cannot enqueue a frame before runtime sync");
     }
-    return result;
+    return context.enqueueFrame(frame, report);
   }
 }
 
@@ -1056,7 +1058,6 @@ function normalizeExternalUserFrame<TDataContent>(
   const trimmed = parsed.trim();
   if (!trimmed) return undefined;
   return {
-    metadata: { mode: "text", transport: "livekit" },
     messages: [
       {
         type: "user",
@@ -1717,7 +1718,7 @@ function frameDebugSummary(frame: FrameDraft<any>): unknown {
   return {
     inert: frame.inert === true,
     generatorId: frame.generatorId,
-    metadata: frame.metadata,
+    provenance: frame.provenance,
     messages: frame.messages.map((message) => {
       if (!isActorMessage(message)) {
         return { type: message.type };

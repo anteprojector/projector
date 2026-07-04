@@ -25,7 +25,6 @@ import {
   textContent,
   type CompiledProjectionTree,
   type Charter,
-  type Executor,
   type GeneratorId,
   type Instance,
   type SerializedInstance,
@@ -424,13 +423,8 @@ export const demoBaseNode = createNode({
   members: [agentControlsMemberNode],
 });
 
-const executor: Executor<any> = {
-  run: async () => ({ completionReason: "done" }),
-  realizePrompt: (request) => ({ provider: "demo", input: request.inference }),
-};
-
 export function createDemoCharter(
-  options: { executor?: Executor<any>; cameraSensor?: CameraSensorDataSource } = {},
+  options: { cameraSensor?: CameraSensorDataSource } = {},
 ): Charter<any, DemoParamsSchema> {
   if ("cameraSensor" in options) {
     cameraSensorDataSource = options.cameraSensor;
@@ -439,7 +433,6 @@ export function createDemoCharter(
     key: "projector-demo",
     version: "1",
     params: demoParamsSchema,
-    executor: options.executor ?? executor,
     nodes: [
       demoBaseNode,
       memoryMemberNode,

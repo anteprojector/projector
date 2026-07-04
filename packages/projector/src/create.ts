@@ -205,6 +205,7 @@ export function createNode<
     output: config.output,
     projection: normalizeProjection(config.projection),
     runtime: normalizeRuntime(config.runtime),
+    executorConfig: config.executorConfig,
   } as unknown as CreatedNode<TDataContent, TConfig>;
 }
 
