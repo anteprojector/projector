@@ -78,6 +78,7 @@ export type ProjectionContext<TDataContent = never> = {
   address: ProjectionAddress;
   targetGeneratorId?: GeneratorId;
   originNode: Node<TDataContent>;
+  params: JsonObject;
   createNodeIR(): ProjectionIR<TDataContent>;
 };
 
@@ -108,6 +109,7 @@ export type HistoryProjectionContext<TDataContent = never> = {
   trigger: RuntimeTrigger;
   history: Frame<TDataContent>[];
   states: Record<StateKey, unknown>;
+  params: JsonObject;
 };
 
 export type HistoryProjectionFunctionMethod<TDataContent = never> = {

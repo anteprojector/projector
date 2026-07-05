@@ -94,11 +94,3 @@ export function pickDeclaredParamKeys(
   }
   return picked;
 }
-
-export function resolveActionParamsForBinding(
-  node: Node<any>,
-  action: AnyAction,
-  effectiveParams: JsonObject,
-): JsonObject {
-  return resolveActionParams(action, resolveNodeParams(node, effectiveParams));
-}

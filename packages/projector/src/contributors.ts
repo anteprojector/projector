@@ -9,7 +9,12 @@ import type {
   Node,
   ProjectionAddress,
 } from "./types.ts";
-import type { InputCharterParams } from "./params.ts";
+import {
+  resolveEffectiveParams,
+  resolveNodeParams,
+  type InputCharterParams,
+  type JsonObject,
+} from "./params.ts";
 
 export type Contributor<TDataContent = never> = {
   node: Node<TDataContent>;
@@ -151,6 +156,30 @@ export function directContributorChildren<TDataContent = never>(
   }
 
   return children;
+}
+
+export function instancePathForContributor<TDataContent>(
+  contributor: Contributor<TDataContent>,
+): Instance<TDataContent>[] {
+  const reversed: Instance<TDataContent>[] = [];
+  let current: Contributor<TDataContent> | undefined = contributor;
+  while (current) {
+    const instance = current.concreteInstance;
+    if (reversed[reversed.length - 1] !== instance) {
+      reversed.push(instance);
+    }
+    current = current.parent;
+  }
+  return reversed.reverse();
+}
+
+export function resolveContributorNodeParams<TDataContent>(
+  contributor: Contributor<TDataContent>,
+): JsonObject {
+  return resolveNodeParams(
+    contributor.node,
+    resolveEffectiveParams(instancePathForContributor(contributor)),
+  );
 }
 
 export function hoistStateInstance<TDataContent>(

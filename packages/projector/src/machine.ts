@@ -11,6 +11,7 @@ import {
   findContributorById,
   hoistStateInstance,
   collectContributors,
+  resolveContributorNodeParams,
   type Contributor,
 } from "./contributors.ts";
 import {
@@ -71,7 +72,7 @@ import type {
 } from "./types.ts";
 import { compileProjection } from "./compile.ts";
 import {
-  resolveActionParamsForBinding,
+  resolveActionParams,
   resolveEffectiveParams,
 } from "./params.ts";
 
@@ -854,10 +855,9 @@ function createContributorActionContext<TDataContent>(
 ): ActionContext<unknown, TDataContent> {
   const stateAddress = stateAddressForContributor(contributor);
   const instance = createActionInstanceContext(machine, contributor, frameDefaults);
-  const params = resolveActionParamsForBinding(
-    contributor.node,
+  const params = resolveActionParams(
     action,
-    resolveEffectiveParams(instancePathForContributor(contributor)),
+    resolveContributorNodeParams(contributor),
   );
   if (!stateAddress) {
     return { params, instance };
@@ -960,21 +960,6 @@ function createActionInstanceContext<TDataContent>(
       });
     },
   };
-}
-
-function instancePathForContributor<TDataContent>(
-  contributor: Contributor<TDataContent>,
-): Instance<TDataContent>[] {
-  const reversed: Instance<TDataContent>[] = [];
-  let current: Contributor<TDataContent> | undefined = contributor;
-  while (current) {
-    const instance = current.concreteInstance;
-    if (reversed[reversed.length - 1] !== instance) {
-      reversed.push(instance);
-    }
-    current = current.parent;
-  }
-  return reversed.reverse();
 }
 
 function childInstanceIdsByNodeKey(

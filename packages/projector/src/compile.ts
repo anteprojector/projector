@@ -11,6 +11,7 @@ import {
   directContributorChildren,
   findContributorById,
   hoistStateInstance,
+  resolveContributorNodeParams,
   type Contributor,
 } from "./contributors.ts";
 import { actorMessages, messages } from "./history.ts";
@@ -594,6 +595,7 @@ function historyProjectionContext<TDataContent>(
       trigger: runtime.trigger,
       history: visibleHistoryForTarget(root, targetGeneratorId, runtime, options),
       states: stateValues(states),
+      params: resolveContributorNodeParams(contributor),
     },
     projection: runtime.historyProjection ?? { type: "messages" },
   };
@@ -682,6 +684,7 @@ function frameMessagesFromFrameHistory<TDataContent>(
     trigger: { type: "actor-frame" },
     history,
     states: {},
+    params: {},
   });
 }
 
@@ -893,6 +896,7 @@ function projectionContext<TDataContent>(
     address: contributor.address,
     targetGeneratorId,
     originNode: contributor.node,
+    params: resolveContributorNodeParams(contributor),
     createNodeIR: () => compileNodeProjectionIR(contributor, options, stateByContributor),
   };
 }

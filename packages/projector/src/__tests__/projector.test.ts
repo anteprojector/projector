@@ -417,6 +417,51 @@ describe("params", () => {
     expect(observed).toEqual({ userId: "user_123" });
   });
 
+  it("provides node-scoped params to projection and history projection contexts", () => {
+    let projectionParams: unknown;
+    let historyParams: unknown;
+    const captureParams = createProjectionFunction({
+      name: "captureParams",
+      method: (ctx, draft, source) => {
+        if (ctx.callSite === "node") {
+          projectionParams = ctx.params;
+        }
+        applyStandardProjection(ctx, draft, source);
+      },
+    });
+    const captureHistoryParams = createHistoryProjectionFunction({
+      name: "captureHistoryParams",
+      method: (ctx) => {
+        historyParams = ctx.params;
+        return [];
+      },
+    });
+    const generator = createNode({
+      key: "generator",
+      params: z.object({ tone: z.string() }),
+      projection: captureParams,
+      runtime: {
+        type: "generator",
+        trigger: { type: "parent-completion" },
+        historyProjection: captureHistoryParams,
+      },
+    });
+    const root = createNode({ key: "root", members: [generator] });
+
+    compileProjection(
+      {
+        id: "r",
+        isSource: true,
+        node: root,
+        params: { tone: "wry", audience: "kids" },
+      },
+      { targetGeneratorId: "member:r/generator", frameHistory: [] },
+    );
+
+    expect(projectionParams).toEqual({ tone: "wry" });
+    expect(historyParams).toEqual({ tone: "wry" });
+  });
+
   it("serializes and hydrates instance and node params", () => {
     const node = createNode({
       key: "profile",
@@ -1374,6 +1419,7 @@ describe("history projection", () => {
       activationId: "activation-2",
       trigger: { type: "parent-completion" as const },
       states: {},
+      params: {},
       history: [
         frame("before", [{ ...textUserMessage("old") }]),
         {
