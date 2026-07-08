@@ -2273,11 +2273,7 @@ function Contributor({
               ["address", addressLabel(node.address)],
               ["concurrency", node.runtime.concurrency],
               ["history", node.runtime.activationHistory],
-              ["own projection", projectionLabel(node.projection.own)],
-              [
-                "boundary projection",
-                projectionLabel(node.projection.boundary),
-              ],
+              ["boundary projection", node.boundaryProjection],
               ...(node.parentId
                 ? ([["parent generator", node.parentId]] as Array<
                     [string, ReactNode]
@@ -2369,10 +2365,7 @@ function ContributorList({
               </span>
             </div>
             <KeyValueRows
-              rows={[
-                ["address", addressLabel(contributor.address)],
-                ["projection", projectionLabel(contributor.projection)],
-              ]}
+              rows={[["address", addressLabel(contributor.address)]]}
             />
             <StateList states={contributor.states} />
             <ActionList title="tools" actions={contributor.tools} />
@@ -2384,13 +2377,29 @@ function ContributorList({
   );
 }
 
+type StateProjectionMeta = {
+  slot?: string;
+  region?: string;
+  exposure?: string;
+};
+
+function stateProjectionLabel(projection: StateProjectionMeta): string {
+  return [
+    projection.exposure,
+    projection.slot ? `slot:${projection.slot}` : undefined,
+    projection.region ? `region:${projection.region}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 function StateList({
   states,
 }: {
   states: Array<{
     key: string;
     address: unknown;
-    projection?: string;
+    projection?: StateProjectionMeta;
     value: unknown;
   }>;
 }) {
@@ -2418,7 +2427,7 @@ function StateTreeItem({
   state: {
     key: string;
     address: unknown;
-    projection?: string;
+    projection?: StateProjectionMeta;
     value: unknown;
   };
 }) {
@@ -2428,7 +2437,9 @@ function StateTreeItem({
         <div className="flex min-w-0 items-center gap-2">
           <span className="text-terminal-green">{state.key}</span>
           {state.projection && (
-            <span className="text-terminal-yellow">{state.projection}</span>
+            <span className="text-terminal-yellow">
+              {stateProjectionLabel(state.projection)}
+            </span>
           )}
           <span className="truncate text-terminal-green-dim">
             {addressLabel(state.address)}
@@ -2658,26 +2669,6 @@ function MutedLine({ children }: { children: ReactNode }) {
   return (
     <div className="text-xs italic text-terminal-green-dim">{children}</div>
   );
-}
-
-function projectionLabel(projection: unknown) {
-  if (!projection || typeof projection !== "object") {
-    return String(projection);
-  }
-  const record = projection as Record<string, unknown>;
-  if (typeof record.name === "string") {
-    return `function ${record.name}`;
-  }
-
-  const mode = typeof record.mode === "string" ? record.mode : "unknown";
-  const parts = [mode];
-  if ("instructions" in record) {
-    parts.push(`instructions ${String(record.instructions)}`);
-  }
-  if ("tools" in record) {
-    parts.push(`tools ${String(record.tools)}`);
-  }
-  return parts.join(" / ");
 }
 
 function addressLabel(value: unknown): string {

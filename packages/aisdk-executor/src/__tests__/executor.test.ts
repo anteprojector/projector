@@ -364,6 +364,41 @@ describe("AiSdkExecutor", () => {
     expect(frames).toEqual([]);
   });
 
+  it("lowers deferred tools through the configured hook, erroring without one", () => {
+    const nativeAction = { state: null, name: "always", description: "native tool" };
+    // Compile tags deferred tool copies with this registered symbol
+    // (markActionExposure is compile-internal); the fixture mimics its output.
+    const deferredAction = Object.assign(
+      { state: null, name: "rare", description: "deferred tool" },
+      { [Symbol.for("projector.actionExposure")]: "deferred" },
+    );
+    const requestInput = request({
+      inference: inference({ tools: [nativeAction, deferredAction] }),
+    });
+
+    // Without a lowering the compiled availability note cannot be honored:
+    // the run must fail, never silently load the tools natively.
+    expect(() => buildAiSdkTools(requestInput, config())).toThrow(
+      /deferred tools are not supported for this model.*rare/,
+    );
+
+    // With a lowering: the hook owns the deferred set (provider tool-search
+    // idiom); native tools are untouched.
+    const lowering = vi.fn(({ deferred, buildTool }) => ({
+      tool_search: buildTool({ state: null, name: "tool_search", description: "search tools" }),
+      ...(Object.fromEntries(deferred.map((action: { name: string }) => [
+        `deferred_${action.name}`,
+        buildTool(action),
+      ]))),
+    }));
+    const lowered = buildAiSdkTools(requestInput, config({ deferredTools: lowering }));
+    expect(lowering).toHaveBeenCalledWith(
+      expect.objectContaining({ deferred: [deferredAction] }),
+    );
+    expect(Object.keys(lowered).sort()).toEqual(["always", "deferred_rare", "tool_search"]);
+    expect(Object.keys(lowered)).not.toContain("rare");
+  });
+
   it("converts projected actions into tools and executes action.run with fresh context", async () => {
     const actionRun = vi.fn((input, context) => ({ input, context }));
     const requestInput = request({

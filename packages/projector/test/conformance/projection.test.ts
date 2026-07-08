@@ -4,7 +4,6 @@ import {
   createActivationFrame,
   createMachine,
   createNode,
-  createProjectionFunction,
   runMachine,
   textAssistantMessage,
   textUserMessage,
@@ -13,24 +12,15 @@ import {
 import { charter, createRecordingExecutor, drain, requestForRuntime } from "./helpers.ts";
 
 function textParts(...texts: string[]) {
-  return texts.map((text) => ({ type: "text" as const, text }));
+  return texts.length <= 1
+    ? texts.map((text) => ({ type: "text" as const, text }))
+    : [{ type: "text" as const, text: texts.join("\n\n") }];
 }
 
 describe("conformance: projection IR", () => {
-  it("projects component descendants upward and exports runtime aggregates through boundaryProjection", async () => {
+  it("projects component descendants upward and forwards augment boundaries as-is", async () => {
     const { executor, requests } = createRecordingExecutor();
     const memory = createNode({ key: "memory", instructions: "memory" });
-    const exportRuntimeBoundary = createProjectionFunction({
-      name: "exportRuntimeBoundary",
-      method: (_ctx, draft, source) => {
-        const promptParts = [
-          ...(source.ir?.systemParts ?? []),
-          ...(source.ir?.dynamicParts ?? []),
-        ];
-        draft.dynamicParts.push(...promptParts);
-        draft.tools.push(...(source.ir?.tools ?? []));
-      },
-    });
     const generator = createNode({
       key: "summarizer",
       instructions: "generator",
@@ -38,7 +28,7 @@ describe("conformance: projection IR", () => {
       runtime: {
         type: "generator",
         trigger: { type: "parent-completion" },
-        boundaryProjection: exportRuntimeBoundary,
+        boundaryProjection: "augment",
       },
     });
     const policy = createNode({ key: "policy", instructions: "policy" });
@@ -59,8 +49,8 @@ describe("conformance: projection IR", () => {
     await drain(runMachine(machine));
 
     const parent = requestForRuntime(requests, "instance:r");
-    expect(parent.inference.systemParts).toEqual(textParts("root", "policy"));
-    expect(parent.inference.dynamicParts).toEqual(textParts("generator", "memory"));
+    expect(parent.inference.systemParts).toEqual(textParts("root", "policy", "generator", "memory"));
+    expect(parent.inference.dynamicParts).toEqual([]);
     expect(parent.inference.history).toMatchObject([
       { ...textUserMessage("summarize") },
       {

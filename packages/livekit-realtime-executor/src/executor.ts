@@ -1,6 +1,7 @@
 import { llm } from "@livekit/agents";
 import { createHash } from "node:crypto";
 import {
+  actionExposure,
   createToolActionRequest,
   createUnboundActionContext,
   executeActionInvocation,
@@ -1295,9 +1296,27 @@ function isRuntimeSyncContext<TDataContent>(
   );
 }
 
+/**
+ * The realtime session has no tool-search mechanism, so deferred-exposure
+ * tools cannot be honored. Silently loading them natively would contradict
+ * the compiled availability note, so an unsupported surface is an error the
+ * charter must resolve (mark the tool native for this generator).
+ */
+function assertNoDeferredTools(inference: CompiledInference<any>): void {
+  const deferred = inference.tools.filter((action) => actionExposure(action) === "deferred");
+  if (deferred.length > 0) {
+    throw new Error(
+      `LiveKit realtime executor does not support deferred tools: ${deferred
+        .map((action) => action.name)
+        .join(", ")}`,
+    );
+  }
+}
+
 export function buildLiveKitToolDefinitions(
   inference: CompiledInference<any>,
 ): LiveKitToolDefinition[] {
+  assertNoDeferredTools(inference);
   const definitions = new Map<string, LiveKitToolDefinition>();
 
   for (const action of inference.tools) {
@@ -1318,6 +1337,7 @@ export function buildLiveKitToolContext<TDataContent = never>(
   inference: CompiledInference<TDataContent>,
   connection: LiveKitRealtimeConnection<TDataContent>,
 ): LiveKitToolContext {
+  assertNoDeferredTools(inference);
   const tools: LiveKitToolContext = {};
 
   for (const action of inference.tools) {
