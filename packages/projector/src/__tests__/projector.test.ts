@@ -62,6 +62,16 @@ function textParts(...texts: string[]) {
     : [{ type: "text" as const, text: texts.join("\n\n") }];
 }
 
+// Compiled-region fixtures carry the implicit-layout stamp: preamble parts
+// merge into the stable default "body" slot, recency into volatile "context".
+function preambleParts(...texts: string[]) {
+  return textParts(...texts).map((part) => ({ ...part, slot: "body", volatile: false }));
+}
+
+function recencyParts(...texts: string[]) {
+  return textParts(...texts).map((part) => ({ ...part, slot: "context", volatile: true }));
+}
+
 function charter<TDataContent = never>(
   overrides: Partial<CharterConfig<TDataContent>> = {},
 ): Charter<TDataContent> {
@@ -673,9 +683,9 @@ describe("projection compilation", () => {
     });
 
     const parent = compileProjection({ id: "r", isSource: true, node: root });
-    expect(parent.systemParts).toEqual(textParts("root", "generator", "inside"));
-    expect(parent.dynamicParts).toEqual([]);
-    expect(parent.systemParts).not.toContainEqual({ type: "text", text: "hiddenWorker" });
+    expect(parent.preamble).toEqual(preambleParts("root", "generator", "inside"));
+    expect(parent.recency).toEqual([]);
+    expect(parent.preamble.map((part) => (part.type === "text" ? part.text : "")).join("\n")).not.toContain("hiddenWorker");
 
     const own = compileProjection(
       { id: "r", isSource: true, node: root },
@@ -683,7 +693,7 @@ describe("projection compilation", () => {
         targetGeneratorId: "member:r/generator",
       },
     );
-    expect(own.systemParts).toEqual(textParts("generator", "inside"));
+    expect(own.preamble).toEqual(preambleParts("generator", "inside"));
   });
 
   it("inspects nested runtime boundaries and their compiled projection payloads", () => {
@@ -712,12 +722,12 @@ describe("projection compilation", () => {
     expect(rootProjection?.nodeKey).toBe("root");
     expect(rootProjection?.boundaryProjection).toBe("hidden");
     expect(generatorProjection?.boundaryProjection).toBe("augment");
-    expect(rootProjection?.compiled.systemParts).toEqual(textParts("root", "generator", "inside"));
-    expect(rootProjection?.compiled.dynamicParts).toEqual([]);
+    expect(rootProjection?.compiled.preamble).toEqual(preambleParts("root", "generator", "inside"));
+    expect(rootProjection?.compiled.recency).toEqual([]);
     expect(rootProjection?.contributors.map((contributor) => contributor.nodeKey)).toEqual(["root"]);
     expect(generatorProjection?.nodeKey).toBe("generator");
     expect(generatorProjection?.kind).toBe("generator");
-    expect(generatorProjection?.compiled.systemParts).toEqual(textParts("generator", "inside"));
+    expect(generatorProjection?.compiled.preamble).toEqual(preambleParts("generator", "inside"));
     expect(generatorProjection?.contributors.map((contributor) => contributor.nodeKey)).toEqual([
       "generator",
       "inside",
@@ -741,8 +751,8 @@ describe("projection compilation", () => {
     const tree = inspectCompiledProjectionTree({ id: "r", isSource: true, node: root });
 
     expect(tree.roots[0]?.children[0]?.nodeKey).toBe("hiddenWorker");
-    expect(tree.roots[0]?.compiled.systemParts).toEqual(textParts("root"));
-    expect(tree.roots[0]?.compiled.systemParts).not.toContainEqual({ type: "text", text: "hiddenWorker" });
+    expect(tree.roots[0]?.compiled.preamble).toEqual(preambleParts("root"));
+    expect(tree.roots[0]?.compiled.preamble.map((part) => (part.type === "text" ? part.text : "")).join("\n")).not.toContain("hiddenWorker");
   });
 
   it("compiles nested target generators from their own runtime boundary", () => {
@@ -765,7 +775,7 @@ describe("projection compilation", () => {
       { targetGeneratorId: "member:r/generator" },
     );
 
-    expect(compiled.systemParts).toEqual(textParts("generator"));
+    expect(compiled.preamble).toEqual(preambleParts("generator"));
     expect(compiled.tools.map((entry) => entry.name)).toEqual(["save"]);
   });
 
@@ -793,8 +803,8 @@ describe("projection compilation", () => {
 
     const compiled = compileProjection({ id: "r", isSource: true, node: root });
 
-    expect(compiled.systemParts).toEqual(textParts("root", "generator", "leaf"));
-    expect(compiled.dynamicParts).toEqual([]);
+    expect(compiled.preamble).toEqual(preambleParts("root", "generator", "leaf"));
+    expect(compiled.recency).toEqual([]);
   });
 });
 
@@ -858,7 +868,7 @@ describe("state resolution and state projection", () => {
     const states = resolveStates(instance);
     expect(states).toHaveLength(1);
     expect(states[0]?.descriptor.projection).toBe(stateB.projection);
-    expect(compileProjection(instance).dynamicParts).toEqual(textParts('State `shared`: {"value":1}'));
+    expect(compileProjection(instance).recency).toEqual(recencyParts('State `shared`: {"value":1}'));
   });
 
   it("detects incompatible descriptors and init conflicts", () => {
@@ -1019,7 +1029,7 @@ describe("retrieval aliases", () => {
 
     const parentCompiled = compileProjection({ id: "parent", isSource: true, node: root });
     expect(parentCompiled.retrievableStates).toEqual([]);
-    expect(parentCompiled.systemParts).toEqual([]);
+    expect(parentCompiled.preamble).toEqual([]);
     expect(parentCompiled.tools).toEqual([]);
   });
 
@@ -1050,7 +1060,7 @@ describe("retrieval aliases", () => {
       { targetGeneratorId: "instance:r" },
     );
 
-    expect(compiled.dynamicParts).toContainEqual({ type: "text", text: "State `memories`: []" });
+    expect(compiled.recency).toContainEqual({ type: "text", text: "State `memories`: []", slot: "context", volatile: true });
     expect(compiled.tools).toEqual([]);
   });
 });

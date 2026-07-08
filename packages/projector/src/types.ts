@@ -5,8 +5,10 @@ export type Ref = string;
 
 /**
  * Compile-internal placement tags carried by projection parts. Assigned when
- * a node's parts render into the draft; consumed and stripped by the layout
- * render in finalizeSections. Executors never see them.
+ * a node's parts render into the draft; consumed by the layout render in
+ * finalizeSections, which re-stamps compiled output parts with their resolved
+ * slot identity and volatility (`CompiledPart`). `partDepth` never leaves
+ * compile.
  */
 export type PartPlacement = {
   /** Slot name this part is addressed to; absent = the region's default slot. */
@@ -57,8 +59,8 @@ export type ProjectionPart<TDataContent = never> =
   | ProjectionStatePart;
 
 export type ProjectionIR<TDataContent = never> = {
-  systemParts: ProjectionPart<TDataContent>[];
-  dynamicParts: ProjectionPart<TDataContent>[];
+  preamble: ProjectionPart<TDataContent>[];
+  recency: ProjectionPart<TDataContent>[];
   tools: AnyAction[];
   states: ProjectionStatePart[];
 };
@@ -855,10 +857,28 @@ export type CharterConfig<TDataContent = never> = {
   historyProjections?: readonly HistoryProjectionFunction<TDataContent>[];
 };
 
+/**
+ * Slot identity + volatility stamped on every compiled region part by the
+ * layout render. Executors key caching (cache breakpoints at the first
+ * volatile part) and session sync (slot-granular diffing) off these; draft
+ * placement (`region`, `partDepth`) never leaves compile.
+ */
+export type CompiledPart<TDataContent = never> = ContentPart<TDataContent> & {
+  /** Owning slot name. Unknown (pseudo-)slots keep their name; untagged
+   * tail parts in a default-less region carry UNSLOTTED_PART_SLOT. */
+  slot: string;
+  /** From SlotDef.volatile. Unknown slots and the untagged tail stamp
+   * volatile — they render at the region tail and must never extend the
+   * stable prefix. */
+  volatile: boolean;
+};
+
 export type CompiledInference<TDataContent = never> = {
-  systemParts: ContentPart<TDataContent>[];
+  /** The rendered `preamble` region: durable framing, stable-first. */
+  preamble: CompiledPart<TDataContent>[];
   history: FrameMessage<TDataContent>[];
-  dynamicParts: ContentPart<TDataContent>[];
+  /** The rendered `recency` region: attention-adjacent freshness. */
+  recency: CompiledPart<TDataContent>[];
   tools: AnyAction[];
   retrievableStates: RetrievableState[];
   diagnostics?: CompileDiagnostic[];

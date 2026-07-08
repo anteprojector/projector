@@ -145,8 +145,9 @@ Placement is by slot. Slots are first-class charter-registered definitions
 string slot names remain the tolerated "proposal tier" for novel or
 data-loaded parts. One layout per compiled document arranges slots into two
 regions — `preamble` (durable framing, cache-stable) and `recency`
-(freshness) — which lower to the unchanged `systemParts`/`dynamicParts` of
-`CompiledInference`, so executors are untouched. The `preambleRegion`/
+(freshness) — which render directly to `CompiledInference.preamble` and
+`CompiledInference.recency`, every compiled part stamped with its resolved
+slot identity and volatility (`CompiledPart`). The `preambleRegion`/
 `recencyRegion` sentinels are the layout-free placement API: a part addressed
 to a region resolves to the active layout's default slot for that region and
 stays valid across layout changes. A charter that registers no layout uses
@@ -849,12 +850,28 @@ The projection compiler produces an executor-neutral shape:
 
 ```ts
 type CompiledInference<TDataContent = never> = {
-  systemParts: ContentPart<TDataContent>[];
+  /** The rendered `preamble` region: durable framing, stable-first. */
+  preamble: CompiledPart<TDataContent>[];
   history: FrameMessage<TDataContent>[];
-  dynamicParts: ContentPart<TDataContent>[];
+  /** The rendered `recency` region: attention-adjacent freshness. */
+  recency: CompiledPart<TDataContent>[];
   tools: Action[];
   retrievableStates: RetrievableState[];
   diagnostics?: CompileDiagnostic[];
+};
+
+/**
+ * Slot identity + volatility stamped on every compiled region part by the
+ * layout render. Executors key caching (cache breakpoints at the first
+ * volatile part) and session sync (slot-granular diffing) off these; draft
+ * placement never leaves compile. The cache boundary is always INFERRED from
+ * SlotDef.volatile + slot order (lint-backed), never an explicit marker part;
+ * there are no content hashes in the IR — consumers diff by slot key + plain
+ * equality.
+ */
+type CompiledPart<TDataContent = never> = ContentPart<TDataContent> & {
+  slot: string;
+  volatile: boolean;
 };
 
 type CompileDiagnostic = {
@@ -915,8 +932,9 @@ registered part code).
    they overflow into the default slot.
 3. **Render.** Each region renders its slots in layout order: parts group by
    slot, text merges per the slot's `merge` policy under the slot's optional
-   `title`, and the `preamble` region lowers to `systemParts` while `recency`
-   lowers to `dynamicParts`. Stable slots ordered after volatile slots in a
+   `title`, and each region renders to its `CompiledInference` section
+   (`preamble`/`recency`), every part stamped with its resolved slot identity
+   and volatility (`CompiledPart`). Stable slots ordered after volatile slots in a
    region draw a `volatile-order` diagnostic (forfeited prompt-cache prefix
    stability).
 
@@ -1038,17 +1056,27 @@ Executors receive the compiled sections and own provider-specific assembly:
 
 ```ts
 executor.run({
-  systemParts,
+  preamble,
   history,
-  dynamicParts,
+  recency,
   tools,
   retrievableStates,
   output,
 });
 ```
 
-Executors decide how to serialize system/dynamic content and provider tool
-configuration. Work messages are runtime metadata and should be filtered out of
+Executors decide how to serialize region content and provider tool
+configuration, under the lowering laws: given one IR, every executor's
+realization preserves part order within regions, all content, and the tool
+surface — executors re-encode, never author; degradations are declared, fixed
+rules. The laws are conformance (`test/conformance/lowering.test.ts`), run
+against the real executor packages. Concrete lowerings shipped on them: the
+aisdk executor lowers the preamble to `SystemModelMessage[]` with one
+Anthropic `cacheControl` breakpoint on the last stable block (configurable
+via `promptCache`; non-Anthropic providers keep the byte-identical single
+string), and the realtime executor keys dynamic-context conversation items by
+slot — only changed slots create/delete items, with per-slot version notes —
+and skips unchanged instruction pushes. Work messages are runtime metadata and should be filtered out of
 executor-visible history unless a future explicit projection policy allows them.
 Commands are host/client actions, not executor-visible inference tools. They
 should stay out of `CompiledInference` until a future explicit command projection
@@ -2892,14 +2920,15 @@ default, or one field assignment unless that detail changes runtime behavior.
 
 The conformance suites under `packages/projector/test/conformance/`
 (projection, layout, selects, state projections, serialization of parts,
-provenance, state) are the canonical executable form of this list.
+provenance, state, and lowering — which runs against the real executor
+packages) are the canonical executable form of this list.
 
 Add focused tests for:
 
 - Projection compiler behavior: `ProjectionNode` traversal is pre-order and
   left-to-right, members project before runtime children, parts render into
-  slots per the active layout (regions lowering to
-  `systemParts`/`dynamicParts`), select branches resolve against the
+  slots per the active layout (regions rendering to `preamble`/`recency` as
+  slot-stamped `CompiledPart`s), select branches resolve against the
   contributor's discriminator environment, guidance travels atomically with
   its action part, and same-name action collisions resolve deepest-wins with
   `shadowed-action` diagnostics.

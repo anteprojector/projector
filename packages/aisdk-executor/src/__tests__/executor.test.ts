@@ -6,6 +6,7 @@ import {
   textAssistantMessage,
   textUserMessage,
   type CompiledInference,
+  type CompiledPart,
   type ContentPart,
   type ExecutorRunRequest,
   type Frame,
@@ -16,6 +17,7 @@ import {
   AiSdkExecutor,
   buildAiSdkMessages,
   buildAiSdkSystem,
+  buildAiSdkSystemMessages,
   buildAiSdkTools,
 } from "../executor.ts";
 import type { AiSdkExecutorConfig } from "../types.ts";
@@ -32,8 +34,8 @@ describe("AI SDK prompt rendering", () => {
     expect(
       buildAiSdkSystem(
         inference({
-          systemParts: ["You are concise.", "Use tools carefully."],
-          dynamicParts: ["Mode: text."],
+          preamble: ["You are concise.", "Use tools carefully."],
+          recency: ["Mode: text."],
         }),
       ),
     ).toBe(
@@ -83,7 +85,7 @@ describe("AI SDK prompt rendering", () => {
     expect(
       buildAiSdkMessages(
         inference({
-          dynamicParts: ["Mode: text.", 'State `shared`: {"value":1}'],
+          recency: ["Mode: text.", 'State `shared`: {"value":1}'],
           history: [
             { ...textUserMessage("hello") },
             { ...textAssistantMessage("hi") },
@@ -112,7 +114,7 @@ describe("AI SDK prompt rendering", () => {
     expect(
       buildAiSdkMessages(
         inference({
-          dynamicParts: ["Mode: text."],
+          recency: ["Mode: text."],
           history: [{ ...textAssistantMessage("hi") }],
         }),
       ),
@@ -126,7 +128,7 @@ describe("AI SDK prompt rendering", () => {
     expect(
       buildAiSdkMessages(
         inference({
-          dynamicParts: [
+          recency: [
             { type: "text", text: "Latest camera snapshot:" },
             {
               type: "image",
@@ -171,8 +173,8 @@ describe("AI SDK prompt rendering", () => {
         request<{ answer: string }>({
           output: { schema },
           inference: inference<{ answer: string }>({
-            systemParts: ["system"],
-            dynamicParts: ["dynamic"],
+            preamble: ["system"],
+            recency: ["dynamic"],
             history: [{ ...textUserMessage("hi") }],
             tools: [{ state: null, name: "lookup", inputSchema: z.object({ query: z.string() }) }],
           }),
@@ -200,6 +202,82 @@ describe("AI SDK prompt rendering", () => {
   });
 });
 
+describe("Anthropic prompt-cache lowering", () => {
+  const anthropicModel = { provider: "anthropic.messages", modelId: "claude-test" } as never;
+  const CACHED = { anthropic: { cacheControl: { type: "ephemeral" } } };
+
+  it("places one breakpoint on the last stable system block, volatile after it", () => {
+    const compiled = inference({
+      preamble: [
+        "stable charter",
+        { type: "text", text: "volatile status", slot: "volatileTail", volatile: true },
+      ],
+      recency: ["Mode: text."],
+    });
+    expect(buildAiSdkSystemMessages(compiled, anthropicModel)).toEqual([
+      { role: "system", content: "## System\n\nstable charter", providerOptions: CACHED },
+      {
+        role: "system",
+        content: `volatile status\n\n## Dynamic Context\n\n${DYNAMIC_CONTEXT_GUIDANCE}`,
+      },
+    ]);
+  });
+
+  it("emits a single cached block when the whole preamble is stable", () => {
+    const compiled = inference({ preamble: ["only stable"] });
+    expect(buildAiSdkSystemMessages(compiled, anthropicModel)).toEqual([
+      { role: "system", content: "## System\n\nonly stable", providerOptions: CACHED },
+    ]);
+  });
+
+  it("block text concatenates to exactly the legacy single-string system prompt", () => {
+    const compiled = inference({
+      preamble: [
+        "stable charter",
+        { type: "text", text: "volatile status", slot: "volatileTail", volatile: true },
+      ],
+      recency: ["Mode: text."],
+    });
+    const messages = buildAiSdkSystemMessages(compiled, anthropicModel);
+    expect(Array.isArray(messages)).toBe(true);
+    expect((messages as Array<{ content: string }>).map((message) => message.content).join("\n\n")).toBe(
+      buildAiSdkSystem(compiled),
+    );
+  });
+
+  it("passes the ttl through to the breakpoint", () => {
+    const compiled = inference({ preamble: ["stable"] });
+    const messages = buildAiSdkSystemMessages(compiled, anthropicModel, { ttl: "1h" });
+    expect(messages).toEqual([
+      {
+        role: "system",
+        content: "## System\n\nstable",
+        providerOptions: { anthropic: { cacheControl: { type: "ephemeral", ttl: "1h" } } },
+      },
+    ]);
+  });
+
+  it("falls back to the single string for non-Anthropic models, promptCache: false, and empty stable prefixes", () => {
+    const compiled = inference({
+      preamble: [
+        "stable",
+        { type: "text", text: "volatile", slot: "volatileTail", volatile: true },
+      ],
+    });
+    const legacy = buildAiSdkSystem(compiled);
+    expect(buildAiSdkSystemMessages(compiled, fakeModel())).toBe(legacy);
+    expect(
+      buildAiSdkSystemMessages(compiled, { provider: "openai.responses", modelId: "gpt-x" } as never),
+    ).toBe(legacy);
+    expect(buildAiSdkSystemMessages(compiled, anthropicModel, false)).toBe(legacy);
+
+    const allVolatile = inference({
+      preamble: [{ type: "text", text: "volatile only", slot: "volatileTail", volatile: true }],
+    });
+    expect(buildAiSdkSystemMessages(allVolatile, anthropicModel)).toBe(buildAiSdkSystem(allVolatile));
+  });
+});
+
 describe("AiSdkExecutor", () => {
   it("calls generateText with model, prompt, signal, model options, and stopWhen for tools", async () => {
     const model = fakeModel();
@@ -208,8 +286,8 @@ describe("AiSdkExecutor", () => {
     const requestInput = request({
       signal,
       inference: inference({
-        systemParts: ["system"],
-        dynamicParts: ["dynamic"],
+        preamble: ["system"],
+        recency: ["dynamic"],
         history: [{ ...textUserMessage("hi") }],
         tools: [{ state: null, name: "lookup", inputSchema: z.object({ query: z.string() }) }],
       }),
@@ -769,7 +847,7 @@ describe("AiSdkExecutor", () => {
     const generate = vi.fn(async () => result({ text: "done" }));
     const refreshInference = vi.fn(() =>
       inference({
-        systemParts: ["fresh system"],
+        preamble: ["fresh system"],
         history: [
           { ...textUserMessage("hello") },
           { ...textUserMessage("arrived mid-step") },
@@ -861,24 +939,34 @@ describe("AiSdkExecutor", () => {
 });
 
 function inference<TDataContent = never>(
-  overrides: Partial<Omit<CompiledInference<TDataContent>, "systemParts" | "dynamicParts" | "history">> & {
-    systemParts?: Array<string | ContentPart<any>>;
-    dynamicParts?: Array<string | ContentPart<any>>;
+  overrides: Partial<Omit<CompiledInference<TDataContent>, "preamble" | "recency" | "history">> & {
+    preamble?: Array<string | (ContentPart<any> & { slot?: string; volatile?: boolean })>;
+    recency?: Array<string | (ContentPart<any> & { slot?: string; volatile?: boolean })>;
     history?: CompiledInference<TDataContent>["history"];
   } = {},
 ): CompiledInference<TDataContent> {
   return {
     ...overrides,
-    systemParts: normalizeParts(overrides.systemParts ?? []),
+    preamble: normalizeParts(overrides.preamble ?? [], "body", false),
     tools: overrides.tools ?? [],
     retrievableStates: overrides.retrievableStates ?? [],
     history: normalizeHistory(overrides.history ?? []),
-    dynamicParts: normalizeParts(overrides.dynamicParts ?? []),
+    recency: normalizeParts(overrides.recency ?? [], "context", true),
   };
 }
 
-function normalizeParts(parts: Array<string | ContentPart<any>>): ContentPart<any>[] {
-  return parts.map((part) => typeof part === "string" ? { type: "text", text: part } : part);
+// Stamps the region's implicit-layout defaults; part-level slot/volatile
+// overrides survive so cache-boundary tests can mark preamble parts volatile.
+function normalizeParts(
+  parts: Array<string | (ContentPart<any> & { slot?: string; volatile?: boolean })>,
+  slot: string,
+  volatile: boolean,
+): CompiledPart<any>[] {
+  return parts.map((part) =>
+    typeof part === "string"
+      ? { type: "text", text: part, slot, volatile }
+      : { slot, volatile, ...part },
+  );
 }
 
 function normalizeHistory<TDataContent>(

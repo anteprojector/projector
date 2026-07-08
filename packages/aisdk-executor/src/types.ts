@@ -54,6 +54,16 @@ export type AiSdkDeferredToolsLowering<
 }) => ToolSet;
 
 /**
+ * Anthropic prompt-cache lowering for the system prompt. Enabled by default
+ * on Anthropic providers: the preamble's stable prefix (everything before the
+ * first volatile part, per the IR's slot stamps) becomes a cached system
+ * block with one `cacheControl` breakpoint. `false` disables the split;
+ * `ttl` extends the cache lifetime. Non-Anthropic providers always get the
+ * single-string system prompt.
+ */
+export type AiSdkPromptCacheConfig = false | { ttl?: "5m" | "1h" };
+
+/**
  * Node-level executor config, carried on `node.executorConfig.aisdk` in the
  * charter (plain JSON) and delivered per activation via
  * `ExecutorRunRequest.config`. Overrides the executor-level defaults.
@@ -74,6 +84,7 @@ export type AiSdkExecutorConfig<
   TDataContent = never,
 > = {
   model: LanguageModel;
+  promptCache?: AiSdkPromptCacheConfig;
   generateText?: AiSdkGenerateText;
   streamText?: AiSdkStreamText;
   debug?: boolean;

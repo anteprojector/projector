@@ -52,6 +52,7 @@ import type {
   Charter,
   CompileDiagnostic,
   CompiledInference,
+  CompiledPart,
   ContentPart,
   Frame,
   FrameMessage,
@@ -77,7 +78,7 @@ import type {
 } from "./types.ts";
 
 export function emptyProjectionIR<TDataContent = never>(): ProjectionIR<TDataContent> {
-  return { systemParts: [], dynamicParts: [], tools: [], states: [] };
+  return { preamble: [], recency: [], tools: [], states: [] };
 }
 
 export function addProjectionStatePart(
@@ -161,8 +162,8 @@ export type CompiledContributor<TDataContent = never> = {
   output?: OutputMeta;
   boundaryProjection: BoundaryProjection;
   compiled: {
-    systemParts: ContentPart<TDataContent>[];
-    dynamicParts: ContentPart<TDataContent>[];
+    preamble: CompiledPart<TDataContent>[];
+    recency: CompiledPart<TDataContent>[];
     tools: ActionMeta[];
     retrievableStates: RetrievableState[];
   };
@@ -290,12 +291,14 @@ export type ProjectionIRToolView = {
 /**
  * The draft parts IR before layout render: placement tags (slot/region/
  * partDepth) intact, state parts un-rendered, and the tool pool before
- * deepest-wins dedup — provenance the finalized `CompiledInference` erases.
+ * deepest-wins dedup. The finalized `CompiledInference` keeps resolved slot
+ * identity and volatility on each part but erases region/partDepth and the
+ * pre-merge part structure.
  */
 export type ProjectionIRView<TDataContent = never> = {
   layout: CompiledLayoutView;
-  systemParts: DryProjectionPart<TDataContent>[];
-  dynamicParts: DryProjectionPart<TDataContent>[];
+  preamble: DryProjectionPart<TDataContent>[];
+  recency: DryProjectionPart<TDataContent>[];
   tools: ProjectionIRToolView[];
 };
 
@@ -326,8 +329,8 @@ export function inspectProjectionIR<TDataContent = never>(
 
   return {
     layout: compiledLayoutView(session.layout),
-    systemParts: draft.systemParts.map(dryProjectionPart),
-    dynamicParts: draft.dynamicParts.map(dryProjectionPart),
+    preamble: draft.preamble.map(dryProjectionPart),
+    recency: draft.recency.map(dryProjectionPart),
     tools: draft.tools.map((tool) => ({
       name: tool.name,
       ...(tool.description !== undefined ? { description: tool.description } : {}),
@@ -537,8 +540,8 @@ function forwardProjectionIR<TDataContent>(
   draft: ProjectionIR<TDataContent>,
   exported: ProjectionIR<TDataContent>,
 ): void {
-  draft.systemParts.push(...exported.systemParts);
-  draft.dynamicParts.push(...exported.dynamicParts);
+  draft.preamble.push(...exported.preamble);
+  draft.recency.push(...exported.recency);
   draft.tools.push(...exported.tools);
   for (const state of exported.states) {
     addProjectionStatePart(draft, state);
@@ -556,9 +559,9 @@ function pushContentPart<TDataContent>(
       ? layoutRegionForSlot(session.layout, part.slot) ?? "preamble"
       : "preamble");
   if (region === "recency") {
-    draft.dynamicParts.push(part);
+    draft.recency.push(part);
   } else {
-    draft.systemParts.push(part);
+    draft.preamble.push(part);
   }
 }
 
@@ -616,8 +619,8 @@ function createCompiledContributor<TDataContent>(
     output: outputMeta(contributor.node.output),
     boundaryProjection: runtime.boundaryProjection,
     compiled: {
-      systemParts: compiled.systemParts,
-      dynamicParts: compiled.dynamicParts,
+      preamble: compiled.preamble,
+      recency: compiled.recency,
       tools: compiled.tools.map((tool) => actionMeta(tool, actionExposure(tool))),
       retrievableStates: compiled.retrievableStates,
     },
@@ -770,15 +773,15 @@ function finalizeSections<TDataContent>(
 
   const keepNote = deferredNoteFilter(tools);
   return {
-    systemParts: renderRegion(
-      compileContentParts(draft.systemParts.filter(keepNote), aliases),
+    preamble: renderRegion(
+      compileContentParts(draft.preamble.filter(keepNote), aliases),
       session.layout,
       "preamble",
       (diagnostic) => reportDiagnostic(session, diagnostic),
     ),
     history,
-    dynamicParts: renderRegion(
-      compileContentParts(draft.dynamicParts.filter(keepNote), aliases),
+    recency: renderRegion(
+      compileContentParts(draft.recency.filter(keepNote), aliases),
       session.layout,
       "recency",
       (diagnostic) => reportDiagnostic(session, diagnostic),
@@ -1009,12 +1012,12 @@ function collectProjectedStates(draft: ProjectionIR<any>): ProjectionStatePart[]
   for (const state of draft.states) {
     add(state);
   }
-  for (const part of draft.systemParts) {
+  for (const part of draft.preamble) {
     if (part.type === "state") {
       add(part);
     }
   }
-  for (const part of draft.dynamicParts) {
+  for (const part of draft.recency) {
     if (part.type === "state") {
       add(part);
     }

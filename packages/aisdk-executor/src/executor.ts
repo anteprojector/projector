@@ -6,6 +6,7 @@ import {
   tool,
   type ModelMessage,
   type PrepareStepFunction,
+  type SystemModelMessage,
   type ToolSet,
 } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
@@ -40,6 +41,7 @@ import type {
   AiSdkDeferredToolsLowering,
   AiSdkExecutorConfig,
   AiSdkExecutorNodeConfig,
+  AiSdkPromptCacheConfig,
   AiSdkStreamUpdate,
 } from "./types.ts";
 
@@ -238,7 +240,7 @@ function buildAiSdkInput<TDataContent = never>(
   const hasTools = Object.keys(tools).length > 0;
   return {
     model: config.model,
-    system: buildAiSdkSystem(request.inference),
+    system: buildAiSdkSystemMessages(request.inference, config.model, config.promptCache),
     messages: buildAiSdkMessages(request.inference, config.messageToModelMessage),
     prepareStep: request.refreshInference
       ? buildPrepareStep(request.refreshInference, config)
@@ -285,7 +287,7 @@ function buildPrepareStep<TDataContent>(
     if (stepNumber === 0) return undefined;
     const inference = refreshInference();
     return {
-      system: buildAiSdkSystem(inference),
+      system: buildAiSdkSystemMessages(inference, config.model, config.promptCache),
       messages: [
         ...buildAiSdkMessages(inference, config.messageToModelMessage),
         ...steps.flatMap((step) => step.response.messages),
@@ -378,15 +380,59 @@ function shouldStream<TDataContent>(
 }
 
 export function buildAiSdkSystem(inference: CompiledInference<any>): string {
-  const dynamicGuidance = hasRenderedParts(inference.dynamicParts)
+  const dynamicGuidance = hasRenderedParts(inference.recency)
     ? [{ type: "text" as const, text: DYNAMIC_CONTEXT_SYSTEM_GUIDANCE }]
     : [];
   return [
-    renderSection("System", inference.systemParts),
+    renderSection("System", inference.preamble),
     renderSection("Dynamic Context", dynamicGuidance),
   ]
     .filter(Boolean)
     .join("\n\n");
+}
+
+/**
+ * Lowers the preamble to system blocks with an Anthropic prompt-cache
+ * breakpoint at the stable/volatile boundary the IR marks on each part. The
+ * concatenated block text equals buildAiSdkSystem's string, so non-Anthropic
+ * providers (and promptCache: false) fall back to it byte-identically. One
+ * breakpoint, on the last stable block; Anthropic orders tools before system,
+ * so it also caches the tool-definition prefix.
+ */
+export function buildAiSdkSystemMessages(
+  inference: CompiledInference<any>,
+  model: AiSdkExecutorConfig<any>["model"],
+  promptCache?: AiSdkPromptCacheConfig,
+): string | SystemModelMessage[] {
+  if (promptCache === false) return buildAiSdkSystem(inference);
+  const provider = model && typeof model === "object" ? readStringField(model, "provider") : undefined;
+  if (!provider?.startsWith("anthropic.")) return buildAiSdkSystem(inference);
+
+  const boundary = inference.preamble.findIndex((part) => part.volatile);
+  const stable = boundary === -1 ? inference.preamble : inference.preamble.slice(0, boundary);
+  if (!hasRenderedParts(stable)) return buildAiSdkSystem(inference);
+  const volatileTail = boundary === -1 ? [] : inference.preamble.slice(boundary);
+
+  const dynamicGuidance = hasRenderedParts(inference.recency)
+    ? [{ type: "text" as const, text: DYNAMIC_CONTEXT_SYSTEM_GUIDANCE }]
+    : [];
+  const volatileText = [
+    renderContentPartsForText(volatileTail),
+    renderSection("Dynamic Context", dynamicGuidance),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const cacheControl = { type: "ephemeral" as const, ...(promptCache?.ttl ? { ttl: promptCache.ttl } : {}) };
+  const messages: SystemModelMessage[] = [
+    {
+      role: "system",
+      content: renderSection("System", stable),
+      providerOptions: { anthropic: { cacheControl } },
+    },
+  ];
+  if (volatileText) messages.push({ role: "system", content: volatileText });
+  return messages;
 }
 
 export function buildAiSdkMessages<TDataContent = never>(
@@ -402,7 +448,7 @@ export function buildAiSdkMessages<TDataContent = never>(
       entry.message !== undefined
     );
   const messages = entries.map((entry) => entry.message);
-  const dynamicContext = renderDynamicContextMessage(inference.dynamicParts);
+  const dynamicContext = renderDynamicContextMessage(inference.recency);
   if (!dynamicContext) {
     return messages;
   }

@@ -29,8 +29,8 @@ describe("conformance: state projections", () => {
   it("hides state with no projection config, declaration and binding only", () => {
     const node = createNode({ key: "n", states: [prefs], instructions: "prose" });
     const compiled = compiledFor(node, { states: [prefs] });
-    expect(joined(compiled.systemParts)).not.toContain("prefs");
-    expect(joined(compiled.dynamicParts)).not.toContain("prefs");
+    expect(joined(compiled.preamble)).not.toContain("prefs");
+    expect(joined(compiled.recency)).not.toContain("prefs");
     expect(compiled.retrievableStates).toEqual([]);
   });
 
@@ -56,9 +56,9 @@ describe("conformance: state projections", () => {
       ],
     });
     // Custom render, routed to the recency region by its slot.
-    expect(joined(compiled.dynamicParts)).toContain("Tone is warm.");
+    expect(joined(compiled.recency)).toContain("Tone is warm.");
     // Default render in the preamble default slot.
-    expect(joined(compiled.systemParts)).toContain('State `plainPrefs`: {"tone":"warm"}');
+    expect(joined(compiled.preamble)).toContain('State `plainPrefs`: {"tone":"warm"}');
   });
 
   it("defers state behind getState with an overridable note", () => {
@@ -78,7 +78,7 @@ describe("conformance: state projections", () => {
       "notedPrefs",
     ]);
     expect(compiled.tools.map((tool) => tool.name)).toContain("getState");
-    const system = joined(compiled.systemParts);
+    const system = joined(compiled.preamble);
     expect(system).toContain("You can call getState with address `deferredPrefs`");
     expect(system).toContain("Preferences live at notedPrefs; fetch only when personalizing.");
   });
@@ -92,7 +92,7 @@ describe("conformance: state projections", () => {
     expect(instance.states?.alpha).toEqual({ value: { v: 1 } });
     expect(instance.states?.beta).toEqual({ value: { v: 2 } });
     const compiled = compileProjection(instance, { charter: charter({ nodes: [node], states: [a, b] }) });
-    const system = joined(compiled.systemParts);
+    const system = joined(compiled.preamble);
     expect(system).toContain("State `alpha`");
     expect(system).toContain("State `beta`");
   });

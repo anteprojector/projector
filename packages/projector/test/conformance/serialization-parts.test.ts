@@ -120,7 +120,7 @@ describe("conformance: parts serialization", () => {
     rehydrated.params = {};
     resolveStates(rehydrated);
     const compiled = compileProjection(rehydrated, { charter: testCharter() });
-    const texts = compiled.systemParts.map((part) => (part.type === "text" ? part.text : ""));
+    const texts = compiled.preamble.map((part) => (part.type === "text" ? part.text : ""));
     expect(texts.join("\n")).toContain("patched prose");
     expect(texts.join("\n")).toContain("computed info");
     // The terse branch's respond resolves to the SOURCE node's terse variant.
@@ -146,7 +146,7 @@ describe("conformance: parts serialization", () => {
 
     const rehydrated = roundTrip(instance);
     const compiled = compileProjection(rehydrated, { charter: testCharter() });
-    expect(compiled.systemParts.some((p) => p.type === "text" && p.text.includes("de novo prose"))).toBe(true);
+    expect(compiled.preamble.some((p) => p.type === "text" && p.text.includes("de novo prose"))).toBe(true);
     expect(compiled.tools.map((t) => t.name)).toContain("search");
     // caller external stays off the tool surface after the round trip.
     expect(compiled.tools.map((t) => t.name)).not.toContain("notify");
@@ -211,8 +211,8 @@ describe("conformance: parts serialization", () => {
     const rehydrated = roundTrip(instance);
     rehydrated.params = { verbose: true };
     const compiled = compileProjection(rehydrated, { charter: testCharter() });
-    expect(compiled.systemParts.some((p) => p.type === "text" && p.text.includes("facet prose"))).toBe(true);
-    expect(compiled.systemParts.some((p) => p.type === "text" && p.text.includes("extra prose"))).toBe(true);
+    expect(compiled.preamble.some((p) => p.type === "text" && p.text.includes("facet prose"))).toBe(true);
+    expect(compiled.preamble.some((p) => p.type === "text" && p.text.includes("extra prose"))).toBe(true);
   });
 
   it("binds stateful actions across round trips only through registered state descriptors", () => {

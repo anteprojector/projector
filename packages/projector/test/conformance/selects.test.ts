@@ -46,7 +46,7 @@ function sourceFor(node: ReturnType<typeof createNode>): Instance {
 }
 
 function systemText(compiled: ReturnType<typeof compileProjection>): string {
-  return compiled.systemParts
+  return compiled.preamble
     .map((part) => (part.type === "text" ? part.text : ""))
     .join("\n");
 }

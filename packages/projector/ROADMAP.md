@@ -71,21 +71,13 @@ a named history renderer over the child generator's frames (the generalized
 form of a return-to-manager action's hand-written report). Both extend the enum with
 declarative data, never reintroduce arbitrary code at the boundary.
 
-### 6. Named/registered text parts (the reuse tier)
-Identity tiers for text today: anonymous inline (tier 1) and computed
-(registered, tier 3). Missing: tier 2 — charter-registered *static* parts
-referenced by name from many nodes (shared grounding/escalation policy written
-once, deduped by ref identity). Also the groundwork for part-diffing: the
-realtime executor could diff named parts across turns and push incremental
-session updates instead of re-deriving instructions.
-
-### 7. Budget degradation (`droppable`)
+### 6. Budget degradation (`droppable`)
 Removed from `SlotDef` because nothing consumed it. Reintroduce together with
 its consumer: layout-declared truncation tiers that a budget-constrained
 executor must respect — what gets sacrificed is a charter decision the
 executor enforces, never executor improvisation.
 
-### 8. Observability artifact + transport redaction
+### 7. Observability artifact + transport redaction
 The compiled-tree inspection should become the near-full IR artifact: parts
 with addresses and provenance, discriminator resolutions (value + resolving
 container), member derivations, select branches taken, plus the rendered
@@ -94,23 +86,40 @@ branch voice, resolved from agentControls @ thread-x"). Who-sees-how-much is a
 host-side redaction/view policy per transport channel (dev inspector: full;
 end-user clients: states only), not a second document structure.
 
-### 9. Executor lowering laws + cache breakpoints
-Formalize the region contract as conformance: given one IR, every executor's
-realization preserves part order within regions, all content, and the tool
-surface — executors re-encode, never author; degradations (no recency
-mechanism, no native tools) are declared, fixed rules. Concrete wins waiting:
-Anthropic `cache_control` breakpoints placed at the stable/volatile boundary
-the IR already marks; realtime `session.update` minimization via part identity.
-Possible region additions (e.g. `epilogue`) are IR-contract changes with
-lowering semantics, never per-layout inventions. Renaming
-`systemParts`/`dynamicParts` to region names is possible now but drags both
-executors in for zero behavior — bundle it with this work.
+### 8. Executor lowering laws + cache breakpoints — LANDED
+The compiled IR now matches the layout output: `systemParts`/`dynamicParts`
+became `preamble`/`recency` (CompiledInference, ProjectionIR, the inspection
+wire, and the sandbox client — which keeps dual-spelling reads for persisted
+payloads), and the layout render stamps every compiled part with its resolved
+slot identity and volatility (`CompiledPart`) instead of stripping placement.
+Identity is slot-granular by decision: text-run merging collapses per-source
+identity within a slot anyway, and owner addresses were never on content
+parts (owner-level provenance stays with item 7). Settled rules: the cache
+boundary is always INFERRED from `SlotDef.volatile` + slot order (lint-backed)
+— never an explicit marker part (markers can lie; breakpoints are provider
+mechanics; composable node parts lack the global view); no content hashes in
+the IR — consumers diff by slot key + plain equality. The wins shipped with
+it: the aisdk executor lowers the preamble to `SystemModelMessage[]` with one
+Anthropic `cacheControl` breakpoint on the last stable block (configurable via
+`promptCache`; non-Anthropic providers keep the byte-identical single string),
+and the realtime executor keys dynamic-context conversation items by slot
+(only changed slots create/delete items; per-slot version notes) and skips
+unchanged instruction pushes. The lowering laws are conformance
+(`test/conformance/lowering.test.ts`): order preserved within regions, content
+preserved (image degradation is a declared fixed rule), tool surface preserved
+(deferred tools lower or refuse loudly), one breakpoint at the stable/volatile
+boundary, block text re-encodes (never authors) the legacy system string.
+Still open here: possible region additions (e.g. `epilogue`) are IR-contract
+changes with lowering semantics, never per-layout inventions; realtime item
+ordering across slots is unanchored (items append at the conversation tail —
+`previous_item_id` anchoring is a follow-up); tool-list `session.update`
+diffing.
 
 ## Process
 
-### 10. Upstream sync
+### 9. Upstream sync
 The canonical copy of this package currently lives in a downstream product
-repo; this repo receives milestone snapshots (last synced: parts-model
-milestone, 2026-07-07). Product-specific deferred work is tracked in that
-repo's copy of this roadmap, not here. The conformance suites are what make
-each sync cheap.
+repo; this repo receives milestone snapshots (last synced: executor lowering
+laws + cache breakpoints, 2026-07-08). Product-specific deferred work is
+tracked in that repo's copy of this roadmap, not here. The conformance suites
+are what make each sync cheap.

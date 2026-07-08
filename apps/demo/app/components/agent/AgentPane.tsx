@@ -302,8 +302,8 @@ type CompiledIrResult = {
   runtimes: Array<
     RuntimeInspectionBase & {
       inference: {
-        systemParts: string[];
-        dynamicParts: string[];
+        preamble: string[];
+        recency: string[];
         tools: string[];
         retrievableStates: unknown[];
       };
@@ -340,16 +340,16 @@ function CompiledIrTree({ sessionId }: { sessionId: Id<"sessions"> | null }) {
           key={runtime.generatorId}
           runtime={runtime}
           defaultExpanded={index === 0}
-          summary={`system ${runtime.inference.systemParts.length} / dynamic ${runtime.inference.dynamicParts.length} / tools ${runtime.inference.tools.length}`}
+          summary={`system ${runtime.inference.preamble.length} / dynamic ${runtime.inference.recency.length} / tools ${runtime.inference.tools.length}`}
         >
           <TreeSection title="compiled inference">
             <JsonDisclosure
-              title={`system ${runtime.inference.systemParts.length}`}
-              value={runtime.inference.systemParts}
+              title={`system ${runtime.inference.preamble.length}`}
+              value={runtime.inference.preamble}
             />
             <JsonDisclosure
-              title={`dynamic ${runtime.inference.dynamicParts.length}`}
-              value={runtime.inference.dynamicParts}
+              title={`dynamic ${runtime.inference.recency.length}`}
+              value={runtime.inference.recency}
             />
             <NameList
               title={`tools ${runtime.inference.tools.length}`}
@@ -2258,8 +2258,8 @@ function Contributor({
           {node.id}
         </span>
         <span className="ml-auto shrink-0 text-terminal-green-dim">
-          system {node.compiled.systemParts.length} / dynamic{" "}
-          {node.compiled.dynamicParts.length} / tools{" "}
+          system {node.compiled.preamble.length} / dynamic{" "}
+          {node.compiled.recency.length} / tools{" "}
           {node.compiled.tools.length}
         </span>
       </button>
@@ -2304,8 +2304,8 @@ function Contributor({
 
 function CompiledPayload({ node }: { node: CompiledContributor }) {
   const empty =
-    node.compiled.systemParts.length === 0 &&
-    node.compiled.dynamicParts.length === 0 &&
+    node.compiled.preamble.length === 0 &&
+    node.compiled.recency.length === 0 &&
     node.compiled.tools.length === 0 &&
     node.compiled.retrievableStates.length === 0;
 
@@ -2316,12 +2316,12 @@ function CompiledPayload({ node }: { node: CompiledContributor }) {
   return (
     <TreeSection title="compiled payload">
       <JsonDisclosure
-        title={`system ${node.compiled.systemParts.length}`}
-        value={node.compiled.systemParts}
+        title={`system ${node.compiled.preamble.length}`}
+        value={node.compiled.preamble}
       />
       <JsonDisclosure
-        title={`dynamic ${node.compiled.dynamicParts.length}`}
-        value={node.compiled.dynamicParts}
+        title={`dynamic ${node.compiled.recency.length}`}
+        value={node.compiled.recency}
       />
       <JsonDisclosure
         title={`tools ${node.compiled.tools.length}`}

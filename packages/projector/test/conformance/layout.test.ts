@@ -54,7 +54,7 @@ describe("conformance: layout", () => {
     const compiled = compileProjection(createSourceInstance({ id: "i", node }), {
       charter: layoutCharter({ nodes: [node] }),
     });
-    const rendered = systemText(compiled.systemParts);
+    const rendered = systemText(compiled.preamble);
     expect(rendered).toBe(
       "free prose\n===\nGuidelines:\n===\n- rule a\n- rule b\n===\nFlow:\n===\nstep one",
     );
@@ -68,7 +68,7 @@ describe("conformance: layout", () => {
     const compiled = compileProjection(createSourceInstance({ id: "i", node }), {
       charter: layoutCharter({ nodes: [node] }),
     });
-    const rendered = systemText(compiled.systemParts);
+    const rendered = systemText(compiled.preamble);
     expect(rendered).toBe("Guidelines:\n===\n- one\n- two\n- three");
   });
 
@@ -82,7 +82,7 @@ describe("conformance: layout", () => {
       charter: layoutCharter({ nodes: [node] }),
       onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
     });
-    expect(systemText(compiled.systemParts)).toBe("prose\n===\nnovel content");
+    expect(systemText(compiled.preamble)).toBe("prose\n===\nnovel content");
     expect(diagnostics).toContainEqual(
       expect.objectContaining({ code: "unknown-slot", severity: "warning" }),
     );
@@ -135,9 +135,9 @@ describe("conformance: layout", () => {
     const compiled = compileProjection(instance, {
       charter: layoutCharter({ nodes: [node], states: [stateDescriptor] }),
     });
-    expect(systemText(compiled.systemParts)).toContain("user=u1 tone=warm");
-    expect(compiled.dynamicParts.some((part) => part.type === "image")).toBe(true);
-    expect(compiled.dynamicParts.some((part) => part.type === "text" && part.text.includes("computed content part"))).toBe(true);
+    expect(systemText(compiled.preamble)).toContain("user=u1 tone=warm");
+    expect(compiled.recency.some((part) => part.type === "image")).toBe(true);
+    expect(compiled.recency.some((part) => part.type === "text" && part.text.includes("computed content part"))).toBe(true);
   });
 
   it("rejects computed parts targeting non-volatile slots at charter build", () => {
@@ -158,27 +158,61 @@ describe("conformance: layout", () => {
     ).toThrow(/volatile/);
   });
 
-  it("never leaks placement tags into the compiled inference", () => {
+  it("stamps every compiled part with slot identity and volatility, never draft placement", () => {
     const node = createNode({
       key: "n",
-      parts: [text(guidelines, "rule"), text(flow, "step"), text("prose")],
+      parts: [
+        text(guidelines, "rule"),
+        text(flow, "step"),
+        text("prose"),
+        text(contextSlot, "fresh"),
+        text("proposed-slot", "novel"),
+      ],
     });
     const compiled = compileProjection(createSourceInstance({ id: "i", node }), {
       charter: layoutCharter({ nodes: [node] }),
+      onDiagnostic: () => {},
     });
-    for (const part of [...compiled.systemParts, ...compiled.dynamicParts]) {
-      expect(part.slot).toBeUndefined();
+    for (const part of [...compiled.preamble, ...compiled.recency]) {
+      expect(typeof part.slot).toBe("string");
+      expect(typeof part.volatile).toBe("boolean");
+      expect(part.region).toBeUndefined();
       expect(part.partDepth).toBeUndefined();
+    }
+    // Title parts carry the owning slot; unknown slots keep their name, volatile.
+    expect(compiled.preamble).toContainEqual({
+      type: "text",
+      text: "Guidelines:",
+      slot: "guidelines",
+      volatile: false,
+    });
+    expect(compiled.preamble).toContainEqual({
+      type: "text",
+      text: "novel",
+      slot: "proposed-slot",
+      volatile: true,
+    });
+    expect(compiled.recency).toContainEqual({
+      type: "text",
+      text: "fresh",
+      slot: "context",
+      volatile: true,
+    });
+    // Stable parts precede volatile parts within each region.
+    for (const region of [compiled.preamble, compiled.recency]) {
+      const firstVolatile = region.findIndex((part) => part.volatile);
+      if (firstVolatile === -1) continue;
+      expect(region.slice(firstVolatile).every((part) => part.volatile)).toBe(true);
     }
   });
 
-  it("routes parts addressed to recency slots into dynamicParts", () => {
+  it("routes parts addressed to recency slots into recency", () => {
     const node = createNode({ key: "n", parts: [text(contextSlot, "fresh info"), text("stable")] });
     const compiled = compileProjection(createSourceInstance({ id: "i", node }), {
       charter: layoutCharter({ nodes: [node] }),
     });
-    expect(systemText(compiled.systemParts)).toBe("stable");
-    expect(systemText(compiled.dynamicParts)).toBe("fresh info");
+    expect(systemText(compiled.preamble)).toBe("stable");
+    expect(systemText(compiled.recency)).toBe("fresh info");
   });
 
   it("renders identically through the implicit default layout when no layout is registered", () => {
@@ -186,6 +220,6 @@ describe("conformance: layout", () => {
     const compiled = compileProjection(createSourceInstance({ id: "i", node }), {
       charter: charter({ nodes: [node] }),
     });
-    expect(systemText(compiled.systemParts)).toBe("hello world");
+    expect(systemText(compiled.preamble)).toBe("hello world");
   });
 });

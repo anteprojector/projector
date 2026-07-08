@@ -2,12 +2,20 @@ import { assertProjectorIdentifier } from "./identifiers.ts";
 import { createSlot } from "./slots.ts";
 import type {
   CompileDiagnostic,
+  CompiledPart,
   ContentPart,
   HistoryProjection,
   LayoutDef,
   LayoutRegionName,
   SlotDef,
 } from "./types.ts";
+
+/**
+ * Stamped as the `slot` of compiled parts that were untagged in a region with
+ * no default slot. Contains `:`, which slot-name validation forbids, so it can
+ * never collide with a declared slot.
+ */
+export const UNSLOTTED_PART_SLOT = ":untagged";
 
 export type LayoutConfig = {
   name: string;
@@ -24,9 +32,9 @@ export type CreatedLayout = LayoutDef & { default?: boolean };
 /**
  * A layout owns naming, ordering, and rendering for one compiled document.
  * Regions are a closed set defined by the IR contract (executors lower them):
- * `preamble` (durable framing → systemParts) and `recency` (attention-adjacent
- * freshness → dynamicParts). One layout per compiled surface; layouts never
- * merge or cascade.
+ * `preamble` (durable framing) and `recency` (attention-adjacent freshness),
+ * compiled to the identically named CompiledInference fields. One layout per
+ * compiled surface; layouts never merge or cascade.
  */
 export function createLayout(config: LayoutConfig): CreatedLayout {
   assertProjectorIdentifier(config.name, "Layout name");
@@ -140,15 +148,16 @@ export function defaultSlotForRegion(
  * region-addressed → the region's default slot), emit slot buckets in
  * declared order, render
  * titles and merge modes, cohere unknown slots as pseudo-slots at the region
- * tail (ordered by name), and strip placement tags. Text runs within a slot
- * merge per the slot's merge mode; image/data parts pass through in position.
+ * tail (ordered by name), and stamp each output part with its resolved slot
+ * identity and volatility. Text runs within a slot merge per the slot's merge
+ * mode; image/data parts pass through in position.
  */
 export function renderRegion<TDataContent>(
   parts: ContentPart<TDataContent>[],
   layout: LayoutDef,
   region: LayoutRegionName,
   onDiagnostic: (diagnostic: CompileDiagnostic) => void,
-): ContentPart<TDataContent>[] {
+): CompiledPart<TDataContent>[] {
   const slots = layout.regions[region];
   const defaultSlot = defaultSlotForRegion(layout, region);
   const declared = new Set(slots.map((slot) => slot.name));
@@ -171,7 +180,7 @@ export function renderRegion<TDataContent>(
     buckets.set(bucketKey, bucket);
   }
 
-  const rendered: ContentPart<TDataContent>[] = [];
+  const rendered: CompiledPart<TDataContent>[] = [];
   const emitBucket = (slot: SlotDef, bucket: ContentPart<TDataContent>[] | undefined) => {
     if (!bucket || bucket.length === 0) {
       return;
@@ -184,17 +193,20 @@ export function renderRegion<TDataContent>(
   for (const slot of slots) {
     emitBucket(slot, buckets.get(slot.name));
   }
-  // Region with no default slot: untagged parts render at the tail, bare.
+  // Region with no default slot: untagged parts render at the tail, bare
+  // (unmerged, untitled) but stamped; they never extend the stable prefix.
   const untargeted = buckets.get("");
   if (untargeted) {
-    rendered.push(...untargeted.map(stripPlacement));
+    rendered.push(...untargeted.map((part) => stampPart(part, UNSLOTTED_PART_SLOT, true)));
   }
   // Unknown slots: pseudo-slots at the region tail, deterministic by name.
   // Constructed inline (not via createSlot) so data-loaded slot names that
   // fail identifier validation still degrade gracefully instead of throwing.
+  // Volatile: they render after any declared volatile slots, so stamping them
+  // stable would break the stable-before-volatile compiled ordering.
   for (const slot of [...unknownOrder].sort()) {
     emitBucket(
-      { kind: "slot", name: slot, merge: "block", volatile: false, default: false },
+      { kind: "slot", name: slot, merge: "block", volatile: true, default: false },
       buckets.get(slot),
     );
   }
@@ -205,10 +217,10 @@ export function renderRegion<TDataContent>(
 function renderSlotBucket<TDataContent>(
   slot: SlotDef,
   bucket: ContentPart<TDataContent>[],
-): ContentPart<TDataContent>[] {
-  const out: ContentPart<TDataContent>[] = [];
+): CompiledPart<TDataContent>[] {
+  const out: CompiledPart<TDataContent>[] = [];
   if (slot.title) {
-    out.push({ type: "text", text: `${slot.title}:` });
+    out.push({ type: "text", text: `${slot.title}:`, slot: slot.name, volatile: slot.volatile });
   }
 
   let textRun: string[] = [];
@@ -219,7 +231,7 @@ function renderSlotBucket<TDataContent>(
     const text = slot.merge === "list"
       ? textRun.map((entry) => `- ${entry}`).join("\n")
       : textRun.join("\n\n");
-    out.push({ type: "text", text });
+    out.push({ type: "text", text, slot: slot.name, volatile: slot.volatile });
     textRun = [];
   };
 
@@ -229,18 +241,18 @@ function renderSlotBucket<TDataContent>(
       continue;
     }
     flushRun();
-    out.push(stripPlacement(part));
+    out.push(stampPart(part, slot.name, slot.volatile));
   }
   flushRun();
   return out;
 }
 
-function stripPlacement<TDataContent>(
+/** Replaces draft placement (slot/region/partDepth) with the compiled stamp. */
+function stampPart<TDataContent>(
   part: ContentPart<TDataContent>,
-): ContentPart<TDataContent> {
-  if (part.slot === undefined && part.region === undefined && part.partDepth === undefined) {
-    return part;
-  }
+  slot: string,
+  volatile: boolean,
+): CompiledPart<TDataContent> {
   const { slot: _slot, region: _region, partDepth: _partDepth, ...rest } = part;
-  return rest as ContentPart<TDataContent>;
+  return { ...rest, slot, volatile } as CompiledPart<TDataContent>;
 }
