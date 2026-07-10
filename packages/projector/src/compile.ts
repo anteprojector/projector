@@ -43,6 +43,7 @@ import {
   resolveComputedActionEntry,
 } from "./scoped-actions.ts";
 import { slotPlacement } from "./slots.ts";
+import { assertNodeActionParamsCompatibility } from "./params.ts";
 import {
   deriveStateAliases,
   groupStatesByContributor,
@@ -555,6 +556,7 @@ function renderActionPart<TDataContent>(
   }
   const action = resolve(part.action);
   assertNodeActionStateCompatibility(action, contributor.node, "tool");
+  assertNodeActionParamsCompatibility(action, contributor.node, "tool");
   if (part.exposure === "deferred" && part.guidance === undefined) {
     // Auto availability note; explicit guidance (even []) replaces it.
     const summary = action.description?.split("\n", 1)[0];

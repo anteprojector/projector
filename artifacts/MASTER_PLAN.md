@@ -682,14 +682,24 @@ const loadProfile = createAction({
 });
 ```
 
-Static compatibility is intentionally strict in the first pass:
+Static compatibility is intentionally strict, and spelled as never-on-pass
+diagnostic validators — no explicit type arguments anywhere:
 
-- `charter.params` must satisfy every registered node's `node.params`;
-- member nodes are included recursively in that type check;
-- `node.params` must satisfy every inline attached action's `action.params`;
-- string action refs are resolved later through the charter, so their params are
-  validated when real params are parsed into action contexts rather than through
-  runtime schema comparison.
+- `charter.params` must satisfy every registered node's `node.params`
+  (member nodes included recursively), and `node.params` must satisfy every
+  inline attached action's `action.params`;
+- the check compares the provider's resolved OUTPUT against the consumer's
+  INPUT: the consumer re-parses what it picks, so a key its schema can
+  default or treat as optional need not be provided;
+- on failure the validator intersects a `ParamsSatisfyError` diagnostic
+  object into the config parameter, so the assignability error names the
+  mismatched keys instead of burying them in generic instantiation noise;
+- everything the type layer cannot see — string action refs, computed-
+  closure returns, hydrated dry nodes, plain-JS callers — is covered by the
+  bind-time runtime backstop (`assertNodeActionParamsCompatibility`): every
+  param key an action's schema cannot resolve without must be declared by
+  the node, since node params filter effective params before the action
+  picks from them.
 
 The runtime does not compare params schemas to each other. Instead, it parses
 real values at the points where they matter:

@@ -115,7 +115,7 @@ export function hydrateNode<TDataContent = never>(
   }
 
   const sourceNode = serialized.sourceNodeKey ? charter.nodes[serialized.sourceNodeKey] : undefined;
-  return createNode<TDataContent>({
+  return createNode({
     key: serialized.key,
     sourceNodeKey: serialized.sourceNodeKey,
     name: serialized.name,

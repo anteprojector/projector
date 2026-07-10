@@ -74,6 +74,7 @@ import type {
 } from "./types.ts";
 import { compileProjection } from "./compile.ts";
 import {
+  assertNodeActionParamsCompatibility,
   resolveActionParams,
   resolveEffectiveParams,
 } from "./params.ts";
@@ -873,11 +874,9 @@ function validateMachineActionStateCompatibility<TDataContent>(
 ): void {
   for (const contributor of collectContributors(root)) {
     for (const entry of collectAllNodeActions(contributor.node, charter)) {
-      assertNodeActionStateCompatibility(
-        entry.action,
-        contributor.node,
-        callerAllows(entry.caller, "generator") ? "tool" : "command",
-      );
+      const kind = callerAllows(entry.caller, "generator") ? "tool" : "command";
+      assertNodeActionStateCompatibility(entry.action, contributor.node, kind);
+      assertNodeActionParamsCompatibility(entry.action, contributor.node, kind);
     }
   }
 }

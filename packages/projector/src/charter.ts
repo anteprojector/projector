@@ -1,12 +1,14 @@
 import {
   normalizeStateDescriptor,
-  type ValidateNodeTreeParams,
+  type ImpliedDataContentOf,
+  type NodeTreeParamErrors,
 } from "./create.ts";
 import { resolveDiscriminatorRef } from "./discriminators.ts";
 import { assertProjectorIdentifier } from "./identifiers.ts";
 import { defaultSlotForRegion, implicitDefaultLayout, layoutSlot, lintLayoutVolatileOrder, type CreatedLayout } from "./layouts.ts";
 import { isRegionAddress } from "./regions.ts";
 import {
+  assertNodeActionParamsCompatibility,
   emptyParamsSchema,
   normalizeParamsSchema,
   type AnyParamsSchema,
@@ -34,18 +36,70 @@ type InferCharterParamsSchema<TConfig> =
     ? TParams
     : typeof emptyParamsSchema;
 
-type ValidateCharterNodeParams<TConfig> =
+type CharterNodeParamErrors<TConfig> =
   TConfig extends { nodes: readonly (infer TNode)[] }
-    ? TNode extends unknown
-      ? ValidateNodeTreeParams<InferCharterParamsSchema<TConfig>, TNode>
-      : unknown
-    : unknown;
+    ? NodeTreeParamErrors<InferCharterParamsSchema<TConfig>, TNode>
+    : never;
 
+/**
+ * never-on-pass error collection over every registered node tree: one
+ * satisfied node must never mask another's failure (a union with `unknown`
+ * absorbs to `unknown`, silently passing — the shape the previous validator
+ * had).
+ */
+type ValidateCharterNodeParams<TConfig> =
+  [CharterNodeParamErrors<TConfig>] extends [never]
+    ? unknown
+    : CharterNodeParamErrors<TConfig>;
+
+type CharterActionEntries<TConfig> =
+  | (TConfig extends { actions: readonly (infer TEntry)[] } ? TEntry : never)
+  | (TConfig extends { tools: readonly (infer TEntry)[] } ? TEntry : never)
+  | (TConfig extends { commands: readonly (infer TEntry)[] } ? TEntry : never);
+
+/**
+ * Node-attached actions are held to the vocabulary through the created node's
+ * TDataContent fold (see NodeActionDataContent) and plain node covariance.
+ * Charter-REGISTERED actions never pass through a node's type — string refs
+ * are opaque — so their implied data content is checked here, at the
+ * registration point. never-on-pass, same shape as the params validators.
+ */
+type CharterActionDataErrors<TConfig, TDataContent> =
+  CharterActionEntries<TConfig> extends infer TEntry
+    ? TEntry extends { name: string }
+      ? ImpliedDataContentOf<TEntry> extends infer TImplied
+        ? [TImplied] extends [TDataContent]
+          ? never
+          : {
+              readonly __dataContentError: "action result messages carry data content outside the charter's declared vocabulary";
+              readonly action: TEntry["name"];
+              readonly implied: TImplied;
+              readonly declared: TDataContent;
+            }
+        : never
+      : never
+    : never;
+
+type ValidateCharterActionDataContent<TConfig, TDataContent> =
+  [CharterActionDataErrors<TConfig, TDataContent>] extends [never]
+    ? unknown
+    : CharterActionDataErrors<TConfig, TDataContent>;
+
+/**
+ * TConfig first, TDataContent inferred from the config — same rationale as
+ * createNode. `dataContent` is the vocabulary anchor: nodes stay
+ * data-content-agnostic and compose covariantly; a node whose output schema
+ * falls outside the declared vocabulary fails the CharterConfig constraint
+ * here, at charter assembly.
+ */
 export function createCharter<
+  const TConfig extends CharterConfig<TDataContent>,
   TDataContent = never,
-  const TConfig extends CharterConfig<TDataContent> = CharterConfig<TDataContent>,
 >(
-  config: TConfig & ValidateCharterNodeParams<TConfig>,
+  config: TConfig
+    & CharterConfig<TDataContent>
+    & ValidateCharterNodeParams<TConfig>
+    & ValidateCharterActionDataContent<TConfig, TDataContent>,
 ): Charter<TDataContent, InferCharterParamsSchema<TConfig>> {
   const params = normalizeParamsSchema(config.params) as InferCharterParamsSchema<TConfig>;
   const nodes = config.nodes as readonly Node<TDataContent>[];
@@ -71,6 +125,7 @@ export function createCharter<
     key: config.key,
     version: config.version,
     params,
+    dataContent: config.dataContent,
     nodes: registryFrom(nodes, "node", (node) => node.key),
     actions: registryFrom(actions, "action", (action) => action.name),
     states: registryFrom(
@@ -148,7 +203,59 @@ function validateCharter<TDataContent>(charter: Charter<TDataContent>): void {
     validateNodeSelects(node, charter);
   }
 
+  validateNodeActionParams(charter);
   validateStateDescriptorIdentities(charter);
+}
+
+/**
+ * Bind-time backstop behind the type-level params check, covering what types
+ * cannot see: string refs (resolved against the charter registry — scoped
+ * self-bindings are inline parts the same walk already visits), computed
+ * registries, hydrated member trees, and JS callers. Mirrors the state-
+ * compatibility walk: registries are walkable data, closures stay opaque.
+ */
+function validateNodeActionParams<TDataContent>(charter: Charter<TDataContent>): void {
+  const callerKind = (caller: string): string =>
+    caller === "generator" ? "tool" : caller === "external" ? "command" : "action";
+
+  const visited = new Set<Node<TDataContent>>();
+  const visitNode = (node: Node<TDataContent>): void => {
+    if (visited.has(node)) {
+      return;
+    }
+    visited.add(node);
+    walkAllParts(node.parts, (part) => {
+      if (part.kind === "action") {
+        // Unresolvable refs are not this pass's concern (compile/dispatch own
+        // that error); self-binding refs resolve to inline parts this walk
+        // already visits directly.
+        const action =
+          typeof part.action === "string" ? charter.actions[part.action] : part.action;
+        if (action) {
+          assertNodeActionParamsCompatibility(action, node, callerKind(part.caller));
+        }
+        return;
+      }
+      if (part.kind === "computed") {
+        const definition = computedPartDefinition(part.part, charter);
+        for (const action of definition ? computedRegistryActions(definition) : []) {
+          assertNodeActionParamsCompatibility(action, node, "action");
+        }
+      }
+    });
+    for (const entry of node.memberEntries) {
+      if (isComputedMemberDef(entry)) {
+        for (const member of entry.registry ?? []) {
+          visitNode(member);
+        }
+        continue;
+      }
+      visitNode(entry as Node<TDataContent>);
+    }
+  };
+  for (const node of Object.values(charter.nodes)) {
+    visitNode(node);
+  }
 }
 
 /**

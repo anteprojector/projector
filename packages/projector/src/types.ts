@@ -451,7 +451,10 @@ export type PartSelectMetadata<TDataContent = never> = {
   branches: Record<string, Part<TDataContent>[] | null>;
 };
 
-export type ComputedPartDef<TDataContent = never> = {
+export type ComputedPartDef<
+  TDataContent = never,
+  TAction extends AnyAction = AnyAction,
+> = {
   kind: "computedPart";
   name: string;
   /**
@@ -469,7 +472,7 @@ export type ComputedPartDef<TDataContent = never> = {
    * it a declared identity (closure rule) and what static analysis and
    * serialized bare-ref recovery consult — closures stay opaque.
    */
-  registry?: ReadonlyArray<AnyAction | Node<TDataContent>>;
+  registry?: ReadonlyArray<TAction | Node<TDataContent>>;
   /** Present only on sugar-produced computeds (select/when). */
   metadata?: PartSelectMetadata<TDataContent>;
   compute: (env: ComputedPartEnv) => string | ComputedReturnPart<TDataContent>[];
@@ -483,12 +486,12 @@ export type TextPart = {
   text: string;
 };
 
-export type ActionPart = {
+export type ActionPart<TAction extends ActionConfigEntry = ActionConfigEntry> = {
   kind: "action";
   caller: ActionCaller;
   /** Default native. Deferred tools lower to provider tool search (see Exposure). */
   exposure?: Exposure;
-  action: ActionConfigEntry;
+  action: TAction;
   /**
    * Companion prose owned by this action contribution: ordinary slot-addressed
    * text parts emitted whenever the action is contributed, so a select that
@@ -499,9 +502,12 @@ export type ActionPart = {
   guidance?: TextPart[];
 };
 
-export type ComputedPartRef<TDataContent = never> = {
+export type ComputedPartRef<
+  TDataContent = never,
+  TAction extends AnyAction = AnyAction,
+> = {
   kind: "computed";
-  part: ComputedPartDef<TDataContent> | Ref;
+  part: ComputedPartDef<TDataContent, TAction> | Ref;
 };
 
 export type Part<TDataContent = never> =
@@ -542,11 +548,14 @@ export type ComputedMemberReturn<TDataContent = never> =
  * view, executor-config validation, and charter-build state walks consult —
  * closures stay opaque.
  */
-export type ComputedMemberDef<TDataContent = never> = {
+export type ComputedMemberDef<
+  TDataContent = never,
+  TNode extends Node<TDataContent> = Node<TDataContent>,
+> = {
   kind: "computedMember";
   name: string;
   /** Local node candidates for return resolution (closure-rule tier 1). */
-  registry?: ReadonlyArray<Node<TDataContent>>;
+  registry?: ReadonlyArray<TNode>;
   /** Present only on sugar-produced computeds (selectMember/whenMember). */
   metadata?: MemberSelectMetadata<TDataContent>;
   compute: (env: ComputedPartEnv) => ComputedMemberReturn<TDataContent>;
@@ -920,6 +929,8 @@ export type Charter<
   key?: string;
   version?: string;
   params: TParams;
+  /** The log's data-content vocabulary (see CharterConfig.dataContent). */
+  dataContent?: z.ZodType<TDataContent>;
   nodes: Record<string, Node<TDataContent>>;
   /** Unified action registry; tools and commands share one namespace. */
   actions: Record<string, AnyAction>;
@@ -936,7 +947,19 @@ export type CharterConfig<TDataContent = never> = {
   key?: string;
   version?: string;
   params?: AnyParamsSchema;
-  nodes: readonly Node<TDataContent>[];
+  /**
+   * Declares the log's data-content vocabulary — the TDataContent every
+   * Frame/FrameMessage in this charter's log carries. This is the charter's
+   * inference anchor for TDataContent (nodes stay data-content-agnostic and
+   * compose covariantly; a node's `output.schema` keeps its own meaning — a
+   * per-node response contract — and is checked against this vocabulary by
+   * assignability). Purely declarative: use `z.custom<T>()` when no runtime
+   * schema exists. NoInfer on the other TDataContent positions keeps this the
+   * sole inference site — otherwise a mismatched node's data type would union
+   * into TDataContent instead of failing against it.
+   */
+  dataContent?: z.ZodType<TDataContent>;
+  nodes: readonly Node<NoInfer<TDataContent>>[];
   /** Sugar: registered into `actions` alongside `commands`. */
   tools?: readonly AnyAction[];
   /** Sugar: registered into `actions` alongside `tools`. */
@@ -947,7 +970,7 @@ export type CharterConfig<TDataContent = never> = {
   layouts?: readonly LayoutDef[];
   computedParts?: readonly AnyComputedPartDef[];
   discriminators?: readonly AnyDiscriminator[];
-  historyProjections?: readonly HistoryProjectionFunction<TDataContent>[];
+  historyProjections?: readonly HistoryProjectionFunction<NoInfer<TDataContent>>[];
 };
 
 /**

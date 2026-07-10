@@ -3,6 +3,7 @@ import { isNode } from "./create.ts";
 import { assertProjectorIdentifier } from "./identifiers.ts";
 import { slotPlacement } from "./slots.ts";
 import type {
+  ActionPart,
   AnyAction,
   AnyDiscriminator,
   Charter,
@@ -72,7 +73,32 @@ export function isDiscriminator(value: unknown): value is AnyDiscriminator {
 }
 
 type SelectBranches<TDiscriminator, TBranch> = TDiscriminator extends Discriminator<infer TValue>
-  ? Record<TValue, TBranch | TBranch[] | null>
+  ? Record<TValue, TBranch | readonly TBranch[] | null>
+  : never;
+
+/**
+ * The action types a branch part carries at the type level: inline action
+ * parts and nested computeds' registry actions. String refs and closure
+ * returns are type-opaque — the charter-build runtime backstop covers them.
+ */
+type PartActionsOf<TPart> = TPart extends ActionPart<infer TAction>
+  ? Extract<TAction, AnyAction>
+  : TPart extends ComputedPartRef<any, infer TNested>
+    ? TNested
+    : never;
+
+type BranchEntryActions<TEntry> = TEntry extends readonly (infer TPart)[]
+  ? PartActionsOf<TPart>
+  : PartActionsOf<NonNullable<TEntry>>;
+
+type BranchesActions<TBranches> = TBranches extends Record<string, infer TEntry>
+  ? BranchEntryActions<TEntry>
+  : never;
+
+type MemberBranchNodes<TBranches> = TBranches extends Record<string, infer TEntry>
+  ? TEntry extends readonly (infer TNode)[]
+    ? TNode
+    : NonNullable<TEntry>
   : never;
 
 /**
@@ -80,15 +106,18 @@ type SelectBranches<TDiscriminator, TBranch> = TDiscriminator extends Discrimina
  * value (TypeScript enforces completeness via the Record over the literal
  * union; the runtime check guards JS callers). Branch entries are parts;
  * null contributes nothing. Sugar over a computed part — see
- * partSelectComputed for the lowering.
+ * partSelectComputed for the lowering. The returned ref carries the branches'
+ * action types (mirroring the auto-derived runtime registry), so createNode
+ * checks their param requirements against the owning node.
  */
 export function select<
+  TDiscriminator extends AnyDiscriminator,
+  const TBranches extends SelectBranches<TDiscriminator, Part<TDataContent>>,
   TDataContent = never,
-  TDiscriminator extends AnyDiscriminator = AnyDiscriminator,
 >(
   discriminator: TDiscriminator,
-  branches: SelectBranches<TDiscriminator, Part<TDataContent>>,
-): ComputedPartRef<TDataContent> {
+  branches: TBranches & SelectBranches<TDiscriminator, Part<TDataContent>>,
+): ComputedPartRef<TDataContent, BranchesActions<TBranches>> {
   const normalized = normalizeBranches(
     branches as Record<string, Part<TDataContent> | Part<TDataContent>[] | null>,
   );
@@ -102,18 +131,22 @@ export function select<
       }
     }
   }
-  return { kind: "computed", part: partSelectComputed(discriminator, false, normalized) };
+  return {
+    kind: "computed",
+    part: partSelectComputed(discriminator, false, normalized),
+  } as ComputedPartRef<TDataContent, BranchesActions<TBranches>>;
 }
 
 /** Partial form of select: contributes the entry only for the given value. */
 export function when<
+  TDiscriminator extends AnyDiscriminator,
+  const TEntry extends Part<TDataContent> | readonly Part<TDataContent>[],
   TDataContent = never,
-  TDiscriminator extends AnyDiscriminator = AnyDiscriminator,
 >(
   discriminator: TDiscriminator,
   value: TDiscriminator["values"][number],
-  entry: Part<TDataContent> | Part<TDataContent>[],
-): ComputedPartRef<TDataContent> {
+  entry: TEntry & (Part<TDataContent> | readonly Part<TDataContent>[]),
+): ComputedPartRef<TDataContent, BranchEntryActions<TEntry>> {
   // A string ref carries no value set at construction; the branch value is
   // validated at evaluation time through the canonical env path instead.
   if (typeof discriminator !== "string") {
@@ -122,9 +155,9 @@ export function when<
   return {
     kind: "computed",
     part: partSelectComputed(discriminator, true, {
-      [value]: Array.isArray(entry) ? entry : [entry],
+      [value]: Array.isArray(entry) ? [...entry] : [entry as Part<TDataContent>],
     }),
-  };
+  } as ComputedPartRef<TDataContent, BranchEntryActions<TEntry>>;
 }
 
 /**
@@ -136,14 +169,16 @@ export function when<
  * check guards JS callers.
  */
 export function selectMember<
+  TDiscriminator extends AnyDiscriminator,
+  const TBranches extends SelectBranches<TDiscriminator, Node<TDataContent>>,
   TDataContent = never,
-  TDiscriminator extends AnyDiscriminator = AnyDiscriminator,
 >(
   discriminator: TDiscriminator,
-  branches: TDiscriminator extends Discriminator<infer TValue>
-    ? Record<TValue, Node<TDataContent> | Node<TDataContent>[] | null>
-    : never,
-): ComputedMemberDef<TDataContent> {
+  branches: TBranches & SelectBranches<TDiscriminator, Node<TDataContent>>,
+): ComputedMemberDef<
+  TDataContent,
+  Extract<MemberBranchNodes<TBranches>, Node<TDataContent>>
+> {
   const normalized = normalizeMemberBranches(
     branches as Record<string, Node<TDataContent> | Node<TDataContent>[] | null>,
   );
@@ -159,26 +194,36 @@ export function selectMember<
       }
     }
   }
-  return memberSelectComputed(discriminator, false, normalized);
+  return memberSelectComputed(discriminator, false, normalized) as ComputedMemberDef<
+    TDataContent,
+    Extract<MemberBranchNodes<TBranches>, Node<TDataContent>>
+  >;
 }
 
 /** Partial member variation: the node(s) are members only for the given value. */
 export function whenMember<
+  TDiscriminator extends AnyDiscriminator,
+  const TNodes extends Node<TDataContent> | readonly Node<TDataContent>[],
   TDataContent = never,
-  TDiscriminator extends AnyDiscriminator = AnyDiscriminator,
 >(
   discriminator: TDiscriminator,
   value: TDiscriminator["values"][number],
-  node: Node<TDataContent> | Node<TDataContent>[],
-): ComputedMemberDef<TDataContent> {
+  node: TNodes & (Node<TDataContent> | readonly Node<TDataContent>[]),
+): ComputedMemberDef<
+  TDataContent,
+  Extract<MemberBranchNodes<{ branch: TNodes }>, Node<TDataContent>>
+> {
   // A string ref carries no value set at construction; the branch value is
   // validated at evaluation time through the canonical env path instead.
   if (typeof discriminator !== "string") {
     assertBranchValue(discriminator, value);
   }
   return memberSelectComputed(discriminator, true, {
-    [value]: Array.isArray(node) ? node : [node],
-  });
+    [value]: Array.isArray(node) ? [...node] : [node as Node<TDataContent>],
+  }) as ComputedMemberDef<
+    TDataContent,
+    Extract<MemberBranchNodes<{ branch: TNodes }>, Node<TDataContent>>
+  >;
 }
 
 /**

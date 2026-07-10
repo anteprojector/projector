@@ -34,11 +34,11 @@ export type ActionPartOptions = {
   exposure?: Exposure;
 };
 
-function actionPart(
+function actionPart<TAction extends ActionConfigEntry>(
   caller: ActionCaller,
-  entry: ActionConfigEntry,
+  entry: TAction,
   options: ActionPartOptions = {},
-): ActionPart {
+): ActionPart<TAction> {
   const guidance = options.guidance === undefined
     ? undefined
     : Array.isArray(options.guidance)
@@ -54,21 +54,27 @@ function actionPart(
 }
 
 /** An action operated by the generator (compiled into the tool surface). */
-export function tool(action: ActionConfigEntry, options?: ActionPartOptions): ActionPart {
+export function tool<const TAction extends ActionConfigEntry>(
+  action: TAction,
+  options?: ActionPartOptions,
+): ActionPart<TAction> {
   return actionPart("generator", action, options);
 }
 
 /** An action operated by an external caller (host/client dispatch). */
-export function command(action: ActionConfigEntry, options?: ActionPartOptions): ActionPart {
+export function command<const TAction extends ActionConfigEntry>(
+  action: TAction,
+  options?: ActionPartOptions,
+): ActionPart<TAction> {
   return actionPart("external", action, options);
 }
 
 /** An action operated by either caller. */
-export function action(
-  entry: ActionConfigEntry,
+export function action<const TAction extends ActionConfigEntry>(
+  entry: TAction,
   caller: ActionCaller = "any",
   options?: ActionPartOptions,
-): ActionPart {
+): ActionPart<TAction> {
   return actionPart(caller, entry, options);
 }
 
