@@ -13,7 +13,9 @@ import type {
   NormalizedStateDescriptor,
   Part,
   Runtime,
+  RuntimeTrigger,
   StateDescriptor,
+  TriggeredRuntimeOptions,
 } from "./types.ts";
 import { command, normalizePartEntries, text, tool } from "./parts.ts";
 import { isComputedMemberDef } from "./computed-parts.ts";
@@ -230,6 +232,7 @@ export function normalizeRuntime(
     return { type: "component" };
   }
 
+  assertValidTriggers(runtime.trigger);
   return {
     ...runtime,
     type: "generator",
@@ -237,6 +240,35 @@ export function normalizeRuntime(
     activationHistory: runtime.activationHistory ?? "live",
     boundaryProjection: normalizeBoundaryProjection(runtime.boundaryProjection),
   };
+}
+
+/**
+ * The declared trigger(s) as a list — singular declarations are sugar for a
+ * one-element union of stimuli. The declared shape is kept on the runtime
+ * (serialization passes it through untouched); read sites normalize here.
+ */
+export function runtimeTriggers(
+  runtime: Pick<TriggeredRuntimeOptions, "trigger">,
+): readonly RuntimeTrigger[] {
+  return Array.isArray(runtime.trigger) ? runtime.trigger : [runtime.trigger];
+}
+
+/**
+ * At most one trigger of each type per runtime: duplicate types are
+ * meaningless (same match), so they are an authoring error.
+ */
+function assertValidTriggers(trigger: RuntimeTrigger | RuntimeTrigger[]): void {
+  const triggers = runtimeTriggers({ trigger });
+  if (triggers.length === 0) {
+    throw new Error("Generator runtime requires at least one trigger");
+  }
+  const seen = new Set<string>();
+  for (const entry of triggers) {
+    if (seen.has(entry.type)) {
+      throw new Error(`Duplicate trigger type "${entry.type}" declared on one runtime`);
+    }
+    seen.add(entry.type);
+  }
 }
 
 function normalizeBoundaryProjection(

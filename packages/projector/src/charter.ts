@@ -15,7 +15,7 @@ import {
 } from "./params.ts";
 import { computedPartDefinition, isComputedMemberDef } from "./computed-parts.ts";
 import { walkAllParts } from "./parts.ts";
-import { computedRegistryActions } from "./scoped-actions.ts";
+import { computedRegistryActions, computedRegistryNodes } from "./scoped-actions.ts";
 import { slotName } from "./slots.ts";
 import type {
   AnyAction,
@@ -201,10 +201,112 @@ function validateCharter<TDataContent>(charter: Charter<TDataContent>): void {
 
   for (const node of Object.values(charter.nodes)) {
     validateNodeSelects(node, charter);
+    validateNodeIncludes(node, charter);
   }
 
   validateNodeActionParams(charter);
   validateStateDescriptorIdentities(charter);
+  validateScopeUniqueness(charter);
+}
+
+/**
+ * Every included node must be charter-registered — the same law as spawn.
+ * The walkAllParts sweep covers static include parts (all sugar branches
+ * entered) and bare computeds' registry node candidates (the declared
+ * universe a computed include chooses from). Identity check, not just key:
+ * the registered instance is what serialization and the include graph key on.
+ * NOTE: the include KEY-graph cycle lint is deliberately not here — charter
+ * build has no warning channel and a cycle must stay a warning (mutual
+ * includes are defined behavior under the once-per-document clip); the
+ * compile surfaces it as a "cyclic-include" diagnostic instead.
+ */
+function validateNodeIncludes<TDataContent>(
+  node: Node<TDataContent>,
+  charter: Charter<TDataContent>,
+): void {
+  const assertRegistered = (target: Node<TDataContent> | string, via: string): void => {
+    if (typeof target === "string") {
+      if (!charter.nodes[target]) {
+        throw new Error(
+          `Include of unknown node ref "${target}" ${via}; include targets must be charter-registered`,
+        );
+      }
+      return;
+    }
+    if (charter.nodes[target.key] !== target) {
+      throw new Error(
+        `Include of node "${target.key}" ${via} is not the charter-registered instance; include targets must be charter-registered`,
+      );
+    }
+  };
+
+  walkAllParts(node.parts, (part) => {
+    if (part.kind === "include") {
+      assertRegistered(part.node, `in node "${node.key}"`);
+      return;
+    }
+    if (part.kind === "computed") {
+      const definition = computedPartDefinition(part.part, charter);
+      if (!definition || definition.metadata) {
+        return;
+      }
+      for (const candidate of computedRegistryNodes(definition)) {
+        assertRegistered(
+          candidate,
+          `in computed "${definition.name}" registry (node "${node.key}")`,
+        );
+      }
+    }
+  });
+  for (const entry of node.memberEntries) {
+    if (isComputedMemberDef(entry)) {
+      for (const member of entry.registry ?? []) {
+        validateNodeIncludes(member, charter);
+      }
+      continue;
+    }
+    validateNodeIncludes(entry as Node<TDataContent>, charter);
+  }
+}
+
+/**
+ * Static tier of the scope-uniqueness invariant (every document scope owns at
+ * most one contributor per node key): a registered generator's walkable
+ * member tree — inline members, components recursed into, generator members
+ * owned as leaves — may claim each node key once, the generator's own key
+ * included. Computed-member registries are skipped: their candidates
+ * alternate per compile, so the mutation-time (applyInstanceMessage) and
+ * compile-realization (ambiguous-include diagnostic) tiers own the realized
+ * tree.
+ */
+function validateScopeUniqueness<TDataContent>(charter: Charter<TDataContent>): void {
+  for (const node of Object.values(charter.nodes)) {
+    if (node.runtime.type !== "generator") {
+      continue;
+    }
+    const seen = new Set<string>([node.key]);
+    const claim = (key: string): void => {
+      if (seen.has(key)) {
+        throw new Error(
+          `Scope-uniqueness: node key "${key}" appears more than once in the document scope of generator "${node.key}"; a scope owns at most one contributor per node key — use distinct node keys`,
+        );
+      }
+      seen.add(key);
+    };
+    const visitMembers = (owner: Node<TDataContent>): void => {
+      for (const entry of owner.memberEntries) {
+        if (isComputedMemberDef(entry)) {
+          continue;
+        }
+        const member = entry as Node<TDataContent>;
+        claim(member.key);
+        if (member.runtime.type !== "generator") {
+          visitMembers(member);
+        }
+      }
+    };
+    visitMembers(node);
+  }
 }
 
 /**

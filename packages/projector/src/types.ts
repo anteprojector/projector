@@ -78,7 +78,8 @@ export type HistoryProjectionFunctionRef = Ref;
 export type HistoryProjectionContext<TDataContent = never> = {
   generatorId: GeneratorId;
   activationId: string;
-  trigger: RuntimeTrigger;
+  /** The target runtime's declaration, passed through as declared. */
+  trigger: RuntimeTrigger | RuntimeTrigger[];
   history: Frame<TDataContent>[];
   states: Record<StateKey, unknown>;
   params: JsonObject;
@@ -149,9 +150,19 @@ export type ActorMessage<TDataContent = never> =
 
 export type AnyActorMessage = ActorMessage<any>;
 
+/**
+ * `primary` shares `actor-frame`'s stimulus (the broadcast actor frame —
+ * same visibility and audience rules) but negotiates admission: per source
+ * frame, a matching primary activates unless a matching primary with
+ * `suppressAncestors` exists strictly below it on its own descendant path.
+ * Suppression is lineage-scoped (never siblings) and means do-not-activate —
+ * no compile, no inference. Every other trigger type is a pure stimulus
+ * description: always honored, never arbitrated.
+ */
 export type RuntimeTrigger =
   | { type: "spawn" }
   | { type: "actor-frame" }
+  | { type: "primary"; suppressAncestors?: boolean }
   | { type: "parent-activation" }
   | { type: "parent-completion" };
 
@@ -159,7 +170,16 @@ export type RuntimeConcurrency = "serial" | "parallel";
 export type ActivationHistory = "live" | "snapshot";
 
 export type TriggeredRuntimeOptions = {
-  trigger: RuntimeTrigger;
+  /**
+   * One stimulus or a union of stimuli, each keeping its own admission
+   * semantics (e.g. `[{ type: "spawn" }, { type: "primary", suppressAncestors:
+   * true }]` for a handoff specialist — spawn-activation is opt-in, never
+   * implied by `primary`). Singular stays valid sugar; at most one trigger of
+   * each type per runtime, validated at `createNode`. Per source frame the
+   * declared triggers are tried in declaration order and the first match wins,
+   * so a generator mints at most one activation per frame.
+   */
+  trigger: RuntimeTrigger | RuntimeTrigger[];
   concurrency?: RuntimeConcurrency;
   activationHistory?: ActivationHistory;
   boundaryProjection?: BoundaryProjection;
@@ -429,14 +449,17 @@ export type ComputedPartEnv = {
 /**
  * What a compute closure may return alongside plain content: compiled-style
  * content parts (type-tagged), authoring text parts (kind-tagged, slot
- * addressed), and action parts built with tool()/command() — caller and
- * exposure ride the part. Select parts and nested computed parts are rejected
- * at compile: variation nests through data, never through closures.
+ * addressed), action parts built with tool()/command() — caller and
+ * exposure ride the part — and include parts (registry-constrained: a compute
+ * chooses among its declared registry nodes, never conjures a target). Select
+ * parts and nested computed parts are rejected at compile: variation nests
+ * through data, never through closures.
  */
 export type ComputedReturnPart<TDataContent = never> =
   | ContentPart<TDataContent>
   | TextPart
-  | ActionPart;
+  | ActionPart
+  | IncludePart<TDataContent>;
 
 /**
  * Sugar provenance for a part computed produced by select/when: the
@@ -510,10 +533,27 @@ export type ComputedPartRef<
   part: ComputedPartDef<TDataContent, TAction> | Ref;
 };
 
+/**
+ * Instance-based composition: a compile-layer view of a living contributor,
+ * never a second mount. The referenced node resolves by key at compile via
+ * nearest-enclosing-scope matching against the realized tree; the target
+ * renders canonically (its own state containers, its own params — an include
+ * never reconfigures its target). A part, not an instance: mutation folds and
+ * source serialization never traverse it; ownership stays a strict tree while
+ * the projection layer gains a DAG of views. Ref idiom: the node object at
+ * authoring (typo-proof), the node key on the wire; every included node must
+ * be charter-registered.
+ */
+export type IncludePart<TDataContent = never> = {
+  kind: "include";
+  node: Node<TDataContent> | Ref;
+};
+
 export type Part<TDataContent = never> =
   | TextPart
   | ActionPart
-  | ComputedPartRef<TDataContent>;
+  | ComputedPartRef<TDataContent>
+  | IncludePart<TDataContent>;
 
 export type PartEntry<TDataContent = never> =
   | Part<TDataContent>
@@ -573,7 +613,21 @@ export type CompileDiagnostic = {
     | "unknown-slot"
     | "shadowed-action"
     | "volatile-order"
-    | "invalid-discriminator-value";
+    | "invalid-discriminator-value"
+    // Include laws. Clip: once-per-document — a later visit of an already
+    // rendered contributor (diamond, cycle, self-include, canonical mount
+    // after an include) no-ops, same doctrine as shadowed-action. Unresolved:
+    // NESM found no enclosing scope owning the key (error — no silent
+    // dangling). Ambiguous: the matched scope violates scope-uniqueness
+    // (compile-realization backstop — loud, never a silent pick). Hidden:
+    // include of a hidden generator contributes nothing per the boundary law.
+    // Cyclic: the static include key graph contains a cycle (lint — mutual
+    // includes are defined under the clip, but usually an authoring mistake).
+    | "clipped-include"
+    | "unresolved-include"
+    | "ambiguous-include"
+    | "hidden-include"
+    | "cyclic-include";
   message: string;
 };
 
@@ -624,7 +678,15 @@ export type Instance<TDataContent = never> = {
 
 export type CompletionReason = "done" | "cancelled" | "delegated" | "error" | "terminal-action";
 
-export type WorkCompletionReason = "end-turn" | "done" | "cancelled" | "delegated" | "error" | "terminal-action" | "absorbed";
+/**
+ * "absorbed": a running generation projected the frame, so no follow-up work
+ * is owed. "suppressed": floor arbitration filtered the generator's matching
+ * `primary` candidate for the frame — the scheduler records the no-op
+ * durably so a later tree change (e.g. the suppressor ceding) never re-opens
+ * an already-decided turn. Neither is a completion to react to
+ * (parent-completion triggers ignore "suppressed" like "cancelled").
+ */
+export type WorkCompletionReason = "end-turn" | "done" | "cancelled" | "delegated" | "error" | "terminal-action" | "absorbed" | "suppressed";
 
 export type WorkActivationMessage = {
   type: "work";
@@ -1025,6 +1087,9 @@ export type DryPart =
       guidance?: Array<{ slot?: string; region?: LayoutRegionName; text: string }>;
     }
   | { kind: "computed"; ref: Ref }
+  // Includes serialize the node KEY (the ref idiom's wire form); hydration
+  // resolves it against the charter's registered nodes.
+  | { kind: "include"; node: Ref }
   // The wire shape of a sugar-lowered select (a metadata-bearing computed
   // part): stable across the SelectPart-kind deletion, so old stored payloads
   // hydrate through the sugar unchanged.

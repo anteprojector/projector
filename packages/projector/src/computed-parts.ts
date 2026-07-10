@@ -10,6 +10,7 @@ import type {
   ComputedPartDef,
   ComputedPartEnv,
   ComputedReturnPart,
+  IncludePart,
   Node,
   Ref,
   SlotAddress,
@@ -144,6 +145,13 @@ export function isComputedActionReturn(
   part: ComputedReturnPart<any>,
 ): part is ActionPart {
   return "kind" in part && part.kind === "action";
+}
+
+/** A compute return element carrying an include contribution. */
+export function isComputedIncludeReturn(
+  part: ComputedReturnPart<any>,
+): part is IncludePart<any> {
+  return "kind" in part && part.kind === "include";
 }
 
 /** Per-compile cache of normalized compute returns, keyed on (name, contributor). */

@@ -32,6 +32,7 @@ import {
   replaceState,
   resolveEffectiveParams,
   runMachine,
+  runtimeTriggers,
   serializeInstance,
   serializeNode,
   serializeStateDescriptor,
@@ -1116,7 +1117,7 @@ describe("history projection", () => {
         const text = JSON.stringify({
           messages: actorMessages(ctx),
           state: ctx.states.memory,
-          trigger: ctx.trigger.type,
+          trigger: runtimeTriggers(ctx)[0]?.type,
         });
         return [textUserMessage(text)];
       },

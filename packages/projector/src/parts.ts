@@ -4,8 +4,11 @@ import type {
   ActionConfigEntry,
   ActionPart,
   Exposure,
+  IncludePart,
+  Node,
   Part,
   PartEntry,
+  Ref,
   SlotAddress,
   TextPart,
 } from "./types.ts";
@@ -78,12 +81,31 @@ export function action<const TAction extends ActionConfigEntry>(
   return actionPart(caller, entry, options);
 }
 
+/**
+ * Instance-based composition: a view of the living contributor the given node
+ * key resolves to (nearest enclosing scope matching at compile), spliced at
+ * this part's position. Pass the node object (typo-proof; the key serializes
+ * on the wire) or the node key. No options by design: an include splices the
+ * target's full canonical rendering — include-site overrides would break
+ * byte-identity with the canonical rendering.
+ */
+export function include<TDataContent = never>(
+  node: Node<TDataContent> | Ref,
+): IncludePart<TDataContent> {
+  return { kind: "include", node };
+}
+
+/** The node key an include part references (object at authoring, key on the wire). */
+export function includeNodeKey(part: IncludePart<any>): string {
+  return typeof part.node === "string" ? part.node : part.node.key;
+}
+
 export function isPart(value: unknown): value is Part<any> {
   if (!value || typeof value !== "object") {
     return false;
   }
   const kind = (value as { kind?: unknown }).kind;
-  return kind === "text" || kind === "action" || kind === "computed";
+  return kind === "text" || kind === "action" || kind === "computed" || kind === "include";
 }
 
 /**

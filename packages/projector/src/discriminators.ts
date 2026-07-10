@@ -15,6 +15,7 @@ import type {
   ContentPart,
   Discriminator,
   DiscriminatorEnv,
+  IncludePart,
   Node,
   Part,
   Ref,
@@ -358,6 +359,17 @@ function expandBranchParts<TDataContent>(
         expanded.push(item);
         continue;
       }
+      if ("kind" in item && item.kind === "include") {
+        // A nested BARE computed's include returns are held to its own
+        // registry here (the outer sugar def skips the check — its branch
+        // parts are walkable, statically validated data); nested sugar's
+        // branch includes are equally declared data and pass through.
+        if (!definition.metadata) {
+          assertDeclaredIncludeReturn(item, definition);
+        }
+        expanded.push(item);
+        continue;
+      }
       const content: ContentPart<TDataContent> =
         "kind" in item ? { type: "text", text: item.text, ...slotPlacement(item.slot) } : item;
       const hasOwnPlacement = content.slot !== undefined || content.region !== undefined;
@@ -365,6 +377,29 @@ function expandBranchParts<TDataContent>(
     }
   }
   return expanded;
+}
+
+/**
+ * The include half of the closure rule for nested computeds inside select
+ * branches (the action half lives in resolveComputedActionEntry's path): a
+ * compute chooses include targets among its declared registry nodes, never
+ * conjures. Local twin of scoped-actions' resolveComputedIncludeKey — kept
+ * here to avoid a new runtime module cycle.
+ */
+function assertDeclaredIncludeReturn(
+  part: IncludePart<any>,
+  definition: ComputedPartDef<any>,
+): void {
+  const nodes = (definition.registry ?? []).filter((entry): entry is Node<any> => isNode(entry));
+  const declared = typeof part.node === "string"
+    ? nodes.some((node) => node.key === part.node)
+    : nodes.includes(part.node);
+  if (!declared) {
+    const key = typeof part.node === "string" ? part.node : part.node.key;
+    throw new Error(
+      `Computed part "${definition.name}" returned include of node "${key}" with no declared identity; list the node in the computed's registry — include targets are never conjured inside a compute closure`,
+    );
+  }
 }
 
 /**
@@ -385,6 +420,9 @@ function branchesSignature(branches: Record<string, Part<any>[] | null>): string
 function partSignature(part: Part<any>): string {
   if (part.kind === "text") {
     return `t|${placementSignature(part.slot)}|${part.text}`;
+  }
+  if (part.kind === "include") {
+    return `i|${typeof part.node === "string" ? part.node : part.node.key}`;
   }
   if (part.kind === "action") {
     const action = part.action;
