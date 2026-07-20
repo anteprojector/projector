@@ -322,7 +322,7 @@ export type ActionInstanceContext<TDataContent = never> = {
 export type ActionContext<
   S = undefined,
   TDataContent = never,
-  TParams extends JsonObject = {},
+  TParams extends JsonObject = Record<never, never>,
 > = {
   params: TParams;
   getState?: (address: InferenceStateAddress) => unknown;
@@ -955,6 +955,8 @@ export type ExecutorRealizedPrompt = {
  * A type-only import of the executor package is enough to typecheck a
  * charter's `executorConfig` — the charter stays plain serializable data.
  */
+// This interface is intentionally empty so executor packages can augment it.
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type, @typescript-eslint/no-empty-interface
 export interface ExecutorConfigRegistry {}
 
 export type ExecutorConfig = {

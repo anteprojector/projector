@@ -9,11 +9,11 @@ type ParamsSchemaKeys<TSchema extends AnyParamsSchema> = keyof TSchema["shape"];
 
 export type InferParams<TSchema> = TSchema extends AnyParamsSchema
   ? z.output<TSchema>
-  : {};
+  : Record<never, never>;
 
 export type InputParams<TSchema> = TSchema extends AnyParamsSchema
   ? z.input<TSchema>
-  : {};
+  : Record<never, never>;
 
 /**
  * never = compatible; otherwise a diagnostic object validators intersect into
@@ -36,16 +36,16 @@ export type ParamsSatisfyError<
     };
 
 export type InferNodeParams<N> =
-  N extends Node<any, infer TParams> ? InferParams<TParams> : {};
+  N extends Node<any, infer TParams> ? InferParams<TParams> : Record<never, never>;
 
 export type InferActionParams<A> =
-  A extends AnyAction<infer TParams> ? InferParams<TParams> : {};
+  A extends AnyAction<infer TParams> ? InferParams<TParams> : Record<never, never>;
 
 export type InferCharterParams<C> =
-  C extends { params: infer TParams } ? InferParams<TParams> : {};
+  C extends { params: infer TParams } ? InferParams<TParams> : Record<never, never>;
 
 export type InputCharterParams<C> =
-  C extends { params: infer TParams } ? InputParams<TParams> : {};
+  C extends { params: infer TParams } ? InputParams<TParams> : Record<never, never>;
 
 export function normalizeParamsSchema(
   schema: AnyParamsSchema | undefined,

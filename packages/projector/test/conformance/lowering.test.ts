@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
+// The core conformance suite intentionally exercises the AI SDK executor.
+// eslint-disable-next-line @nx/enforce-module-boundaries
 import {
   buildAiSdkMessages,
   buildAiSdkSystem,
   buildAiSdkSystemMessages,
   buildAiSdkTools,
 } from "@projectors/aisdk-executor";
+// The core conformance suite intentionally exercises the LiveKit executor.
+// eslint-disable-next-line @nx/enforce-module-boundaries
 import {
   buildLiveKitInstructions,
   buildLiveKitToolDefinitions,

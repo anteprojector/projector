@@ -171,7 +171,9 @@ describe("conformance: layout", () => {
     });
     const compiled = compileProjection(createSourceInstance({ id: "i", node }), {
       charter: layoutCharter({ nodes: [node] }),
-      onDiagnostic: () => {},
+      onDiagnostic: () => {
+        // This projection should not emit diagnostics.
+      },
     });
     for (const part of [...compiled.preamble, ...compiled.recency]) {
       expect(typeof part.slot).toBe("string");
