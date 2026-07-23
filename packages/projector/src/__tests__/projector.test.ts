@@ -211,9 +211,9 @@ describe("params", () => {
       params: z.object({ userId: z.string() }),
       run: (_input, ctx) => {
         expectTypeOf(ctx.params).toEqualTypeOf<{ userId: string }>();
-        void ctx.params.userId;
+        ctx.params.userId;
         // @ts-expect-error action params only expose action-declared keys
-        void ctx.params.orgId;
+        ctx.params.orgId;
       },
     });
 
@@ -276,8 +276,6 @@ describe("params", () => {
       states: [],
     });
 
-    // These branches exist only for compile-time negative assertions.
-    // eslint-disable-next-line no-constant-condition
     if (false) {
       // @ts-expect-error node params must satisfy attached action params
       createNode({
@@ -504,8 +502,6 @@ describe("action state requirements", () => {
         ctx.updateState?.(patchState({ count: input.value }));
         ctx.updateState?.(replaceState({ count: input.value }));
 
-        // This branch exists only for compile-time negative assertions.
-        // eslint-disable-next-line no-constant-condition
         if (false) {
           // @ts-expect-error patch keys come from the action state descriptor
           ctx.updateState?.(patchState({ missing: true }));

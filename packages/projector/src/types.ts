@@ -210,16 +210,18 @@ export type DryRuntime =
  * How the generator encounters a projected thing. `native`: fully present on
  * the surface. `deferred`: discoverable/loadable on demand — state defers via
  * the reserved getState tool; tools defer via the executor's provider-
- * idiomatic tool-search lowering. An executor with no lowering for its model
- * errors rather than degrades: the compiled availability note promises tool
- * search, so a surface that cannot honor it must not run.
+ * idiomatic tool-search lowering. `hidden`: bound/declared but the generator
+ * never encounters it — a state emits no prompt content or retrieval
+ * metadata; an action contributes no tool, guidance, or availability note.
+ * An executor with no deferred lowering for its model errors rather than
+ * degrades.
  */
-export type Exposure = "native" | "deferred";
+export type Exposure = "native" | "deferred" | "hidden";
 
 /**
- * How (and whether) a state's value participates in the projection. Absent =
- * hidden (declaration/binding only). One declaration carries both the state
- * and its projection config — no separate registration. Distinct from
+ * How (and whether) a state's value participates in the projection. An absent
+ * projection or `exposure: "hidden"` means declaration/binding only. One
+ * declaration carries both the state and its projection config. Distinct from
  * `Projection` (a whole-surface projection function): this is per-state
  * declaration-side config the compile consumes.
  */
@@ -322,7 +324,7 @@ export type ActionInstanceContext<TDataContent = never> = {
 export type ActionContext<
   S = undefined,
   TDataContent = never,
-  TParams extends JsonObject = Record<never, never>,
+  TParams extends JsonObject = {},
 > = {
   params: TParams;
   getState?: (address: InferenceStateAddress) => unknown;
@@ -955,8 +957,6 @@ export type ExecutorRealizedPrompt = {
  * A type-only import of the executor package is enough to typecheck a
  * charter's `executorConfig` — the charter stays plain serializable data.
  */
-// This interface is intentionally empty so executor packages can augment it.
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type, @typescript-eslint/no-empty-interface
 export interface ExecutorConfigRegistry {}
 
 export type ExecutorConfig = {

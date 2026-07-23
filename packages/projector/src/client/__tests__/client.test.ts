@@ -51,8 +51,6 @@ describe("client command typing and action requests", () => {
     });
     expect(generated.callId).toEqual(expect.any(String));
 
-    // This branch exists only for compile-time negative assertions.
-    // eslint-disable-next-line no-constant-condition
     if (false) {
       // @ts-expect-error command name must come from the command definition
       createCommandActionRequest<typeof setLiveMode>("other", { enabled: true });

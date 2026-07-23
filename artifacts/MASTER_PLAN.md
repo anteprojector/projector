@@ -23,7 +23,13 @@ type HistoryProjectionFunctionRef = Ref;
 // contributions. ---
 
 type ActionCaller = "generator" | "external" | "any";
-type Exposure = "native" | "deferred";
+// `hidden`: bound/declared but the generator never encounters it — a state
+// emits no prompt content or retrieval metadata; an action contributes no
+// tool, guidance, or availability note — while staying resolvable
+// off-surface (client views, the executeCommand dispatch path). Hidden
+// contributions never reach the compiled tool surface, so executors only
+// ever see native or deferred.
+type Exposure = "native" | "deferred" | "hidden";
 
 type SlotDef = {
   kind: "slot";
@@ -430,7 +436,7 @@ type StateProjection = {
   // Slot the rendered value (or deferred-availability note) addresses;
   // absent = the preamble region's default slot.
   slot?: SlotAddress;
-  exposure?: Exposure; // native renders the value; deferred exposes getState
+  exposure?: Exposure; // native renders; deferred exposes getState; hidden emits nothing
   render?: (value: unknown) => string; // code — registered descriptors only
   note?: (address: string) => string; // code — registered descriptors only
 };
@@ -2493,6 +2499,11 @@ A client instance should include, where applicable:
 - durable children;
 - public member/projection children with stable projection addresses;
 - visible state values and their state addresses;
+- stored state containers attached to the concrete instance
+  (`storedStates`) and the descriptors the node declares (`boundStates`,
+  with schema/scope/projection metadata);
+- the content each node contributes directly to the `preamble` and
+  `recency` regions, for inspection;
 - state schema metadata for visible or form-bindable states;
 - command metadata, command input schemas, and optional projection target addresses.
 

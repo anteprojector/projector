@@ -789,7 +789,9 @@ function computedContentPart<TDataContent>(
  * action swaps its guidance atomically. Generator-callable actions resolve
  * through the given scoped resolver, validate state compatibility, emit their
  * deferred availability note, and bind into the tool surface at the
- * contributor's depth.
+ * contributor's depth. A hidden contribution emits nothing — no guidance, no
+ * note, no tool — while staying resolvable off-surface (client views, the
+ * executeCommand dispatch path).
  */
 function renderActionPart<TDataContent>(
   draft: ProjectionIR<TDataContent>,
@@ -799,6 +801,9 @@ function renderActionPart<TDataContent>(
   depth: number,
   resolve: (entry: ActionConfigEntry) => AnyAction,
 ): void {
+  if (part.exposure === "hidden") {
+    return;
+  }
   for (const guidance of part.guidance ?? []) {
     pushContentPart(draft, session, {
       type: "text",
@@ -1049,10 +1054,10 @@ function addStateProjectionSource(
   pushContentPart(source, session, part);
 }
 
-/** A state renders per its declaration's projection config; absent = hidden. */
+/** A state renders per its declaration's projection config; absent or explicitly hidden emits nothing. */
 function stateProjectionPart(state: ResolvedState): ProjectionStatePart | undefined {
   const projection = state.descriptor.projection;
-  if (!projection) {
+  if (!projection || projection.exposure === "hidden") {
     return undefined;
   }
 
@@ -1330,6 +1335,9 @@ function collectProjectedStates(draft: ProjectionIR<any>): ProjectionStatePart[]
   const states: ProjectionStatePart[] = [];
   const seen = new Set<ProjectionStatePart>();
   const add = (state: ProjectionStatePart) => {
+    if (state.exposure === "hidden") {
+      return;
+    }
     if (!seen.has(state)) {
       seen.add(state);
       states.push(state);
@@ -1361,41 +1369,43 @@ function compileContentParts<TDataContent>(
   items: ProjectionPart<TDataContent>[],
   aliases: Map<ProjectionStatePart, string>,
 ): ContentPart<TDataContent>[] {
-  return items.map((item) => {
-    if (item.type === "text") {
-      return item;
-    }
-    if (item.type === "image" || item.type === "data") {
-      return item;
-    }
+  return items
+    .filter((item) => item.type !== "state" || item.exposure !== "hidden")
+    .map((item) => {
+      if (item.type === "text") {
+        return item;
+      }
+      if (item.type === "image" || item.type === "data") {
+        return item;
+      }
 
-    const alias = aliases.get(item);
-    if (!alias) {
-      throw new Error(`Missing alias for state "${item.stateKey}"`);
-    }
+      const alias = aliases.get(item);
+      if (!alias) {
+        throw new Error(`Missing alias for state "${item.stateKey}"`);
+      }
 
-    const placement = {
-      ...(item.slot !== undefined ? { slot: item.slot } : {}),
-      ...(item.region !== undefined ? { region: item.region } : {}),
-    };
-    if (item.exposure === "deferred") {
+      const placement = {
+        ...(item.slot !== undefined ? { slot: item.slot } : {}),
+        ...(item.region !== undefined ? { region: item.region } : {}),
+      };
+      if (item.exposure === "deferred") {
+        return {
+          type: "text",
+          ...placement,
+          text: item.note
+            ? item.note(alias)
+            : `You can call getState with address \`${alias}\` if you need that state.`,
+        };
+      }
+
       return {
         type: "text",
         ...placement,
-        text: item.note
-          ? item.note(alias)
-          : `You can call getState with address \`${alias}\` if you need that state.`,
+        text: item.render
+          ? item.render(item.value)
+          : `State \`${alias}\`: ${JSON.stringify(item.value)}`,
       };
-    }
-
-    return {
-      type: "text",
-      ...placement,
-      text: item.render
-        ? item.render(item.value)
-        : `State \`${alias}\`: ${JSON.stringify(item.value)}`,
-    };
-  });
+    });
 }
 
 function isGeneratorBoundary(contributor: Contributor<any>): boolean {
