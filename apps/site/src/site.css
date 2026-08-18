@@ -1458,21 +1458,22 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   .xp-node, .xp-beam, .xp-drop, .xp-log, .xp-frames rect { animation: none; }
 }
 
+/* Floats over everything — chat and inspector alike — centered on the full
+   viewport, so the input reads as the one fixed object the pages move under.
+   Absolute against .app (the fixed viewport shell), out of the chat column's
+   flow; the thread's runway padding keeps content clear of it. */
 .app-composer {
+  position: absolute;
+  z-index: 5;
+  bottom: 0;
+  left: 0;
+  right: 0;
   max-width: 44rem;
-  width: 100%;
   margin: 0 auto;
   padding: 0.5rem clamp(1rem, 4vw, 2rem) 1.25rem;
 }
 /* The landing composer card, landed. */
 .app-composer .talk-card { view-transition-name: composer; }
-.app-composer-hint {
-  font-family: var(--mono);
-  font-size: 0.6875rem;
-  color: var(--faint);
-  margin-top: 0.5rem;
-  text-align: center;
-}
 
 /* The inspector: the machine, visible. Frame log rows borrow the terminal   */
 /* box's vocabulary — mono, role-coloured.                                   */

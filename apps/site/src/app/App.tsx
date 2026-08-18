@@ -248,9 +248,6 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15M13 6l6 6-6 6"/></svg>
               </button>
             </div>
-            <p className="app-composer-hint">
-              every turn is a frame in a durable log — refresh and nothing is lost
-            </p>
           </form>
         </div>
         <Inspector sessionId={sessionId} />
