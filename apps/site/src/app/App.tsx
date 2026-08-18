@@ -6,13 +6,21 @@ import { ConvexProvider, ConvexReactClient, useAction, useMutation, useQuery } f
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import {
+  createMachineEffigy,
+  createOptimisticEffigy,
+  type OptimisticEffigy,
+} from "@projectors/core/client";
 import { EXPLAINERS } from "./explainers";
 import { Inspector, PaneIcon } from "./Inspector";
 
-// The side panes' visibility is machine state (the ui node's panes state in
-// the charter): the client keeps a local mirror for instant toggles, sends a
-// setPanes command so the change lands in the durable log, and reconciles to
-// whatever the machine says — the agent holds the same action as a tool.
+// The side panes' visibility and widths are machine state (the ui node's
+// panes state in the charter). The client goes through the framework's own
+// path: an optimistic effigy over the client snapshot, where cmd+j and the
+// pane buttons run the setPanes command — the same action the agent holds as
+// a tool — with an optimistic overlay that retires when the command's
+// residue comes back in the snapshot. The command is the state change; the
+// UI is just a projection of it.
 type Panes = {
   app: boolean;
   inspector: boolean;
@@ -23,10 +31,12 @@ const DEFAULT_PANES: Panes = { app: false, inspector: false, appWidth: 22, inspe
 const PANE_MIN_REM = 14;
 const PANE_MAX_REM = 44;
 
-function findPanesState(value: unknown): Panes | undefined {
+type PanesEntry = { value: Panes; address: unknown };
+
+function findPanesEntry(value: unknown): PanesEntry | undefined {
   if (!value || typeof value !== "object") return undefined;
   const record = value as {
-    states?: Array<{ key?: string; value?: unknown }>;
+    states?: Array<{ key?: string; value?: unknown; address?: unknown }>;
     children?: unknown[];
   };
   const entry = Array.isArray(record.states)
@@ -35,15 +45,18 @@ function findPanesState(value: unknown): Panes | undefined {
   const v = entry?.value as Partial<Panes> | undefined;
   if (v && typeof v.app === "boolean" && typeof v.inspector === "boolean") {
     return {
-      app: v.app,
-      inspector: v.inspector,
-      appWidth: typeof v.appWidth === "number" ? v.appWidth : DEFAULT_PANES.appWidth,
-      inspectorWidth:
-        typeof v.inspectorWidth === "number" ? v.inspectorWidth : DEFAULT_PANES.inspectorWidth,
+      address: entry?.address,
+      value: {
+        app: v.app,
+        inspector: v.inspector,
+        appWidth: typeof v.appWidth === "number" ? v.appWidth : DEFAULT_PANES.appWidth,
+        inspectorWidth:
+          typeof v.inspectorWidth === "number" ? v.inspectorWidth : DEFAULT_PANES.inspectorWidth,
+      },
     };
   }
   for (const child of record.children ?? []) {
-    const found = findPanesState(child);
+    const found = findPanesEntry(child);
     if (found) return found;
   }
   return undefined;
@@ -198,48 +211,82 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
   const sendCommand = useMutation(api.sessions.sendCommand);
 
   const session = useQuery(api.sessions.get, sessionId ? { sessionId } : "skip");
-  const [panes, setPanes] = useState<Panes>(DEFAULT_PANES);
-  const resizingRef = useRef(false);
-  const serverPanes = findPanesState(
-    (session as { clientSnapshot?: { instance?: unknown } } | undefined)?.clientSnapshot?.instance,
-  );
-  const serverPanesKey = serverPanes ? JSON.stringify(serverPanes) : "";
-  useEffect(() => {
-    // Don't let a stale snapshot yank the pane mid-drag; the drag's own
-    // command re-syncs the machine on release.
-    if (serverPanesKey && !resizingRef.current) setPanes(JSON.parse(serverPanesKey) as Panes);
-  }, [serverPanesKey]);
 
-  const panesRef = useRef(panes);
-  panesRef.current = panes;
-  const sendPanesPatch = useCallback(
+  // The effigy: the framework's client-side stand-in for the machine. Its
+  // send transport is the sessions.sendCommand mutation; refs keep the
+  // once-created effigy pointed at the live session and mutation.
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
+  const sendCommandRef = useRef(sendCommand);
+  sendCommandRef.current = sendCommand;
+  // TInstances is `any`: the site has no generated client-instance types yet,
+  // and the command surface is discovered from the snapshot at runtime.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const effigyRef = useRef<OptimisticEffigy<any> | null>(null);
+  if (!effigyRef.current) {
+    effigyRef.current = createOptimisticEffigy(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      createMachineEffigy<any>(async (message) => {
+        const id = sessionIdRef.current;
+        if (!id) throw new Error("No active session");
+        return await sendCommandRef.current({ sessionId: id, message });
+      }),
+    );
+  }
+  const effigy = effigyRef.current;
+
+  const snapshot = (
+    session as
+      | { clientSnapshot?: { instance?: unknown; recentCommandResidue?: string[] } }
+      | undefined
+  )?.clientSnapshot;
+  useEffect(() => {
+    if (!snapshot) return;
+    effigy.setRecentCommandResidue(snapshot.recentCommandResidue ?? []);
+    effigy.setInstances(snapshot.instance ?? null);
+  }, [effigy, snapshot]);
+  const [, bumpEffigyVersion] = useState(0);
+  useEffect(
+    () => effigy.subscribe(() => bumpEffigyVersion((v) => v + 1)),
+    [effigy],
+  );
+
+  // Panes as the effigy sees them: durable state plus pending optimistic
+  // overlays. A drag previews its width locally until release commits it.
+  const panesEntry = findPanesEntry(effigy.getInstances());
+  const [dragWidth, setDragWidth] = useState<{ pane: "app" | "inspector"; rem: number } | null>(
+    null,
+  );
+  const basePanes = panesEntry?.value ?? DEFAULT_PANES;
+  const panes: Panes = {
+    ...basePanes,
+    ...(dragWidth?.pane === "app" ? { appWidth: dragWidth.rem } : {}),
+    ...(dragWidth?.pane === "inspector" ? { inspectorWidth: dragWidth.rem } : {}),
+  };
+
+  const runSetPanes = useCallback(
     (patch: Partial<Panes>) => {
-      if (!sessionId) return;
-      void sendCommand({
-        sessionId,
-        message: {
-          type: "action",
-          kind: "request",
-          action: "command",
-          name: "setPanes",
-          input: patch,
-          callId: crypto.randomUUID(),
+      if (!sessionIdRef.current) return;
+      const entry = findPanesEntry(effigy.getInstances());
+      const command = effigy.getCommand("setPanes", {
+        optimistic: (ctx) => {
+          if (entry?.address) ctx.patchAt(entry.address as never, patch);
         },
       });
+      void command.run(patch as never).catch(() => {});
     },
-    [sessionId, sendCommand],
+    [effigy],
   );
   const togglePane = useCallback(
     (pane: "app" | "inspector") => {
-      const next = !panesRef.current[pane];
-      setPanes((p) => ({ ...p, [pane]: next }));
-      sendPanesPatch({ [pane]: next });
+      const current = findPanesEntry(effigy.getInstances())?.value ?? DEFAULT_PANES;
+      runSetPanes({ [pane]: !current[pane] });
     },
-    [sendPanesPatch],
+    [effigy, runSetPanes],
   );
 
-  // Dragging tracks locally per pointer frame; the machine hears about it
-  // once, on release, as a setPanes command with the final width.
+  // Dragging previews per pointer frame; on release the final width goes
+  // through the same setPanes command as everything else.
   const startResize = useCallback(
     (pane: "app" | "inspector") => (e: React.PointerEvent) => {
       e.preventDefault();
@@ -248,28 +295,22 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
       const rect = body.getBoundingClientRect();
       const rootPx = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
       const widthKey = pane === "app" ? "appWidth" : "inspectorWidth";
-      resizingRef.current = true;
       document.documentElement.setAttribute("data-resizing", "");
       const widthAt = (ev: PointerEvent) => {
         const px = pane === "app" ? ev.clientX - rect.left : rect.right - ev.clientX;
         return Math.min(PANE_MAX_REM, Math.max(PANE_MIN_REM, px / rootPx));
       };
-      const onMove = (ev: PointerEvent) => {
-        const rem = widthAt(ev);
-        setPanes((p) => ({ ...p, [widthKey]: rem }));
-      };
+      const onMove = (ev: PointerEvent) => setDragWidth({ pane, rem: widthAt(ev) });
       const onUp = (ev: PointerEvent) => {
         removeEventListener("pointermove", onMove);
-        resizingRef.current = false;
         document.documentElement.removeAttribute("data-resizing");
-        const rem = Math.round(widthAt(ev) * 10) / 10;
-        setPanes((p) => ({ ...p, [widthKey]: rem }));
-        sendPanesPatch({ [widthKey]: rem });
+        setDragWidth(null);
+        runSetPanes({ [widthKey]: Math.round(widthAt(ev) * 10) / 10 });
       };
       addEventListener("pointermove", onMove);
       addEventListener("pointerup", onUp, { once: true });
     },
-    [sendPanesPatch],
+    [runSetPanes],
   );
 
   useEffect(() => {
