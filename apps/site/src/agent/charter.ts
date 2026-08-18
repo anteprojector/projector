@@ -5,6 +5,7 @@
 // machine the executor runs.
 
 import {
+  action,
   createAction,
   createCharter,
   createNode,
@@ -58,6 +59,45 @@ const noteAudience = createAction({
   },
 });
 
+// The shell's chrome as machine state: which side panes are open. One action,
+// caller "any", so it is simultaneously the agent's tool and the client's
+// command — the minimize buttons and the model manipulate the same durable
+// state, and the inspector shows both doing it.
+const panesSchema = z.object({
+  // Left pane: the app surface, where agent-authored UI will render.
+  app: z.boolean(),
+  // Right pane: the machine inspector (frame log + projected state).
+  inspector: z.boolean(),
+});
+
+export const panesState = createState({
+  key: "panes",
+  schema: panesSchema,
+  init: { app: false, inspector: true } satisfies z.infer<typeof panesSchema>,
+  projection: { slot: recencyRegion },
+});
+
+const setPanes = createAction({
+  state: panesState,
+  name: "setPanes",
+  description:
+    "Open or close the shell's side panes. The right pane is the machine inspector; open it when you point the visitor at the frame log or your state. The left pane is the app surface where your dynamic UI will render — it is empty scaffolding today, so only open it when asked. Partial input: pass just the pane you're changing.",
+  inputSchema: panesSchema.partial(),
+  run: (input, ctx) => {
+    ctx.updateState?.(patchState(input));
+    return "ok";
+  },
+});
+
+const uiNode = createNode({
+  key: "ui",
+  name: "site ui",
+  states: [panesState],
+  parts: [action(setPanes, "any")],
+  instructions:
+    "The conversation shell has two side panes whose visibility lives in the panes state: an inspector on the right and an (empty for now) app surface on the left. The visitor toggles them with buttons and cmd+j; you can too, with setPanes. Both routes write the same durable state.",
+});
+
 const guideNode = createNode({
   key: "guide",
   name: "projector guide",
@@ -87,9 +127,10 @@ export const siteCharter = createCharter({
   key: "site",
   version: "0.0.1",
   params: siteParamsSchema,
-  nodes: [guideNode],
+  nodes: [guideNode, uiNode],
   tools: [noteAudience],
-  states: [audienceState],
+  actions: [setPanes],
+  states: [audienceState, panesState],
 });
 
 // --- Instance lifecycle. The durable artifact is the serialized SOURCE
@@ -99,6 +140,7 @@ export const createInitialSourceInstance = (): Instance => {
   const instance = createSourceInstance({
     id: SITE_SOURCE_INSTANCE_ID,
     node: guideNode,
+    children: [{ id: "ui", node: uiNode }],
   });
   resolveStates(instance);
   return instance;

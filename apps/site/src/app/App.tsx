@@ -7,7 +7,34 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { EXPLAINERS } from "./explainers";
-import { Inspector } from "./Inspector";
+import { Inspector, PaneIcon } from "./Inspector";
+
+// The side panes' visibility is machine state (the ui node's panes state in
+// the charter): the client keeps a local mirror for instant toggles, sends a
+// setPanes command so the change lands in the durable log, and reconciles to
+// whatever the machine says — the agent holds the same action as a tool.
+type Panes = { app: boolean; inspector: boolean };
+const DEFAULT_PANES: Panes = { app: false, inspector: true };
+
+function findPanesState(value: unknown): Panes | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as {
+    states?: Array<{ key?: string; value?: unknown }>;
+    children?: unknown[];
+  };
+  const entry = Array.isArray(record.states)
+    ? record.states.find((s) => s?.key === "panes")
+    : undefined;
+  const v = entry?.value as Partial<Panes> | undefined;
+  if (v && typeof v.app === "boolean" && typeof v.inspector === "boolean") {
+    return { app: v.app, inspector: v.inspector };
+  }
+  for (const child of record.children ?? []) {
+    const found = findPanesState(child);
+    if (found) return found;
+  }
+  return undefined;
+}
 
 type AppProps = {
   client: ConvexReactClient | null;
@@ -54,7 +81,11 @@ export function App({ client, initialMessage, initialTopic, sessionId }: AppProp
 // The marketing header, continued: same brand, same two CTA steps centered,
 // same Why/Docs/theme cluster on the right — the page folded into an app, so
 // the chrome shouldn't change vocabulary.
-function AppNav({ sessionId }: { sessionId?: string }) {
+function AppNav({ sessionId, panes, onTogglePane }: {
+  sessionId?: string;
+  panes?: Panes;
+  onTogglePane?: (pane: keyof Panes) => void;
+}) {
   const exit = (e: React.MouseEvent) => {
     e.preventDefault();
     if (history.state?.app) history.back();
@@ -63,6 +94,17 @@ function AppNav({ sessionId }: { sessionId?: string }) {
   return (
     <header className="app-nav">
       <div className="app-nav-left">
+        {onTogglePane && (
+          <button
+            className="pane-btn"
+            type="button"
+            aria-label="Toggle app pane"
+            aria-pressed={panes?.app}
+            onClick={() => onTogglePane("app")}
+          >
+            <PaneIcon side="left" />
+          </button>
+        )}
         <a className="app-brand" href="/" onClick={exit}>projector</a>
         {sessionId && <span className="app-nav-session">s/{sessionId.slice(0, 12)}</span>}
       </div>
@@ -79,6 +121,18 @@ function AppNav({ sessionId }: { sessionId?: string }) {
         <a href="/#why">Why</a>
         <a href="/#docs">Docs</a>
         <ThemeToggle />
+        {onTogglePane && (
+          <button
+            className="pane-btn"
+            type="button"
+            aria-label="Toggle inspector (⌘J)"
+            title="⌘J"
+            aria-pressed={panes?.inspector}
+            onClick={() => onTogglePane("inspector")}
+          >
+            <PaneIcon side="right" />
+          </button>
+        )}
       </nav>
     </header>
   );
@@ -155,6 +209,53 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
   const createSession = useMutation(api.sessions.create);
   const sendMessage = useAction(api.agent.sendMessage);
   const openTopic = useMutation(api.topics.open);
+  const sendCommand = useMutation(api.sessions.sendCommand);
+
+  const session = useQuery(api.sessions.get, sessionId ? { sessionId } : "skip");
+  const [panes, setPanes] = useState<Panes>(DEFAULT_PANES);
+  const serverPanes = findPanesState(
+    (session as { clientSnapshot?: { instance?: unknown } } | undefined)?.clientSnapshot?.instance,
+  );
+  const serverPanesKey = serverPanes ? `${serverPanes.app}:${serverPanes.inspector}` : "";
+  useEffect(() => {
+    if (serverPanesKey) {
+      const [app, inspector] = serverPanesKey.split(":");
+      setPanes({ app: app === "true", inspector: inspector === "true" });
+    }
+  }, [serverPanesKey]);
+
+  const panesRef = useRef(panes);
+  panesRef.current = panes;
+  const togglePane = useCallback(
+    (pane: keyof Panes) => {
+      const next = !panesRef.current[pane];
+      setPanes((p) => ({ ...p, [pane]: next }));
+      if (!sessionId) return;
+      void sendCommand({
+        sessionId,
+        message: {
+          type: "action",
+          kind: "request",
+          action: "command",
+          name: "setPanes",
+          input: { [pane]: next },
+          callId: crypto.randomUUID(),
+        },
+      });
+    },
+    [sessionId, sendCommand],
+  );
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "j") {
+        e.preventDefault();
+        togglePane("inspector");
+      }
+    };
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+  }, [togglePane]);
 
   const serverMessages = useQuery(
     api.messages.list,
@@ -274,8 +375,9 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
 
   return (
     <div className="app">
-      <AppNav sessionId={sessionId ?? undefined} />
+      <AppNav sessionId={sessionId ?? undefined} panes={panes} onTogglePane={togglePane} />
       <div className="app-body">
+        {panes.app && <AppPane onMinimize={() => togglePane("app")} />}
         <div className="app-chat">
           <div className="app-scroll" ref={scrollRef}>
             <div className="app-thread">
@@ -314,9 +416,31 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
             </div>
           </form>
         </div>
-        <Inspector sessionId={sessionId} />
+        {panes.inspector && (
+          <Inspector sessionId={sessionId} onMinimize={() => togglePane("inspector")} />
+        )}
       </div>
     </div>
+  );
+}
+
+// The left pane: the app surface, where the agent will draw dynamic UI.
+// Empty scaffolding for now — the pane exists so its visibility is real
+// machine state before anything renders into it.
+function AppPane({ onMinimize }: { onMinimize: () => void }) {
+  return (
+    <aside className="app-pane" aria-label="App pane">
+      <div className="app-pane-head">
+        <span className="app-pane-title">app</span>
+        <span className="app-pane-spacer" />
+        <button className="pane-btn" type="button" aria-label="Minimize app pane" onClick={onMinimize}>
+          <PaneIcon side="left" />
+        </button>
+      </div>
+      <div className="app-pane-body">
+        <p className="inspector-empty">nothing here yet — the agent draws UI into this pane</p>
+      </div>
+    </aside>
   );
 }
 

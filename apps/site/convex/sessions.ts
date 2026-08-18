@@ -9,6 +9,9 @@ import {
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   applyInstanceMessage,
+  createMachine,
+  executeCommand,
+  runMachine,
   type Frame,
   type FrameDraft,
   type Instance,
@@ -17,11 +20,13 @@ import {
 } from "@projectors/core";
 import {
   recordCommandResidue,
+  type ClientMachineMessage,
   type MachineSyncState,
 } from "@projectors/core/client";
 import {
   createInitialSerializedInstance,
   createSiteClientSnapshot,
+  hydrateSiteInstance,
   hydrateSourceInstance,
   serializeSourceInstance,
   siteCharter,
@@ -187,6 +192,48 @@ export const appendMachineFrameSequence = mutation({
       referenceFrameId,
       frames: restoreConvexJson(frames) as Frame[],
     });
+  },
+});
+
+// Client-issued commands (e.g. the pane toggles) run against the same machine
+// the executor runs, in a transaction: execute the command, drain the frames
+// it produced (scheduleWork: false — a UI command must never wake the model),
+// and append them to the durable log, which also folds any state.update
+// messages into the instance snapshot. No model call anywhere in the path.
+export const sendCommand = mutation({
+  args: {
+    sessionId: v.id("sessions"),
+    message: v.any(),
+  },
+  returns: v.null(),
+  handler: async (ctx, { sessionId, message }) => {
+    const session = await getSessionOrThrow(ctx, sessionId);
+    const latestFrame = await getLatestSessionFrameDoc(ctx, sessionId);
+    if (!latestFrame) throw new Error("Session has no frames");
+    const serialized = await getLatestSerializedSource(ctx, sessionId);
+    if (!serialized) throw new Error("Session has no instance snapshot");
+
+    const machine = createMachine({
+      id: sessionId,
+      instance: hydrateSiteInstance(serialized, sessionId),
+      charter: siteCharter,
+      frames: await getMachineContextFrames(ctx, session),
+    });
+    await executeCommand(machine, restoreConvexJson(message) as ClientMachineMessage);
+
+    const produced: Frame[] = [];
+    for await (const frame of runMachine(machine, { scheduleWork: false })) {
+      produced.push(frame);
+    }
+    if (produced.length > 0) {
+      await appendMachineFrameSequenceInternal(ctx, {
+        sessionId,
+        session,
+        referenceFrameId: latestFrame._id,
+        frames: produced,
+      });
+    }
+    return null;
   },
 });
 

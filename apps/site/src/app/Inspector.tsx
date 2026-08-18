@@ -9,7 +9,21 @@ import type { Id } from "../../convex/_generated/dataModel";
 
 type Tab = "frames" | "state";
 
-export function Inspector({ sessionId }: { sessionId: Id<"sessions"> | null }) {
+// The t3-style sidebar glyph: a panel outline with the divider on the side
+// the pane lives on. Shared by the nav toggles and the pane minimize buttons.
+export function PaneIcon({ side }: { side: "left" | "right" }) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d={side === "left" ? "M9 3v18" : "M15 3v18"} />
+    </svg>
+  );
+}
+
+export function Inspector({ sessionId, onMinimize }: {
+  sessionId: Id<"sessions"> | null;
+  onMinimize?: () => void;
+}) {
   const [tab, setTab] = useState<Tab>("frames");
   const frames = useQuery(api.sessions.listFrames, sessionId ? { sessionId } : "skip");
   const session = useQuery(api.sessions.get, sessionId ? { sessionId } : "skip");
@@ -23,6 +37,12 @@ export function Inspector({ sessionId }: { sessionId: Id<"sessions"> | null }) {
         <button type="button" data-active={tab === "state" ? "" : undefined} onClick={() => setTab("state")}>
           state
         </button>
+        <span className="app-pane-spacer" />
+        {onMinimize && (
+          <button className="pane-btn" type="button" aria-label="Minimize inspector (⌘J)" title="⌘J" onClick={onMinimize}>
+            <PaneIcon side="right" />
+          </button>
+        )}
       </div>
       <div className="app-inspector-body">
         {tab === "frames" ? <FrameLog frames={frames} /> : <StateView session={session} />}
