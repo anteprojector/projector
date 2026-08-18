@@ -20,10 +20,7 @@ export function PaneIcon({ side }: { side: "left" | "right" }) {
   );
 }
 
-export function Inspector({ sessionId, onMinimize }: {
-  sessionId: Id<"sessions"> | null;
-  onMinimize?: () => void;
-}) {
+export function Inspector({ sessionId }: { sessionId: Id<"sessions"> | null }) {
   const [tab, setTab] = useState<Tab>("frames");
   const frames = useQuery(api.sessions.listFrames, sessionId ? { sessionId } : "skip");
   const session = useQuery(api.sessions.get, sessionId ? { sessionId } : "skip");
@@ -37,12 +34,6 @@ export function Inspector({ sessionId, onMinimize }: {
         <button type="button" data-active={tab === "state" ? "" : undefined} onClick={() => setTab("state")}>
           state
         </button>
-        <span className="app-pane-spacer" />
-        {onMinimize && (
-          <button className="pane-btn" type="button" aria-label="Minimize inspector (⌘J)" title="⌘J" onClick={onMinimize}>
-            <PaneIcon side="right" />
-          </button>
-        )}
       </div>
       <div className="app-inspector-body">
         {tab === "frames" ? <FrameLog frames={frames} /> : <StateView session={session} />}

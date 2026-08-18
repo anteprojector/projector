@@ -1311,10 +1311,22 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 }
 
 .app-body {
+  position: relative;
   display: flex;
   flex: 1;
   min-height: 0;
 }
+/* The pane toggles: pinned to the body's top corners, above the panes. Same
+   button whether its pane is open (minimize) or closed (open) — it never
+   moves, and it never lives in the nav. */
+.pane-toggle {
+  position: absolute;
+  top: 0.55rem;
+  z-index: 6;
+}
+.pane-toggle-left { left: 0.75rem; }
+.pane-toggle-right { right: 0.75rem; }
+@media (max-width: 900px) { .pane-toggle { display: none; } }
 .app-chat {
   display: flex;
   flex-direction: column;
@@ -1512,7 +1524,8 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   display: flex;
   align-items: center;
   gap: 0.25rem;
-  padding: 0.625rem 0.75rem;
+  /* Left inset clears the floating pane toggle sitting over this header. */
+  padding: 0.625rem 0.75rem 0.625rem 2.5rem;
   border-bottom: 1px solid var(--rule);
 }
 .app-pane-title {
@@ -1545,7 +1558,8 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 .app-inspector-head {
   display: flex;
   gap: 0.25rem;
-  padding: 0.625rem 0.75rem;
+  /* Right inset clears the floating pane toggle sitting over this header. */
+  padding: 0.625rem 2.5rem 0.625rem 0.75rem;
   border-bottom: 1px solid var(--rule);
 }
 .app-inspector-head button {

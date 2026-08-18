@@ -81,11 +81,7 @@ export function App({ client, initialMessage, initialTopic, sessionId }: AppProp
 // The marketing header, continued: same brand, same two CTA steps centered,
 // same Why/Docs/theme cluster on the right — the page folded into an app, so
 // the chrome shouldn't change vocabulary.
-function AppNav({ sessionId, panes, onTogglePane }: {
-  sessionId?: string;
-  panes?: Panes;
-  onTogglePane?: (pane: keyof Panes) => void;
-}) {
+function AppNav({ sessionId }: { sessionId?: string }) {
   const exit = (e: React.MouseEvent) => {
     e.preventDefault();
     if (history.state?.app) history.back();
@@ -94,17 +90,6 @@ function AppNav({ sessionId, panes, onTogglePane }: {
   return (
     <header className="app-nav">
       <div className="app-nav-left">
-        {onTogglePane && (
-          <button
-            className="pane-btn"
-            type="button"
-            aria-label="Toggle app pane"
-            aria-pressed={panes?.app}
-            onClick={() => onTogglePane("app")}
-          >
-            <PaneIcon side="left" />
-          </button>
-        )}
         <a className="app-brand" href="/" onClick={exit}>projector</a>
         {sessionId && <span className="app-nav-session">s/{sessionId.slice(0, 12)}</span>}
       </div>
@@ -121,18 +106,6 @@ function AppNav({ sessionId, panes, onTogglePane }: {
         <a href="/#why">Why</a>
         <a href="/#docs">Docs</a>
         <ThemeToggle />
-        {onTogglePane && (
-          <button
-            className="pane-btn"
-            type="button"
-            aria-label="Toggle inspector (⌘J)"
-            title="⌘J"
-            aria-pressed={panes?.inspector}
-            onClick={() => onTogglePane("inspector")}
-          >
-            <PaneIcon side="right" />
-          </button>
-        )}
       </nav>
     </header>
   );
@@ -375,9 +348,31 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
 
   return (
     <div className="app">
-      <AppNav sessionId={sessionId ?? undefined} panes={panes} onTogglePane={togglePane} />
+      <AppNav sessionId={sessionId ?? undefined} />
       <div className="app-body">
-        {panes.app && <AppPane onMinimize={() => togglePane("app")} />}
+        {/* The pane toggles live at the body's top corners, never in the nav.
+            Fixed in place: over an open pane's header they read as minimize,
+            over the chat they read as open — same button, same spot. */}
+        <button
+          className="pane-btn pane-toggle pane-toggle-left"
+          type="button"
+          aria-label="Toggle app pane"
+          aria-pressed={panes.app}
+          onClick={() => togglePane("app")}
+        >
+          <PaneIcon side="left" />
+        </button>
+        <button
+          className="pane-btn pane-toggle pane-toggle-right"
+          type="button"
+          aria-label="Toggle inspector (⌘J)"
+          title="⌘J"
+          aria-pressed={panes.inspector}
+          onClick={() => togglePane("inspector")}
+        >
+          <PaneIcon side="right" />
+        </button>
+        {panes.app && <AppPane />}
         <div className="app-chat">
           <div className="app-scroll" ref={scrollRef}>
             <div className="app-thread">
@@ -416,9 +411,7 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
             </div>
           </form>
         </div>
-        {panes.inspector && (
-          <Inspector sessionId={sessionId} onMinimize={() => togglePane("inspector")} />
-        )}
+        {panes.inspector && <Inspector sessionId={sessionId} />}
       </div>
     </div>
   );
@@ -427,15 +420,11 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
 // The left pane: the app surface, where the agent will draw dynamic UI.
 // Empty scaffolding for now — the pane exists so its visibility is real
 // machine state before anything renders into it.
-function AppPane({ onMinimize }: { onMinimize: () => void }) {
+function AppPane() {
   return (
     <aside className="app-pane" aria-label="App pane">
       <div className="app-pane-head">
         <span className="app-pane-title">app</span>
-        <span className="app-pane-spacer" />
-        <button className="pane-btn" type="button" aria-label="Minimize app pane" onClick={onMinimize}>
-          <PaneIcon side="left" />
-        </button>
       </div>
       <div className="app-pane-body">
         <p className="inspector-empty">nothing here yet — the agent draws UI into this pane</p>
