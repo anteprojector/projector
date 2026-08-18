@@ -20,13 +20,22 @@ export function PaneIcon({ side }: { side: "left" | "right" }) {
   );
 }
 
-export function Inspector({ sessionId }: { sessionId: Id<"sessions"> | null }) {
+export function Inspector({ sessionId, width, onResizeStart }: {
+  sessionId: Id<"sessions"> | null;
+  width?: number;
+  onResizeStart?: (e: React.PointerEvent) => void;
+}) {
   const [tab, setTab] = useState<Tab>("frames");
   const frames = useQuery(api.sessions.listFrames, sessionId ? { sessionId } : "skip");
   const session = useQuery(api.sessions.get, sessionId ? { sessionId } : "skip");
 
   return (
-    <aside className="app-inspector" aria-label="Machine inspector">
+    <aside
+      className="app-inspector"
+      aria-label="Machine inspector"
+      style={width !== undefined ? { width: `min(${width}rem, 42vw)` } : undefined}
+    >
+      {onResizeStart && <div className="pane-resize pane-resize-inspector" onPointerDown={onResizeStart} />}
       <div className="app-inspector-head">
         <button type="button" data-active={tab === "frames" ? "" : undefined} onClick={() => setTab("frames")}>
           frames

@@ -13,8 +13,15 @@ import { Inspector, PaneIcon } from "./Inspector";
 // the charter): the client keeps a local mirror for instant toggles, sends a
 // setPanes command so the change lands in the durable log, and reconciles to
 // whatever the machine says — the agent holds the same action as a tool.
-type Panes = { app: boolean; inspector: boolean };
-const DEFAULT_PANES: Panes = { app: false, inspector: true };
+type Panes = {
+  app: boolean;
+  inspector: boolean;
+  appWidth: number;
+  inspectorWidth: number;
+};
+const DEFAULT_PANES: Panes = { app: false, inspector: true, appWidth: 22, inspectorWidth: 26 };
+const PANE_MIN_REM = 14;
+const PANE_MAX_REM = 44;
 
 function findPanesState(value: unknown): Panes | undefined {
   if (!value || typeof value !== "object") return undefined;
@@ -27,7 +34,13 @@ function findPanesState(value: unknown): Panes | undefined {
     : undefined;
   const v = entry?.value as Partial<Panes> | undefined;
   if (v && typeof v.app === "boolean" && typeof v.inspector === "boolean") {
-    return { app: v.app, inspector: v.inspector };
+    return {
+      app: v.app,
+      inspector: v.inspector,
+      appWidth: typeof v.appWidth === "number" ? v.appWidth : DEFAULT_PANES.appWidth,
+      inspectorWidth:
+        typeof v.inspectorWidth === "number" ? v.inspectorWidth : DEFAULT_PANES.inspectorWidth,
+    };
   }
   for (const child of record.children ?? []) {
     const found = findPanesState(child);
@@ -186,23 +199,21 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
 
   const session = useQuery(api.sessions.get, sessionId ? { sessionId } : "skip");
   const [panes, setPanes] = useState<Panes>(DEFAULT_PANES);
+  const resizingRef = useRef(false);
   const serverPanes = findPanesState(
     (session as { clientSnapshot?: { instance?: unknown } } | undefined)?.clientSnapshot?.instance,
   );
-  const serverPanesKey = serverPanes ? `${serverPanes.app}:${serverPanes.inspector}` : "";
+  const serverPanesKey = serverPanes ? JSON.stringify(serverPanes) : "";
   useEffect(() => {
-    if (serverPanesKey) {
-      const [app, inspector] = serverPanesKey.split(":");
-      setPanes({ app: app === "true", inspector: inspector === "true" });
-    }
+    // Don't let a stale snapshot yank the pane mid-drag; the drag's own
+    // command re-syncs the machine on release.
+    if (serverPanesKey && !resizingRef.current) setPanes(JSON.parse(serverPanesKey) as Panes);
   }, [serverPanesKey]);
 
   const panesRef = useRef(panes);
   panesRef.current = panes;
-  const togglePane = useCallback(
-    (pane: keyof Panes) => {
-      const next = !panesRef.current[pane];
-      setPanes((p) => ({ ...p, [pane]: next }));
+  const sendPanesPatch = useCallback(
+    (patch: Partial<Panes>) => {
       if (!sessionId) return;
       void sendCommand({
         sessionId,
@@ -211,19 +222,66 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
           kind: "request",
           action: "command",
           name: "setPanes",
-          input: { [pane]: next },
+          input: patch,
           callId: crypto.randomUUID(),
         },
       });
     },
     [sessionId, sendCommand],
   );
+  const togglePane = useCallback(
+    (pane: "app" | "inspector") => {
+      const next = !panesRef.current[pane];
+      setPanes((p) => ({ ...p, [pane]: next }));
+      sendPanesPatch({ [pane]: next });
+    },
+    [sendPanesPatch],
+  );
+
+  // Dragging tracks locally per pointer frame; the machine hears about it
+  // once, on release, as a setPanes command with the final width.
+  const startResize = useCallback(
+    (pane: "app" | "inspector") => (e: React.PointerEvent) => {
+      e.preventDefault();
+      const body = (e.currentTarget as HTMLElement).closest(".app-body");
+      if (!body) return;
+      const rect = body.getBoundingClientRect();
+      const rootPx = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+      const widthKey = pane === "app" ? "appWidth" : "inspectorWidth";
+      resizingRef.current = true;
+      document.documentElement.setAttribute("data-resizing", "");
+      const widthAt = (ev: PointerEvent) => {
+        const px = pane === "app" ? ev.clientX - rect.left : rect.right - ev.clientX;
+        return Math.min(PANE_MAX_REM, Math.max(PANE_MIN_REM, px / rootPx));
+      };
+      const onMove = (ev: PointerEvent) => {
+        const rem = widthAt(ev);
+        setPanes((p) => ({ ...p, [widthKey]: rem }));
+      };
+      const onUp = (ev: PointerEvent) => {
+        removeEventListener("pointermove", onMove);
+        resizingRef.current = false;
+        document.documentElement.removeAttribute("data-resizing");
+        const rem = Math.round(widthAt(ev) * 10) / 10;
+        setPanes((p) => ({ ...p, [widthKey]: rem }));
+        sendPanesPatch({ [widthKey]: rem });
+      };
+      addEventListener("pointermove", onMove);
+      addEventListener("pointerup", onUp, { once: true });
+    },
+    [sendPanesPatch],
+  );
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "j") {
+      if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return;
+      const key = e.key.toLowerCase();
+      if (key === "j") {
         e.preventDefault();
         togglePane("inspector");
+      } else if (key === "b") {
+        e.preventDefault();
+        togglePane("app");
       }
     };
     addEventListener("keydown", onKey);
@@ -356,7 +414,8 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
         <button
           className="pane-btn pane-toggle pane-toggle-left"
           type="button"
-          aria-label="Toggle app pane"
+          aria-label="Toggle app pane (⌘B)"
+          title="⌘B"
           aria-pressed={panes.app}
           onClick={() => togglePane("app")}
         >
@@ -372,7 +431,7 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
         >
           <PaneIcon side="right" />
         </button>
-        {panes.app && <AppPane />}
+        {panes.app && <AppPane width={panes.appWidth} onResizeStart={startResize("app")} />}
         <div className="app-chat">
           <div className="app-scroll" ref={scrollRef}>
             <div className="app-thread">
@@ -411,7 +470,13 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
             </div>
           </form>
         </div>
-        {panes.inspector && <Inspector sessionId={sessionId} />}
+        {panes.inspector && (
+          <Inspector
+            sessionId={sessionId}
+            width={panes.inspectorWidth}
+            onResizeStart={startResize("inspector")}
+          />
+        )}
       </div>
     </div>
   );
@@ -420,15 +485,19 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
 // The left pane: the app surface, where the agent will draw dynamic UI.
 // Empty scaffolding for now — the pane exists so its visibility is real
 // machine state before anything renders into it.
-function AppPane() {
+function AppPane({ width, onResizeStart }: {
+  width: number;
+  onResizeStart: (e: React.PointerEvent) => void;
+}) {
   return (
-    <aside className="app-pane" aria-label="App pane">
+    <aside className="app-pane" aria-label="App pane" style={{ width: `min(${width}rem, 42vw)` }}>
       <div className="app-pane-head">
         <span className="app-pane-title">app</span>
       </div>
       <div className="app-pane-body">
         <p className="inspector-empty">nothing here yet — the agent draws UI into this pane</p>
       </div>
+      <div className="pane-resize pane-resize-app" onPointerDown={onResizeStart} />
     </aside>
   );
 }

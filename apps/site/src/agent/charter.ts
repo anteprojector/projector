@@ -63,17 +63,26 @@ const noteAudience = createAction({
 // caller "any", so it is simultaneously the agent's tool and the client's
 // command — the minimize buttons and the model manipulate the same durable
 // state, and the inspector shows both doing it.
+const paneWidth = z.number().min(14).max(44);
 const panesSchema = z.object({
   // Left pane: the app surface, where agent-authored UI will render.
   app: z.boolean(),
   // Right pane: the machine inspector (frame log + projected state).
   inspector: z.boolean(),
+  // Widths in rem; flat keys so a partial patch can move one knob at a time.
+  appWidth: paneWidth,
+  inspectorWidth: paneWidth,
 });
 
 export const panesState = createState({
   key: "panes",
   schema: panesSchema,
-  init: { app: false, inspector: true } satisfies z.infer<typeof panesSchema>,
+  init: {
+    app: false,
+    inspector: true,
+    appWidth: 22,
+    inspectorWidth: 26,
+  } satisfies z.infer<typeof panesSchema>,
   projection: { slot: recencyRegion },
 });
 
@@ -81,7 +90,7 @@ const setPanes = createAction({
   state: panesState,
   name: "setPanes",
   description:
-    "Open or close the shell's side panes. The right pane is the machine inspector; open it when you point the visitor at the frame log or your state. The left pane is the app surface where your dynamic UI will render — it is empty scaffolding today, so only open it when asked. Partial input: pass just the pane you're changing.",
+    "Open, close, or resize the shell's side panes. The right pane is the machine inspector; open it when you point the visitor at the frame log or your state. The left pane is the app surface where your dynamic UI will render — it is empty scaffolding today, so only open it when asked. Widths are in rem (14–44). Partial input: pass just the knobs you're changing.",
   inputSchema: panesSchema.partial(),
   run: (input, ctx) => {
     ctx.updateState?.(patchState(input));
@@ -95,7 +104,7 @@ const uiNode = createNode({
   states: [panesState],
   parts: [action(setPanes, "any")],
   instructions:
-    "The conversation shell has two side panes whose visibility lives in the panes state: an inspector on the right and an (empty for now) app surface on the left. The visitor toggles them with buttons and cmd+j; you can too, with setPanes. Both routes write the same durable state.",
+    "The conversation shell has two side panes whose visibility and widths live in the panes state: an inspector on the right and an (empty for now) app surface on the left. The visitor toggles them with buttons (cmd+j for the inspector, cmd+b for the app pane) and drags their widths; you can move the same knobs with setPanes. Both routes write the same durable state.",
 });
 
 const guideNode = createNode({

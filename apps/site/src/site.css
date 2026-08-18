@@ -1511,13 +1511,32 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 }
 .app-pane-spacer { flex: 1; }
 
-/* The app pane: the left surface the agent will draw dynamic UI into. */
+/* Drag rails: a slim grab strip straddling each pane's inner edge. Width is
+   live-local while dragging; the machine hears the final value once, as a
+   setPanes command on release. */
+.pane-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0.4375rem;
+  cursor: col-resize;
+  z-index: 7;
+}
+.pane-resize-app { right: -0.21875rem; }
+.pane-resize-inspector { left: -0.21875rem; }
+.pane-resize:hover { background: color-mix(in srgb, var(--ink) 16%, transparent); }
+:root[data-resizing] { cursor: col-resize; user-select: none; -webkit-user-select: none; }
+:root[data-resizing] .pane-resize { background: color-mix(in srgb, var(--ink) 16%, transparent); }
+
+/* The app pane: the left surface the agent will draw dynamic UI into.
+   Width comes inline from the panes machine state. */
 .app-pane {
-  width: min(22rem, 28vw);
+  position: relative;
   border-right: 1px solid var(--rule);
   display: flex;
   flex-direction: column;
   min-height: 0;
+  flex-shrink: 0;
 }
 @media (max-width: 900px) { .app-pane { display: none; } }
 .app-pane-head {
@@ -1548,11 +1567,13 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 /* The inspector: the machine, visible. Frame log rows borrow the terminal   */
 /* box's vocabulary — mono, role-coloured.                                   */
 .app-inspector {
-  width: min(26rem, 38vw);
+  position: relative;
+  width: min(26rem, 38vw); /* fallback; live width comes from panes state */
   border-left: 1px solid var(--rule);
   display: flex;
   flex-direction: column;
   min-height: 0;
+  flex-shrink: 0;
 }
 @media (max-width: 900px) { .app-inspector { display: none; } }
 .app-inspector-head {
