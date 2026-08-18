@@ -10,7 +10,7 @@
   /* Cool gray, well down from white: the ray's body is pure white and can
      only read as light against a page with room beneath it. The original
      warm off-white left ~10 units of headroom, which is nothing. */
-  --bg: #dbdfe6;
+  --bg: #e1e4e9;
   --ink: #000000;
   --muted: #545c67;
   --faint: #838a95;
@@ -29,12 +29,12 @@
   --spec-g: #5f9c68;
   --spec-b: #4f7fbb;
   --spec-v: #7b5fb5;
-  --spec-a: 0.55;    /* how hard the light hits the page */
-  /* The beam is two-tone on paper: a pure-white body edged by a darker
-     boundary (the glow polygon, which extends past the core on every side).
-     On black both collapse to white light. */
-  --ray-edge: #39414a;   /* cool too — a warm edge fought the grey page */
-  --ray-body: #ffffff;
+  --spec-a: 0.32;    /* even, luminous wash without overpowering the page */
+  /* On paper the beam is warm light throughout: a pale yellow body with a
+     slightly warmer soft glow, never a dark outline. Dark mode overrides
+     both back to white light. */
+  --ray-edge: #fff0ad;
+  --ray-body: #fff8d8;
   /* terminal roles */
   --t-actor: #6d28d9;
   --t-state: #8a5a00;
@@ -112,7 +112,7 @@
   font-style: normal;
   font-weight: 400 700;
   font-display: swap;
-  src: url("./assets/schibsted-grotesk.woff2") format("woff2");
+  src: url("/assets/schibsted-grotesk.woff2") format("woff2");
   unicode-range: U+0000-00FF;
 }
 @font-face {
@@ -120,7 +120,7 @@
   font-style: normal;
   font-weight: 600;
   font-display: swap;
-  src: url("./assets/caveat-600.woff2") format("woff2");
+  src: url("/assets/caveat-600.woff2") format("woff2");
   unicode-range: U+0000-00FF;
 }
 
@@ -169,6 +169,8 @@ body {
   inset: 0;
   display: block;
   opacity: var(--spec-a);
+  mix-blend-mode: screen;
+  filter: brightness(1.18);
   background: linear-gradient(171deg,
     var(--spec-r) 4%,
     var(--spec-o) 22%,
@@ -178,6 +180,10 @@ body {
     var(--spec-v) 96%);
   -webkit-mask: linear-gradient(103deg, transparent 32%, #000 97%);
           mask: linear-gradient(103deg, transparent 32%, #000 97%);
+}
+:root[data-theme="dark"] .wash i { mix-blend-mode: normal; filter: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .wash i { mix-blend-mode: normal; filter: none; }
 }
 
 /* The ray. A wedge of white light: wide at the middle of the left edge,
@@ -215,8 +221,7 @@ body {
   :root:not([data-theme]) .light-body { mix-blend-mode: normal; }
 }
 
-/* Light mode: the glow is the dark boundary (low alpha — it's ink on paper),
-   the core is the white body. */
+/* Light mode: a warm glow around the pale-yellow core. */
 .light .l-glow { opacity: 0.12; }
 .light .l-core { opacity: 0.85; }
 
@@ -321,9 +326,10 @@ body {
   --fy: 50vh;
   --fh: 40px;   /* the target's half-height, published by the tracker */
   --fw: 36px;   /* horizontally the origin is a point; vertically it isn't */
+  --wedge-feather: 30deg;
   --wedge: conic-gradient(at var(--fx) var(--fy),
-    transparent 0deg, transparent 22deg, #000 52deg,
-    #000 128deg, transparent 158deg, transparent 360deg);
+    transparent 0deg, transparent calc(52deg - var(--wedge-feather)), #000 52deg,
+    #000 128deg, transparent calc(128deg + var(--wedge-feather)), transparent 360deg);
   /* An ellipse, not a circle: the clear core is as tall as the target, so the
      wash begins along the element's whole height rather than swelling out of
      a point at its middle. Stops past 100% are multiples of that ellipse, so
@@ -428,12 +434,13 @@ body {
   .wash { opacity: 1; --wash-wipe: 135vw; animation: none; }
 }
 
-/* f1 — the base 103deg diagonal fade, clipped to the wedge so it reads as
-   coming off the target. */
+/* f1 — an evenly luminous wash clipped to the wedge, with a softened apex
+   where it emerges from beneath the beam. */
 :root[data-variant="f"] .wash i {
-  -webkit-mask-image: linear-gradient(103deg, transparent 32%, #000 97%), var(--wedge), var(--apex);
-          mask-image: linear-gradient(103deg, transparent 32%, #000 97%), var(--wedge), var(--apex);
-  mask-composite: intersect;
+  -webkit-mask-image: var(--wedge), var(--apex);
+          mask-image: var(--wedge), var(--apex);
+  -webkit-mask-composite: source-in;
+          mask-composite: intersect;
 }
 
 /* f2 — the diagonal fade is replaced by distance from the target: the wash
@@ -494,7 +501,7 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   gap: 1rem;
   max-width: var(--wrap);
   margin: 0 auto;
-  padding: 1.125rem 2.25rem;
+  padding: 0.875rem 2.25rem;
 }
 .nav-inner::after,
 .foot-inner::before {
@@ -580,41 +587,66 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 /* hero */
 
 .hero {
+  --nav-height: 4.25rem;
+  --talk-height: calc(2.25rem + 0.75rem + 3px);
   position: relative;
   display: flex;
   flex-direction: column;
-  min-height: min(calc(100svh - 3.625rem), 47.5rem);
+  min-height: calc(100svh - var(--nav-height));
   text-align: center;
-  padding: 2.875rem 0 clamp(2.5rem, 9svh, 6rem);
+  padding: 2rem 0;
 }
-
-/* The mark: lamp, lens, and three rays already splitting into the spectrum.
-   Line art on currentColor except the rays, which borrow the beam hues. */
-.hero-mark { display: block; margin: 0 auto 1.25rem; }
-.hero-mark svg {
-  display: block;
-  width: 4.75rem;
-  overflow: visible;
-  fill: none;
-  stroke: var(--ink);
-  stroke-width: 3;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.hero-mark circle { fill: var(--bg); }
-.hero-mark .ray { stroke-width: 2.6; }
-.hero-mark .r1 { stroke: var(--spec-r); }
-.hero-mark .r2 { stroke: var(--spec-g); }
-.hero-mark .r3 { stroke: var(--spec-v); }
 
 .hero h1 {
-  font-size: min(clamp(2rem, 6vw, 3.25rem), calc((100vw - 4.75rem) / 11.4));
+  position: absolute;
+  /* Center the headline in the whitespace bounded by the nav's bottom and
+     the composer's top edge—not between the nav and the composer's center. */
+  top: calc((50svh - var(--nav-height) - var(--talk-height) / 2) / 2);
+  left: 50%;
+  /* Sized to sit inside the content column (--wrap minus main's padding),
+     not the viewport: the cap is the column fit, the vw term takes over on
+     narrow screens. 23.4 ≈ this headline's measured em-width at this tracking. */
+  font-size: min(clamp(1.25rem, 5.5vw, calc((43.75rem - 4.5rem) / 23.4)), calc((100vw - 4.75rem) / 23.4));
   white-space: nowrap;
   font-weight: 450;
   line-height: 1.12;
   letter-spacing: -0.035em;
-  margin: 0 0 1.25rem;
-  padding-bottom: 1.1em; /* clearance for the caret + handwritten note */
+  margin: 0;
+  transform: translate(-50%, -50%);
+}
+
+/* Hot words: typographically part of the headline, behaviorally part of the
+   composer. The headline is the white beam and the hot words disperse it:
+   each takes one hue of the muted spectrum, warm to cool in reading order,
+   as a dotted underline. Hover turns the underline solid and lets the hue
+   into the word itself. */
+.hero h1 .hot {
+  --hot: var(--spec-o);
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--hot);
+  text-decoration-style: dotted;
+  text-decoration-thickness: 0.045em;
+  text-underline-offset: 0.18em;
+  transition: color 0.12s, text-decoration-color 0.12s;
+}
+.hero h1 .hot:nth-of-type(2) { --hot: var(--spec-g); }
+.hero h1 .hot:nth-of-type(3) { --hot: var(--spec-b); }
+.hero h1 .hot:hover,
+.hero h1 .hot[data-active] {
+  color: var(--hot);
+  text-decoration-style: solid;
+}
+.hero h1 .hot:focus-visible {
+  outline: 2px solid var(--hot);
+  outline-offset: 0.1875rem;
+  border-radius: 0.125rem;
 }
 
 /* Proofreader's insertion, verbatim from the template: zero-width slot, caret
@@ -677,126 +709,39 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 .note i:nth-of-type(10) { --r: -4deg;  --y: -0.006em; --s: 1.05; }
 .note i:nth-of-type(11) { --r: 0deg;   --y: 0.022em;  --s: 0.97; }
 
-/* the fan — projector's tree */
-
-.fan {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 1.1em;
-  width: fit-content;
-  max-width: 100%;
-  margin: clamp(1rem, 3svh, 2.125rem) auto 0;
-  text-align: left;
-  font-family: var(--mono);
-  font-size: 0.78125rem;
-  line-height: 1.5;
-}
-.fan-src { text-align: right; }
-.fan-src b, .fan-out b { font-weight: 400; color: var(--ink); }
-.fan-src span, .fan-out span { display: block; color: var(--faint); }
-.fan-src span { white-space: nowrap; }
-
-.fan-beams {
-  flex: none;
-  width: 13.75rem;   /* 5:3, matching the 240x144 viewBox */
-  height: 8.25rem;
-  overflow: visible;
-}
-.fan-beams .lens {
-  fill: var(--bg);
-  stroke: var(--ink);
-  stroke-width: 2;
-}
-.fan-beams .beam {
-  fill: none;
-  stroke-width: 1.6;
-  stroke-linecap: round;
-}
-.fan-beams .b1 { stroke: var(--spec-r); }
-.fan-beams .b2 { stroke: var(--spec-g); }
-.fan-beams .b3 { stroke: var(--spec-v); }
-.fan-beams .wedge { stroke: none; }
-.fan-beams .w1 { fill: var(--spec-r); }
-.fan-beams .w2 { fill: var(--spec-g); }
-.fan-beams .w3 { fill: var(--spec-v); }
-
-.fan-out {
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  height: 8.25rem;
-  padding: 0.35rem 0 0.3rem;
-}
-.fan-out p { margin: 0; }
-
-/* caption under the fan, with the template's one-at-a-time hand underlines */
-.fan-cap {
-  font-family: var(--mono);
-  font-size: 0.78125rem;
-  color: var(--faint);
-  margin: 1.25rem 0 0;
-}
-.fan-cap u {
-  position: relative;
-  white-space: nowrap;
-  text-decoration: none;
-  color: inherit;
-}
-.fan-cap u svg {
-  position: absolute;
-  left: 0;
-  bottom: -0.68em;
-  width: 100%;
-  height: 0.3125rem;
-  overflow: visible;
-}
-.fan-cap u path {
-  fill: none;
-  stroke: var(--t-state);
-  stroke-opacity: 0.38;
-  stroke-width: 1.5;
-  stroke-linecap: round;
-}
-.fan-cap .u1 svg { transform: rotate(-1.3deg); }
-.fan-cap .u2 svg { transform: rotate(1.1deg); }
-.fan-cap .u3 svg { transform: rotate(-0.6deg); }
-.fan-cap .u4 svg { transform: rotate(1.5deg); }
-.fan-cap .u1 path { stroke-width: 1.9; }
-.fan-cap .u2 path { stroke-width: 1.55; }
-.fan-cap .u3 path { stroke-width: 1.8; }
-.fan-cap .u4 path { stroke-width: 1.6; }
-.fan-cap u .p2 { stroke-opacity: 0.26; }
 
 /* install steps */
 
+.start {
+  position: static;
+  width: auto;
+  padding: 0;
+}
 .steps {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.75rem;
-  margin-top: auto;
-  padding-top: clamp(1.375rem, 4.5svh, 3rem);
+  align-items: stretch;
+  gap: 0.5rem;
   text-align: left;
 }
 
 .step {
   display: flex;
   align-items: center;
-  gap: 1.75rem;
-  max-width: 100%;
-  padding: 0.6875rem 0.875rem 0.6875rem 1.125rem;
-  border: 1.5px solid var(--ink);
-  border-radius: 0.5rem;
-  background: var(--bg);
-  box-shadow: 0.1875rem 0.1875rem 0 var(--shadow);
+  gap: 0.625rem;
+  max-width: none;
+  padding: 0.375rem 0.625rem;
+  border: 1px solid var(--faint);
+  border-radius: 0.375rem;
+  background: transparent;
+  box-shadow: 0.1rem 0.1rem 0 var(--shadow);
   color: var(--ink);
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: transform 0.12s, box-shadow 0.12s;
+  transition: border-color 0.12s, transform 0.12s, box-shadow 0.12s;
 }
 .step:hover {
+  border-color: var(--ink);
   transform: translate(0.125rem, 0.125rem);
   box-shadow: 0.0625rem 0.0625rem 0 var(--shadow);
   text-decoration: none;
@@ -805,7 +750,11 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   transform: translate(0.1875rem, 0.1875rem);
   box-shadow: 0 0 0 var(--shadow);
 }
-.step:focus-visible { outline: 2px solid var(--accent); outline-offset: 0.1875rem; }
+.step:focus-visible {
+  border-color: var(--ink);
+  outline: 2px solid var(--ink);
+  outline-offset: 0.1875rem;
+}
 @media (prefers-reduced-motion: reduce) {
   .step { transition: none; }
 }
@@ -814,21 +763,21 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 .step-label {
   display: block;
   font-family: var(--mono);
-  font-size: 0.59375rem;
+  font-size: 0.5rem;
   font-weight: 500;
   letter-spacing: 0.08em;
   line-height: 1.3;
   text-transform: uppercase;
   color: var(--faint);
-  margin-bottom: 1px;
+  margin-bottom: 0;
 }
 .step-body code {
   display: block;
   font-family: var(--mono);
-  font-size: 0.8125rem;
+  font-size: 0.6875rem;
   line-height: 1.5;
   color: var(--ink);
-  overflow-wrap: anywhere;
+  white-space: nowrap;
 }
 
 .step-act {
@@ -839,8 +788,8 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 }
 .step:hover .step-act { color: var(--ink); }
 .step-act svg {
-  width: 0.9375rem;
-  height: 0.9375rem;
+  width: 0.75rem;
+  height: 0.75rem;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.8;
@@ -851,27 +800,19 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 .step-stars {
   align-self: stretch;
   gap: 0.3125rem;
-  padding-left: 0.75rem;
-  border-left: 1.5px solid var(--rule);
+  padding-left: 0.5rem;
+  border-left: 1px solid var(--rule);
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 0.78125rem;
+  font-size: 0.65625rem;
   font-variant-numeric: tabular-nums;
 }
 .step:hover .step-stars { border-left-color: var(--ink); }
 .step-act .i-done { display: none; }
-.step[data-copied] .step-act { color: var(--accent); }
+.step[data-copied] .step-act { color: var(--t-ok); }
 .step[data-copied] .i-copy { display: none; }
 .step[data-copied] .i-done { display: block; }
 
-.req {
-  color: var(--faint);
-  font-size: 0.78125rem;
-  font-family: var(--mono);
-  text-align: left;
-  margin: auto 0 0;
-  padding-top: 0.875rem;
-}
 
 /* boxed code — terminal */
 
@@ -980,80 +921,430 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 .foot-inner .end { margin-left: auto; }
 
 @media (max-width: 775px) {
-  .nav-links a[href="#why"] { display: none; }
-  .hero { padding: 2rem 0 2.875rem; }
+  .nav-links a { display: none; }
+  .nav-inner { gap: 0.5rem; padding-inline: 1rem; }
+  .start .steps { gap: 0.375rem; }
+  .start .step { gap: 0.375rem; padding-inline: 0.5rem; }
+  .start .step-body code { font-size: 0.625rem; }
+  .hero { padding: 1.5rem 0; }
+  /* Fit-to-width would shrink the one-liner below legibility here; let it
+     wrap to two lines at a comfortable size instead. */
+  .hero h1 { white-space: normal; font-size: clamp(1.5rem, 7vw, 2rem); }
   .foot-inner .end { margin-left: 0; }
 }
-/* The fan narrows before it wraps: drop the comments first, then shrink the
-   beams, so the diagram stays one line as long as it can. */
-@media (max-width: 620px) {
-  .fan-out span, .fan-src span { display: none; }
-  .fan-beams { width: 9rem; height: 5.4rem; }
-  .fan-out { height: 5.4rem; }
-}
-
 /* ---------------------------------------------------------------------------
-   Draw-in, in reading order: caret first, then the three beams leave the lens
-   one after another, then the caption's underlines land one at a time.
-   CSS-only, same pathLength="1" trick as the template.
+   Draw-in: the headline's caret scribble. CSS-only, same pathLength="1"
+   trick as the template.
    --------------------------------------------------------------------------- */
 
 @keyframes ink-draw { to { stroke-dashoffset: 0; } }
-@keyframes wedge-in { to { fill-opacity: 0.1; } }
 
-.caret path,
-.fan-cap u path,
-.fan-beams .beam {
+.caret path {
   stroke-dasharray: 1;
   stroke-dashoffset: 1;
   animation-name: ink-draw;
   animation-fill-mode: forwards;
+  animation-duration: 0.12s;
+  animation-timing-function: cubic-bezier(0.18, 0.85, 0.3, 1);
 }
-.caret path { animation-duration: 0.12s; animation-timing-function: cubic-bezier(0.18, 0.85, 0.3, 1); }
 .caret .s1 { animation-delay: 0.20s; animation-timing-function: cubic-bezier(0.08, 0.5, 0.92, 0.5); }
 .caret .s2 { animation-delay: 0.37s; animation-duration: 0.08s; stroke-dashoffset: -1; }
 .caret .s3 { animation-delay: 0.50s; animation-duration: 0.06s; animation-timing-function: cubic-bezier(0.1, 0.9, 0.4, 1); }
 
-/* Light travels source → screen, so the beams draw left to right, fast — a
-   beam is not a pen stroke. The wedge glow catches up just behind each beam. */
-.fan-beams .beam {
-  stroke-opacity: 0.55;
-  animation-duration: 0.18s;
-  animation-timing-function: cubic-bezier(0.2, 0.6, 0.4, 1);
-}
-.fan-beams .b1 { animation-delay: 0.72s; }
-.fan-beams .b2 { animation-delay: 0.86s; }
-.fan-beams .b3 { animation-delay: 1.00s; }
-.fan-beams .wedge {
-  fill-opacity: 0;
-  animation-name: wedge-in;
-  animation-duration: 0.5s;
-  animation-fill-mode: forwards;
-  animation-timing-function: ease-out;
-}
-.fan-beams .w1 { animation-delay: 0.86s; }
-.fan-beams .w2 { animation-delay: 1.00s; }
-.fan-beams .w3 { animation-delay: 1.14s; }
-
-.fan-cap u path { animation-duration: 0.15s; animation-timing-function: ease-in-out; }
-.fan-cap u .p2 { stroke-dashoffset: -1; animation-duration: 0.11s; }
-.fan-cap .u1 .p1 { animation-delay: 1.55s; }
-.fan-cap .u1 .p2 { animation-delay: 1.75s; }
-.fan-cap .u2 .p1 { animation-delay: 1.92s; animation-duration: 0.14s; }
-.fan-cap .u2 .p2 { animation-delay: 2.14s; animation-duration: 0.10s; }
-.fan-cap .u3 .p1 { animation-delay: 2.31s; animation-duration: 0.16s; }
-.fan-cap .u3 .p2 { animation-delay: 2.53s; animation-duration: 0.12s; }
-.fan-cap .u4 .p1 { animation-delay: 2.71s; }
-.fan-cap .u4 .p2 { animation-delay: 2.95s; }
-
 @media (prefers-reduced-motion: reduce) {
   .caret path,
-  .fan-cap u path,
-  .fan-beams .beam,
-  .caret .s2,
-  .fan-cap u .p2 {
+  .caret .s2 {
     animation: none;
     stroke-dashoffset: 0;
   }
-  .fan-beams .wedge { animation: none; fill-opacity: 0.1; }
 }
+
+/* ------------------------------------------------------------------------- */
+/* The talk composer: the hero's primary CTA and the shared element that     */
+/* morphs into the conversation. Same card language as .step — ink border,   */
+/* hard shadow — but wider and hot: this is the one the beam should love.    */
+
+.talk {
+  position: absolute;
+  /* .hero begins below the nav, so subtracting that offset places the card
+     at the viewport's true midpoint rather than the remaining-page midpoint. */
+  top: calc(50svh - var(--nav-height));
+  left: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(100%, 34rem);
+  margin: 0;
+  text-align: center;
+  transform: translate(-50%, -50%);
+}
+.talk-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  width: 100%;
+  padding: 0.375rem 0.375rem 0.375rem 1rem;
+  border: 1.5px solid var(--ink);
+  border-radius: 0.625rem;
+  background: var(--bg);
+  box-shadow: 0.1875rem 0.1875rem 0 var(--shadow);
+  transition: transform 0.12s, box-shadow 0.12s;
+  view-transition-name: composer;
+}
+.talk-card::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0.95rem;
+  width: 1px;
+  height: 1.15rem;
+  background: var(--ink);
+  transform: translateY(-50%);
+  animation: talk-caret 1s steps(1, end) infinite;
+}
+.talk-card:focus-within::before,
+.talk-card:has(.talk-input:not(:placeholder-shown))::before { display: none; }
+@keyframes talk-caret { 50% { opacity: 0; } }
+.talk-card:focus-within {
+  transform: translate(0.125rem, 0.125rem);
+  box-shadow: 0.0625rem 0.0625rem 0 var(--shadow);
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+.talk-explainers {
+  position: absolute;
+  top: calc(50svh - var(--nav-height) + var(--talk-height) / 2);
+  bottom: 1.5rem;
+  left: 50%;
+  display: grid;
+  place-items: center;
+  width: min(calc(100vw - 2rem), 44rem);
+  transform: translateX(-50%);
+}
+.explainer {
+  grid-area: 1 / 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
+  gap: 0.5rem;
+  width: min(100%, 44rem);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.34s ease-in-out, visibility 0s linear 0.34s;
+}
+.explainer[data-active] {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition-delay: 0s;
+}
+.explainer button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  min-height: 4.5rem;
+  padding: 0.6875rem 0.75rem;
+  border: 0;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  opacity: 0.62;
+  transition: color 0.12s, opacity 0.12s, transform 0.12s;
+}
+.explainer-title {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--ink);
+  font: 600 0.75rem/1.3 var(--mono);
+}
+.explainer-copy {
+  color: var(--muted);
+  font: 400 0.6875rem/1.4 var(--sans);
+}
+.ts-mark {
+  display: inline-grid;
+  place-items: end;
+  width: 1.125rem;
+  height: 1.125rem;
+  padding: 0 0.1rem 0.05rem 0;
+  background: #3178c6;
+  color: #fff;
+  font: 700 0.4375rem/1 var(--sans);
+  letter-spacing: -0.03em;
+}
+.explainer button:hover {
+  color: var(--ink);
+  opacity: 1;
+  transform: translateY(-0.0625rem);
+}
+.explainer button:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--ink);
+  outline-offset: 0.125rem;
+}
+.talk-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: 500 0.9375rem/1.4 var(--sans);
+  padding: 0.5rem 0;
+  outline: none;
+}
+.talk-input::placeholder { color: var(--faint); }
+.talk-mic, .talk-clear, .talk-go {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 0;
+  border-radius: 0.5rem;
+  background: none;
+  color: var(--ink);
+  cursor: pointer;
+}
+.talk-mic svg, .talk-clear svg, .talk-go svg {
+  width: 1.0625rem;
+  height: 1.0625rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.talk-clear { color: var(--faint); }
+.talk-clear:hover { color: var(--ink); }
+.talk-input:placeholder-shown + .talk-clear { display: none; }
+.talk-mic {
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 0.5rem);
+  color: var(--faint);
+  cursor: default;
+  transform: translateY(-50%);
+}
+.talk-mic[disabled] { opacity: 0.55; }
+.talk-go {
+  background: var(--ink);
+  color: var(--bg);
+  transition: transform 0.12s;
+}
+.talk-go:hover { transform: translateX(0.125rem); }
+.talk-clear:focus-visible, .talk-go:focus-visible { outline: 2px solid var(--ink); outline-offset: 0.1875rem; }
+/* Submitted before the chunk finished loading: breathe until it has. */
+.talk-waiting { animation: talk-pulse 0.9s ease-in-out infinite; }
+@keyframes talk-pulse {
+  50% { box-shadow: 0.1875rem 0.1875rem 0 var(--accent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .talk-card, .talk-go { transition: none; }
+  .talk-waiting { animation: none; }
+  .talk-card::before { animation: none; }
+  .explainer { transition: none; }
+}
+
+/* ------------------------------------------------------------------------- */
+/* The handoff. When the conversation is up, the marketing page and its      */
+/* light layers go away; #app owns the viewport. The composer card carries   */
+/* the same view-transition-name on both sides, so the browser morphs the    */
+/* hero input down into the conversation's composer — the one object that    */
+/* visibly persists from the page into the app.                              */
+
+:root[data-app] .page,
+:root[data-app] .wash,
+:root[data-app] .light { display: none; }
+#app { display: none; }
+:root[data-app] #app { display: block; }
+
+::view-transition-old(composer),
+::view-transition-new(composer) {
+  height: 100%;
+  animation-duration: 0.34s;
+  animation-timing-function: cubic-bezier(0.35, 0, 0.15, 1);
+}
+::view-transition-old(root) { animation-duration: 0.28s; }
+::view-transition-new(root) { animation-duration: 0.28s; }
+::view-transition-old(brand),
+::view-transition-new(brand) { animation-duration: 0.34s; }
+.nav-brand { view-transition-name: brand; }
+
+/* ------------------------------------------------------------------------- */
+/* The conversation app. Same paper, same ink: this is the marketing page's  */
+/* world with the sections swapped for a live machine.                       */
+
+.app {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+}
+.app-nav {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.875rem clamp(1rem, 4vw, 2rem);
+  border-bottom: 1px solid var(--rule);
+}
+.app-brand {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  text-decoration: none;
+  view-transition-name: brand;
+}
+.app-nav-session {
+  font-family: var(--mono);
+  font-size: 0.71875rem;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-nav-spacer { flex: 1; }
+.app-nav button {
+  border: 0;
+  background: none;
+  font-family: var(--mono);
+  font-size: 0.71875rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0.375rem 0.5rem;
+}
+.app-nav button:hover { color: var(--ink); }
+.app-nav button[data-active] { color: var(--accent); }
+
+.app-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.app-chat {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.app-scroll {
+  flex: 1;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+}
+.app-thread {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 2rem clamp(1rem, 4vw, 2rem) 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+.msg { display: flex; flex-direction: column; gap: 0.375rem; }
+.msg-role {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.msg-user .msg-role { color: var(--accent); }
+.msg-body {
+  font-size: 0.9375rem;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.msg-user .msg-body { font-weight: 500; }
+.msg-pending .msg-body::after {
+  content: "▋";
+  color: var(--accent);
+  animation: msg-blink 1s steps(2) infinite;
+}
+@keyframes msg-blink { 50% { opacity: 0; } }
+
+.app-composer {
+  max-width: 44rem;
+  width: 100%;
+  margin: 0 auto;
+  padding: 0.5rem clamp(1rem, 4vw, 2rem) 1.25rem;
+}
+/* The landing composer card, landed. */
+.app-composer .talk-card { view-transition-name: composer; }
+.app-composer-hint {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  color: var(--faint);
+  margin-top: 0.5rem;
+  text-align: center;
+}
+
+/* The inspector: the machine, visible. Frame log rows borrow the terminal   */
+/* box's vocabulary — mono, role-coloured.                                   */
+.app-inspector {
+  width: min(26rem, 38vw);
+  border-left: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+@media (max-width: 900px) { .app-inspector { display: none; } }
+.app-inspector-head {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.625rem 0.75rem;
+  border-bottom: 1px solid var(--rule);
+}
+.app-inspector-head button {
+  border: 0;
+  background: none;
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+}
+.app-inspector-head button[data-active] { color: var(--ink); background: var(--wash); }
+.app-inspector-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.75rem;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  line-height: 1.7;
+}
+.frame-row {
+  display: flex;
+  gap: 0.625rem;
+  align-items: baseline;
+  padding: 0.125rem 0;
+}
+.frame-row .l { color: var(--faint); }
+.frame-row .m { color: var(--t-actor); }
+.frame-row .b { color: var(--t-state); }
+.frame-row .g { color: var(--t-ok); }
+.frame-row .frame-detail {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.state-json {
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  color: var(--muted);
+}
+.state-json .k { color: var(--ink); }
+.inspector-empty { color: var(--faint); padding: 1rem 0.25rem; }
