@@ -79,7 +79,7 @@ export const panesState = createState({
   schema: panesSchema,
   init: {
     app: false,
-    inspector: true,
+    inspector: false,
     appWidth: 22,
     inspectorWidth: 26,
   } satisfies z.infer<typeof panesSchema>,
@@ -160,6 +160,12 @@ export const createInitialSerializedInstance = (): SerializedInstance =>
 
 export const hydrateSourceInstance = (serialized: SerializedInstance): Instance => {
   const instance = hydrateInstance(serialized, siteCharter);
+  // Sessions serialized before the ui child existed hydrate without it — no
+  // panes state, no setPanes on the compiled surface. Graft it here so every
+  // session heals on load; the next serialization makes it durable.
+  if (!(instance.children ?? []).some((child) => child.id === "ui")) {
+    instance.children = [...(instance.children ?? []), { id: "ui", node: uiNode }];
+  }
   resolveStates(instance);
   return instance;
 };

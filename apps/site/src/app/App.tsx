@@ -19,7 +19,7 @@ type Panes = {
   appWidth: number;
   inspectorWidth: number;
 };
-const DEFAULT_PANES: Panes = { app: false, inspector: true, appWidth: 22, inspectorWidth: 26 };
+const DEFAULT_PANES: Panes = { app: false, inspector: false, appWidth: 22, inspectorWidth: 26 };
 const PANE_MIN_REM = 14;
 const PANE_MAX_REM = 44;
 
