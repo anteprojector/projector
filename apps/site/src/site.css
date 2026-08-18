@@ -1039,6 +1039,9 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   pointer-events: auto;
   transition-delay: 0s;
 }
+/* Resting panels hold two cards, not four — narrower so they read as a
+   centered pair rather than two stretched slabs. */
+.explainer-rest { width: min(100%, 26rem); }
 .explainer button {
   display: flex;
   flex-direction: column;

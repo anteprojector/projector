@@ -69,6 +69,7 @@ talk.addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = talkInput.value.trim() || talkInput.placeholder.trim();
   if (!text) return;
+  retireResting();
   talkCard.classList.add("talk-waiting");
   try {
     const mod = await loadApp();
@@ -92,21 +93,67 @@ const commitPreview = () => {
 };
 const hotWords = [...document.querySelectorAll<HTMLButtonElement>(".hero h1 .hot")];
 const explainers = [...document.querySelectorAll<HTMLElement>("[data-explainer]")];
-const activateHotWord = (hot: HTMLButtonElement) => {
-  const topic = hot.dataset.topic;
-  for (const word of hotWords) {
-    const active = word === hot;
-    word.toggleAttribute("data-active", active);
-    word.setAttribute("aria-pressed", String(active));
-  }
+const showExplainer = (topic: string | undefined) => {
   for (const explainer of explainers) {
     const active = explainer.dataset.explainer === topic;
     explainer.toggleAttribute("data-active", active);
     explainer.setAttribute("aria-hidden", String(!active));
   }
 };
+const activateHotWord = (hot: HTMLButtonElement) => {
+  retireResting();
+  for (const word of hotWords) {
+    const active = word === hot;
+    word.toggleAttribute("data-active", active);
+    word.setAttribute("aria-pressed", String(active));
+  }
+  showExplainer(hot.dataset.topic);
+};
+
+// Resting cards: while nothing is engaged, the band below the composer slowly
+// cycles through a few things worth asking. First real intent — a hot word,
+// typing — retires the cycle for good; hovering the band pauses it.
+const restTopics = explainers
+  .map((el) => el.dataset.explainer ?? "")
+  .filter((topic) => topic.startsWith("rest-"));
+let restIndex = 0;
+let restTimer: ReturnType<typeof setInterval> | undefined;
+let resting = restTopics.length > 0 && !root.dataset.app;
+const restAdvance = () => {
+  showExplainer(restTopics[restIndex % restTopics.length]);
+  restIndex += 1;
+};
+const restResume = () => {
+  if (resting && restTimer === undefined) restTimer = setInterval(restAdvance, 7000);
+};
+const restPause = () => {
+  clearInterval(restTimer);
+  restTimer = undefined;
+};
+const retireResting = (clear = false) => {
+  if (!resting) return;
+  resting = false;
+  restPause();
+  // Later changes are visitor-driven, so announcing them is wanted again.
+  document.querySelector(".talk-explainers")?.setAttribute("aria-live", "polite");
+  if (clear) showExplainer(undefined);
+};
+if (resting) {
+  if (still.matches) restAdvance(); // one static card, no motion
+  else {
+    setTimeout(() => {
+      if (!resting) return;
+      restAdvance();
+      restResume();
+    }, 1200);
+    const band = document.querySelector<HTMLElement>(".talk-explainers");
+    band?.addEventListener("pointerenter", restPause);
+    band?.addEventListener("pointerleave", restResume);
+  }
+}
 talkInput.addEventListener("input", () => {
   commitPreview();
+  retireResting(true); // typing means engaged — fade the suggestion out of the way
 });
 talkInput.addEventListener("beforeinput", () => {
   if (talkInput.hasAttribute("data-suggested")) {

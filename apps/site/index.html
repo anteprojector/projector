@@ -155,7 +155,10 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
     </button>
   </form>
-  <div class="talk-explainers" aria-live="polite">
+  <!-- aria-live starts off: the resting cards below cycle on a timer, and a
+       polite region would narrate every rotation. boot.ts flips it to polite
+       the first time a change is visitor-driven (a hot word). -->
+  <div class="talk-explainers" aria-live="off">
     <div class="explainer" data-explainer="framework" aria-hidden="true">
       <button type="button" data-prompt="Why TypeScript?"><span class="explainer-title">TypeScript <span class="ts-mark" aria-hidden="true">TS</span></span><span class="explainer-copy">Written in TypeScript and runs on both client and server.</span></button>
       <button type="button" data-prompt="How does durable work scheduling work?"><span class="explainer-title">Work scheduling</span><span class="explainer-copy">Work is scheduled durably in the agent log itself.</span></button>
@@ -171,6 +174,21 @@
       <button type="button" data-prompt="What is a software factory?"><span class="explainer-title">Software factory</span><span class="explainer-copy">A repeatable system that turns intent into shipped software.</span></button>
       <button type="button" data-prompt="How do coding agents work together?"><span class="explainer-title">Coding agents</span><span class="explainer-copy">Specialized agents plan, implement, and review together.</span></button>
       <button type="button" data-prompt="How do agents build the product?"><span class="explainer-title">Product</span><span class="explainer-copy">Context, decisions, and code evolve in one shared system.</span></button>
+    </div>
+    <!-- Resting cards: until the visitor engages, the band cycles through a
+         couple of things worth asking. Same machinery as the topic panels —
+         boot.ts rotates data-active and retires the cycle on first intent. -->
+    <div class="explainer explainer-rest" data-explainer="rest-0" aria-hidden="true">
+      <button type="button" data-prompt="What is projector, in one paragraph?"><span class="explainer-title">Start here</span><span class="explainer-copy">Get the one-paragraph version of projector.</span></button>
+      <button type="button" data-prompt="Show me the smallest projector agent."><span class="explainer-title">First agent</span><span class="explainer-copy">See the smallest agent you can write.</span></button>
+    </div>
+    <div class="explainer explainer-rest" data-explainer="rest-1" aria-hidden="true">
+      <button type="button" data-prompt="What does the durable log record each turn?"><span class="explainer-title">The log</span><span class="explainer-copy">Every turn is a frame in a durable log.</span></button>
+      <button type="button" data-prompt="How is this different from other agent frameworks?"><span class="explainer-title">Why projector?</span><span class="explainer-copy">How it compares to the frameworks you know.</span></button>
+    </div>
+    <div class="explainer explainer-rest" data-explainer="rest-2" aria-hidden="true">
+      <button type="button" data-prompt="How do sub-agents share state?"><span class="explainer-title">Sub-agents</span><span class="explainer-copy">Specialized agents over one shared, durable state.</span></button>
+      <button type="button" data-prompt="What should I ask you first?"><span class="explainer-title">Kick the tires</span><span class="explainer-copy">This page is the demo — ask it anything.</span></button>
     </div>
   </div>
 </section>
