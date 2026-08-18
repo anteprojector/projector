@@ -169,6 +169,9 @@ body {
   inset: 0;
   display: block;
   opacity: var(--spec-a);
+  transform: scaleX(1);
+  transform-origin: right center;
+  transition: opacity 0.8s ease-in-out, transform 0.2s ease-in-out, filter 0.8s ease-in-out;
   mix-blend-mode: screen;
   filter: brightness(1.18);
   background: linear-gradient(171deg,
@@ -181,9 +184,38 @@ body {
   -webkit-mask: linear-gradient(103deg, transparent 32%, #000 97%);
           mask: linear-gradient(103deg, transparent 32%, #000 97%);
 }
+.wash::after {
+  content: "";
+  position: absolute;
+  inset: -8%;
+  display: block;
+  opacity: 0;
+  background: linear-gradient(171deg,
+    var(--spec-r) 4%,
+    var(--spec-o) 22%,
+    var(--spec-y) 40%,
+    var(--spec-g) 58%,
+    var(--spec-b) 76%,
+    var(--spec-v) 96%);
+  mix-blend-mode: screen;
+  filter: blur(48px) brightness(1.18);
+  -webkit-mask: linear-gradient(90deg,
+    transparent 0%,
+    rgba(0, 0, 0, 0.12) 18%,
+    rgba(0, 0, 0, 0.5) 44%,
+    #000 82%);
+          mask: linear-gradient(90deg,
+    transparent 0%,
+    rgba(0, 0, 0, 0.12) 18%,
+    rgba(0, 0, 0, 0.5) 44%,
+    #000 82%);
+  transition: opacity 0.8s ease-in-out;
+}
 :root[data-theme="dark"] .wash i { mix-blend-mode: normal; filter: none; }
+:root[data-theme="dark"] .wash::after { mix-blend-mode: normal; filter: blur(48px); }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) .wash i { mix-blend-mode: normal; filter: none; }
+  :root:not([data-theme]) .wash::after { mix-blend-mode: normal; filter: blur(48px); }
 }
 
 /* The ray. A wedge of white light: wide at the middle of the left edge,
@@ -206,7 +238,18 @@ body {
   height: 100%;
   z-index: -1;
   pointer-events: none;
+  transition: opacity 0.8s ease-in-out;
 }
+.ray-hidden .light {
+  opacity: 0;
+  transition-duration: 0.8s;
+}
+.ray-hidden .wash i {
+  opacity: 0;
+  filter: blur(48px);
+  transition-duration: 0.8s;
+}
+.ray-hidden .wash::after { opacity: calc(var(--spec-a) * 0.55); }
 /* Light mode only: the body adds light instead of tinting toward it. Normal
    blending interpolates page -> white, so at these alphas it can only wash
    the grey out slightly; plus-lighter sums luminance the way light does, so
@@ -321,15 +364,42 @@ body {
    --wedge is the angular extent (a soft rightward fan, 30deg shoulders);
    --from-target ramps the wash up with distance from the lit element, so it
    starts there instead of at a fixed point on the page. */
+@property --wedge-half {
+  syntax: "<angle>";
+  inherits: true;
+  initial-value: 38deg;
+}
+@property --wedge-feather {
+  syntax: "<angle>";
+  inherits: true;
+  initial-value: 30deg;
+}
+@property --apex-fill {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0;
+}
+@property --apex-mid {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0.6;
+}
 :root[data-variant^="f"] {
   --fx: 50vw;
   --fy: 50vh;
   --fh: 40px;   /* the target's half-height, published by the tracker */
   --fw: 36px;   /* horizontally the origin is a point; vertically it isn't */
+  --wedge-half: 38deg;
   --wedge-feather: 30deg;
+  --apex-fill: 0;
+  --apex-mid: 0.6;
   --wedge: conic-gradient(at var(--fx) var(--fy),
-    transparent 0deg, transparent calc(52deg - var(--wedge-feather)), #000 52deg,
-    #000 128deg, transparent calc(128deg + var(--wedge-feather)), transparent 360deg);
+    transparent 0deg,
+    transparent calc(90deg - var(--wedge-half) - var(--wedge-feather)),
+    #000 calc(90deg - var(--wedge-half)),
+    #000 calc(90deg + var(--wedge-half)),
+    transparent calc(90deg + var(--wedge-half) + var(--wedge-feather)),
+    transparent 360deg);
   /* An ellipse, not a circle: the clear core is as tall as the target, so the
      wash begins along the element's whole height rather than swelling out of
      a point at its middle. Stops past 100% are multiples of that ellipse, so
@@ -343,10 +413,24 @@ body {
      ray is lighting rather than at a vertex. Horizontally tight, so it only
      eats the apex and not the body of the wedge. */
   --apex: radial-gradient(24px var(--fh) at var(--fx) var(--fy),
-    transparent 0, transparent 100%, rgba(0, 0, 0, 0.6) 150%, #000 250%);
+    rgba(0, 0, 0, var(--apex-fill)) 0,
+    rgba(0, 0, 0, var(--apex-fill)) 100%,
+    rgba(0, 0, 0, var(--apex-mid)) 150%,
+    #000 250%);
   /* Where the load-in wipe starts — the beam's tip, snapshotted by the
      tracker. The wipe gradient itself lives on .wash; see the note there. */
   --wash-from: 0px;
+  transition:
+    --wedge-half 0.8s ease-in-out,
+    --wedge-feather 0.8s ease-in-out,
+    --apex-fill 0.8s ease-in-out,
+    --apex-mid 0.8s ease-in-out;
+}
+:root[data-variant^="f"].ray-hidden {
+  --wedge-half: 90deg;
+  --wedge-feather: 0deg;
+  --apex-fill: 1;
+  --apex-mid: 1;
 }
 
 /* The wash waits for the beam, then wipes in left to right — colour arriving
@@ -1247,7 +1331,10 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 .app-thread {
   max-width: 44rem;
   margin: 0 auto;
-  padding: 2rem clamp(1rem, 4vw, 2rem) 1rem;
+  /* The tall bottom padding is the paging runway: the newest turn must be
+     able to scroll all the way to the top of the viewport even when nothing
+     follows it, so there is always ~a screen of blank paper below. */
+  padding: 2rem clamp(1rem, 4vw, 2rem) max(2rem, calc(100svh - 12rem));
   display: flex;
   flex-direction: column;
   gap: 1.5rem;

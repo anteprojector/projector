@@ -148,12 +148,59 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
   const streaming = server.some((m) => m.streamState === "streaming");
   const thinking = waitingSince !== null && !streaming;
 
+  // One turn at a time: less a chat feed than pages with an input at the
+  // bottom. When the speaker changes, the new turn scrolls to the top of the
+  // screen and everything before it becomes history above the fold;
+  // consecutive messages from the same speaker accumulate below the current
+  // page top without re-paging. turnCount only moves on a speaker switch, so
+  // optimistic→server row swaps and streaming growth never re-trigger the
+  // sync. The thinking placeholder is not a turn — the page flips when the
+  // agent actually starts saying something.
+  const rendered = [
+    ...server.map((m) => ({
+      key: m.id,
+      role: m.role,
+      content: m.content,
+      widget: m.widget,
+      pending: m.streamState === "streaming",
+    })),
+    ...visibleOptimistic.map((m) => ({
+      key: m.key,
+      role: m.role,
+      content: m.content,
+      widget: undefined as string | undefined,
+      pending: false,
+    })),
+  ];
+  let turnCount = 0;
+  const items = rendered.map((m, i) => {
+    const turnStart = i === 0 || rendered[i - 1].role !== m.role;
+    if (turnStart) turnCount += 1;
+    return { ...m, turnStart };
+  });
+
   const scrollRef = useRef<HTMLDivElement>(null);
-  const messageCount = server.length + visibleOptimistic.length;
+  const syncedOnce = useRef(false);
   useEffect(() => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messageCount, streaming, thinking]);
+    if (turnCount === 0) return;
+    const container = scrollRef.current;
+    if (!container) return;
+    const starts = container.querySelectorAll<HTMLElement>("[data-turn-start]");
+    const target = starts[starts.length - 1];
+    if (!target) return;
+    const top =
+      target.getBoundingClientRect().top -
+      container.getBoundingClientRect().top +
+      container.scrollTop -
+      24; // breathing room above the page top
+    const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    container.scrollTo({
+      top: Math.max(0, top),
+      // The first sync (loading an existing session) is a cut, not a scroll.
+      behavior: syncedOnce.current && !still ? "smooth" : "instant",
+    });
+    syncedOnce.current = true;
+  }, [turnCount]);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -168,18 +215,16 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
         <div className="app-chat">
           <div className="app-scroll" ref={scrollRef}>
             <div className="app-thread">
-              {server.map((m) => (
+              {items.map((m) => (
                 <Message
-                  key={m.id}
+                  key={m.key}
                   role={m.role}
                   content={m.content}
                   widget={m.widget}
-                  pending={m.streamState === "streaming"}
+                  pending={m.pending}
+                  turnStart={m.turnStart}
                   onAsk={send}
                 />
-              ))}
-              {visibleOptimistic.map((m) => (
-                <Message key={m.key} role={m.role} content={m.content} />
               ))}
               {thinking && <Message role="assistant" content="" pending />}
             </div>
@@ -214,18 +259,22 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
   );
 }
 
-function Message({ role, content, widget, pending, onAsk }: {
+function Message({ role, content, widget, pending, turnStart, onAsk }: {
   role: "user" | "assistant";
   content: string;
   widget?: string;
   pending?: boolean;
+  turnStart?: boolean;
   onAsk?: (text: string) => void;
 }) {
   // A widget message renders its rich explainer in place of the prose (the
   // prose is the LLM-facing equivalent). Unknown widget ids fall back to it.
   const Explainer = widget ? EXPLAINERS[widget] : undefined;
   return (
-    <div className={`msg msg-${role}${pending ? " msg-pending" : ""}`}>
+    <div
+      className={`msg msg-${role}${pending ? " msg-pending" : ""}`}
+      data-turn-start={turnStart ? "" : undefined}
+    >
       <span className="msg-role">{role === "user" ? "you" : "projector"}</span>
       {Explainer && onAsk
         ? <Explainer onAsk={(text) => void onAsk(text)} />

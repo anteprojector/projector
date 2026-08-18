@@ -302,34 +302,27 @@
     const contentTargetSelector = ".features .feature, .why > p:not(.label), .box, .docs li, .talk-card";
     let hoverEl = null;
     let lastDirect = null;
-    let releasedByScroll = null;
-    let claimScrollY = scrollY;
-    let releaseAfterScroll = false;
-    let refocusTimer = null;
+    let releasedByFade = null;
+    let effectsHidden = scrollY > 50;
     // The composer is the hero: the beam opens on it and holds until the
-    // reader scrolls or points somewhere else.
+    // reader points or focuses somewhere else.
     let sticky = document.querySelector(".talk-card");
+    document.documentElement.classList.toggle("ray-hidden", effectsHidden);
     addEventListener("scroll", () => {
-      clearTimeout(refocusTimer);
-      refocusTimer = null;
-      if (Math.abs(scrollY - claimScrollY) > 10) releaseAfterScroll = true;
-    }, { passive: true });
-    addEventListener("scrollend", () => {
-      if (!releaseAfterScroll) return;
-      refocusTimer = setTimeout(() => {
-        releasedByScroll = lastDirect;
+      const wasHidden = effectsHidden;
+      effectsHidden = scrollY > 50;
+      document.documentElement.classList.toggle("ray-hidden", effectsHidden);
+      if (effectsHidden && !wasHidden) {
+        releasedByFade = lastDirect || sticky;
         lastDirect = null;
         hoverEl = null;
         sticky = null;
-        claimScrollY = scrollY;
-        releaseAfterScroll = false;
-        refocusTimer = null;
-      }, 50);
+      }
     }, { passive: true });
     document.addEventListener("pointermove", (e) => {
       if (e.pointerType && e.pointerType !== "mouse") return;
       hoverEl = e.target.closest(contentTargetSelector) || e.target.closest("a, button");
-      releasedByScroll = null;
+      releasedByFade = null;
     }, { passive: true });
     document.addEventListener("pointerout", (e) => {
       if (!e.relatedTarget) hoverEl = null;
@@ -337,7 +330,7 @@
     document.addEventListener("focusin", (e) => {
       if (e.target instanceof Element && e.target.matches("a, button, .talk-input")) {
         hoverEl = null;
-        releasedByScroll = null;
+        releasedByFade = null;
       }
     });
     const cur = { x: -1, x2: 0, y: scrollY + innerHeight * 0.5, h: 12 };
@@ -346,7 +339,7 @@
     const INTRO_DELAY = 200;
     const WASH_AT = 0.65;
     let introStart = null, introMs = 900, washed = false;
-    let washX = null, washY = null, washH = null;
+    let washX = null, washY = null, washH = null, washDocY = null;
     let locked = null;
     let settling = true;
     let docH = 0;
@@ -354,6 +347,17 @@
       // The conversation is up: the marketing page is hidden, so the beam has
       // nothing to light. Keep the loop alive but idle for the return trip.
       if (document.documentElement.dataset.app) {
+        requestAnimationFrame(frame);
+        return;
+      }
+      if (effectsHidden) {
+        if (washDocY !== null) {
+          const py = Math.round(washDocY - scrollY);
+          if (py !== washY) {
+            washY = py;
+            document.documentElement.style.setProperty("--fy", py + "px");
+          }
+        }
         requestAnimationFrame(frame);
         return;
       }
@@ -376,9 +380,8 @@
       // Pointer and keyboard targets claim the ray immediately. Once claimed,
       // the ray stays there until a new hover or focus explicitly retargets it.
       const candidate = hovered || focused;
-      const direct = candidate === releasedByScroll ? null : candidate;
+      const direct = candidate === releasedByFade ? null : candidate;
       if (direct) {
-        if (direct !== lastDirect) claimScrollY = scrollY;
         lastDirect = direct;
       } else if (lastDirect && !lastDirect.isConnected) {
         lastDirect = null;
@@ -415,8 +418,8 @@
         }
       }
       if (!best && sticky !== SELECTION) {
-        const ml = mainEl.getBoundingClientRect().left + 51;
-        best = { left: ml, top: mid - 12, height: 24, bottom: mid + 12 };
+        const mr = mainEl.getBoundingClientRect();
+        best = { left: mr.left, right: mr.right, top: mid - 12, height: 24, bottom: mid + 12 };
         bestEl = CENTER;
       }
       if (bestEl && bestEl !== locked) { locked = bestEl; settling = true; }
@@ -529,6 +532,7 @@
         core.setAttribute("fill-opacity", f.toFixed(3));
         const px = Math.round(L + (X - L) * 0.25), py = Math.round(fy - scrollY);
         const ph = Math.round(half);
+        washDocY = fy;
         if (px !== washX || py !== washY || ph !== washH) {
           washX = px; washY = py; washH = ph;
           const s = document.documentElement.style;
