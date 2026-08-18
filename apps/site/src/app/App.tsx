@@ -51,6 +51,9 @@ export function App({ client, initialMessage, initialTopic, sessionId }: AppProp
   );
 }
 
+// The marketing header, continued: same brand, same two CTA steps centered,
+// same Why/Docs/theme cluster on the right — the page folded into an app, so
+// the chrome shouldn't change vocabulary.
 function AppNav({ sessionId }: { sessionId?: string }) {
   const exit = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -59,13 +62,74 @@ function AppNav({ sessionId }: { sessionId?: string }) {
   };
   return (
     <header className="app-nav">
-      <a className="app-brand" href="/" onClick={exit}>projector</a>
-      {sessionId && <span className="app-nav-session">s/{sessionId.slice(0, 12)}</span>}
-      <span className="app-nav-spacer" />
-      <a className="app-brand" style={{ viewTransitionName: "none" }} href="https://github.com/markov-machines/markov-machines" aria-label="GitHub">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0a8 8 0 0 0-2.53 15.6c.4.07.55-.18.55-.39v-1.36c-2.23.48-2.7-1.07-2.7-1.07-.36-.93-.89-1.18-.89-1.18-.73-.5.06-.49.06-.49.8.06 1.23.83 1.23.83.72 1.23 1.88.87 2.34.67.07-.52.28-.88.5-1.08-1.77-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.66 7.66 0 0 1 4 0c1.53-1.03 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.28.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.2c0 .21.15.46.55.39A8 8 0 0 0 8 0Z"/></svg>
-      </a>
+      <div className="app-nav-left">
+        <a className="app-brand" href="/" onClick={exit}>projector</a>
+        {sessionId && <span className="app-nav-session">s/{sessionId.slice(0, 12)}</span>}
+      </div>
+      <div className="start" aria-label="Project actions">
+        <div className="steps">
+          <InstallStep />
+          <a className="step" href="https://github.com/markov-machines/markov-machines">
+            <span className="step-body"><span className="step-label">GitHub</span><code>Star</code></span>
+            <span className="step-act step-stars"><svg className="i-star" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.9 6 6.5.9-4.7 4.6 1.1 6.5L12 17.9 6.2 21l1.1-6.5L2.6 9.9 9.1 9z"/></svg><span className="count">1</span><span className="vh">stars</span></span>
+          </a>
+        </div>
+      </div>
+      <nav className="nav-links app-nav-links">
+        <a href="/#why">Why</a>
+        <a href="/#docs">Docs</a>
+        <ThemeToggle />
+      </nav>
     </header>
+  );
+}
+
+function InstallStep() {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText("npm i @projectors/core");
+      setCopied(true);
+      setTimeout(() => setCopied(false), 3000);
+    } catch {}
+  };
+  return (
+    <button className="step" type="button" data-copied={copied ? "" : undefined} onClick={() => void copy()}>
+      <span className="step-body"><span className="step-label">Install</span><code>npm i @projectors/core</code></span>
+      <span className="step-act"><span className="vh">Copy</span><svg className="i-copy" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg><svg className="i-done" viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5 10-11"/></svg></span>
+    </button>
+  );
+}
+
+// Mirrors the marketing page's toggle: flip from whatever is in effect,
+// persist the choice, and keep the (hidden) marketing button's icon in sync
+// so nothing is stale when the visitor goes back.
+function ThemeToggle() {
+  const effective = () =>
+    document.documentElement.dataset.theme ??
+    (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const [mode, setMode] = useState(effective);
+  useEffect(() => {
+    const sysDark = matchMedia("(prefers-color-scheme: dark)");
+    const paint = () => setMode(effective());
+    sysDark.addEventListener("change", paint);
+    return () => sysDark.removeEventListener("change", paint);
+  }, []);
+  const toggle = () => {
+    const next = effective() === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem("theme", next); } catch {}
+    const pageButton = document.querySelector(".page .theme");
+    pageButton?.setAttribute("data-mode", next);
+    pageButton?.setAttribute("aria-label", `Theme: ${next}`);
+    setMode(next);
+  };
+  return (
+    <button className="theme" type="button" data-mode={mode} aria-label={`Theme: ${mode}`} onClick={toggle}>
+      <svg className="i-light" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3.1"/><path d="M8 .9v1.8M8 13.3v1.8M15.1 8h-1.8M2.7 8H.9M13 3l-1.3 1.3M4.3 11.7 3 13M13 13l-1.3-1.3M4.3 4.3 3 3"/></svg>
+      <svg className="i-dark" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 9.6A6 6 0 1 1 6.4 2.5a4.8 4.8 0 0 0 7.1 7.1Z"/></svg>
+      <svg className="i-drop" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.6c2.7 3 4.4 5.2 4.4 7.1a4.4 4.4 0 0 1-8.8 0c0-1.9 1.7-4.1 4.4-7.1Z"/></svg>
+    </button>
   );
 }
 
