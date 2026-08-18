@@ -13,6 +13,7 @@ import type * as convexJson from "../convexJson.js";
 import type * as frameHistory from "../frameHistory.js";
 import type * as messages from "../messages.js";
 import type * as sessions from "../sessions.js";
+import type * as topics from "../topics.js";
 
 import type {
   ApiFromModules,
@@ -26,6 +27,7 @@ declare const fullApi: ApiFromModules<{
   frameHistory: typeof frameHistory;
   messages: typeof messages;
   sessions: typeof sessions;
+  topics: typeof topics;
 }>;
 
 /**

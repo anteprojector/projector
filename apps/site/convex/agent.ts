@@ -49,8 +49,20 @@ export const sendMessage = action({
       frames: contextFrames,
     });
 
+    // The user row is written before the run so it sorts ahead of the
+    // assistant's streaming rows (createdAt is the thread order). The frame
+    // persistence pass later finds it by the same idempotency key — derived
+    // from this messageId — and patches on the real frameId.
+    const userMessageId = crypto.randomUUID();
+    await ctx.runMutation(api.messages.add, {
+      sessionId,
+      role: "user",
+      content: trimmed,
+      idempotencyKey: `user:${userMessageId}`,
+    });
+
     machine.enqueueFrame({
-      messages: [{ type: "user", text: trimmed }],
+      messages: [{ type: "user", text: trimmed, messageId: userMessageId }],
     });
 
     const producedFrames: Frame[] = [];

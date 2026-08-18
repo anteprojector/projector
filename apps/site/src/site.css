@@ -69,10 +69,10 @@
   --t-ok: #3ddc84;
   --t-bad: #ff6b5e;
 }
-:root[data-theme="dark"] .light .l-glow { opacity: 0.085; }
-:root[data-theme="dark"] .light .l-core { opacity: 0.09; }
-:root[data-theme="dark"] .light.horiz .l-glow { opacity: 0.13; }
-:root[data-theme="dark"] .light.horiz .l-core { opacity: 0.14; }
+:root[data-theme="dark"] .light .l-glow { opacity: 0.29; }
+:root[data-theme="dark"] .light .l-core { opacity: 0.3; }
+:root[data-theme="dark"] .light.horiz .l-glow { opacity: 0.34; }
+:root[data-theme="dark"] .light.horiz .l-core { opacity: 0.35; }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
@@ -101,10 +101,10 @@
     --spec-a: 0.21;
   }
   /* On black the same white wedge is a faint torch beam, not a floodlight. */
-  :root:not([data-theme]) .light .l-glow { opacity: 0.085; }
-  :root:not([data-theme]) .light .l-core { opacity: 0.09; }
-  :root:not([data-theme]) .light.horiz .l-glow { opacity: 0.13; }
-  :root:not([data-theme]) .light.horiz .l-core { opacity: 0.14; }
+  :root:not([data-theme]) .light .l-glow { opacity: 0.29; }
+  :root:not([data-theme]) .light .l-core { opacity: 0.3; }
+  :root:not([data-theme]) .light.horiz .l-glow { opacity: 0.34; }
+  :root:not([data-theme]) .light.horiz .l-core { opacity: 0.35; }
 }
 
 @font-face {
@@ -1274,6 +1274,102 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   animation: msg-blink 1s steps(2) infinite;
 }
 @keyframes msg-blink { 50% { opacity: 0; } }
+
+/* Rich explainer widgets: an assistant turn rendered as a diagram card. Same
+   paper vocabulary as the rest of the app — hairline border, mono labels —
+   with the spectrum colours doing the same job they do in the hero: one
+   source, a fan of beams, each child its own hue. */
+.xp {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-top: 0.25rem;
+  padding: 1rem 1rem 1.125rem;
+  border: 1px solid var(--rule);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--wash) 45%, transparent);
+}
+.xp-b1, .xp-c1, .xp-f1 { --lane: var(--spec-b); }
+.xp-b2, .xp-c2, .xp-f2 { --lane: var(--spec-g); }
+.xp-b3, .xp-c3, .xp-f3 { --lane: var(--spec-v); }
+.xp-parent, .xp-fp { --lane: var(--ink); }
+.xp-diagram { display: block; width: 100%; height: auto; }
+.xp-node rect { fill: none; stroke: var(--ink); stroke-width: 1.4; }
+.xp-node text {
+  fill: var(--ink);
+  font: 600 0.6875rem var(--mono);
+  letter-spacing: 0.06em;
+  text-anchor: middle;
+}
+.xp-child rect { stroke: var(--lane); }
+.xp-child text { fill: var(--lane); }
+.xp-beam { fill: none; stroke: var(--lane); stroke-width: 1.6; }
+.xp-drop {
+  fill: none;
+  stroke: var(--lane);
+  stroke-width: 1.1;
+  stroke-dasharray: 3 4;
+  opacity: 0.5;
+}
+.xp-log line { stroke: var(--muted); stroke-width: 1.2; }
+.xp-log-label {
+  fill: var(--faint);
+  font: 500 0.625rem var(--mono);
+  letter-spacing: 0.1em;
+}
+.xp-frames rect { fill: var(--lane); }
+/* Draw-in: source first, beams, children, then the log fills frame by frame. */
+@keyframes xp-in { from { opacity: 0; } }
+@keyframes xp-pop { from { opacity: 0; transform: translateY(0.25rem); } }
+.xp-node, .xp-beam, .xp-drop, .xp-log { animation: xp-in 0.45s ease-out both; }
+.xp-beam, .xp-drop { animation-delay: 0.25s; }
+.xp-child { animation-delay: 0.5s; }
+.xp-drop { animation-delay: 0.7s; }
+.xp-frames rect { animation: xp-pop 0.3s ease-out both; }
+.xp-frames rect:nth-child(1) { animation-delay: 0.85s; }
+.xp-frames rect:nth-child(2) { animation-delay: 0.97s; }
+.xp-frames rect:nth-child(3) { animation-delay: 1.09s; }
+.xp-frames rect:nth-child(4) { animation-delay: 1.21s; }
+.xp-frames rect:nth-child(5) { animation-delay: 1.33s; }
+.xp-frames rect:nth-child(6) { animation-delay: 1.45s; }
+.xp-frames rect:nth-child(7) { animation-delay: 1.57s; }
+.xp-frames rect:nth-child(8) { animation-delay: 1.69s; }
+.xp-frames rect:nth-child(9) { animation-delay: 1.81s; }
+.xp-points {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+}
+.xp-points div { display: flex; flex-direction: column; gap: 0.25rem; }
+.xp-points dt {
+  font: 600 0.6875rem var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+.xp-points dd {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.xp-asks { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.xp-asks button {
+  border: 1px solid var(--rule);
+  border-radius: 1rem;
+  background: none;
+  padding: 0.375rem 0.75rem;
+  font: 500 0.75rem var(--mono);
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+.xp-asks button:hover { color: var(--ink); border-color: var(--ink); }
+.xp-asks button:focus-visible { outline: 2px solid var(--ink); outline-offset: 0.125rem; }
+@media (prefers-reduced-motion: reduce) {
+  .xp-node, .xp-beam, .xp-drop, .xp-log, .xp-frames rect { animation: none; }
+}
 
 .app-composer {
   max-width: 44rem;

@@ -198,7 +198,7 @@ async function getSessionOrThrow(ctx: MutationCtx, sessionId: Id<"sessions">) {
   return session;
 }
 
-async function appendMachineFrameInternal(
+export async function appendMachineFrameInternal(
   ctx: MutationCtx,
   {
     sessionId,

@@ -43,6 +43,10 @@ export default defineSchema({
     frameId: v.optional(v.id("frames")),
     role: v.union(v.literal("user"), v.literal("assistant")),
     content: v.string(),
+    // Rich client rendering for this message: the id of a prebuilt explainer
+    // widget. content stays the plain-text equivalent — it is what the LLM
+    // sees as history and what renders if the widget id is unknown.
+    widget: v.optional(v.string()),
     createdAt: v.number(),
     idempotencyKey: v.optional(v.string()),
     streamState: v.optional(v.string()),

@@ -162,7 +162,7 @@
     <div class="explainer" data-explainer="framework" aria-hidden="true">
       <button type="button" data-prompt="Why TypeScript?"><span class="explainer-title">TypeScript <span class="ts-mark" aria-hidden="true">TS</span></span><span class="explainer-copy">Written in TypeScript and runs on both client and server.</span></button>
       <button type="button" data-prompt="How does durable work scheduling work?"><span class="explainer-title">Work scheduling</span><span class="explainer-copy">Work is scheduled durably in the agent log itself.</span></button>
-      <button type="button" data-prompt="How does agent orchestration work?"><span class="explainer-title">Sub-agents</span><span class="explainer-copy">Delegate work to specialized agents sharing durable state.</span></button>
+      <button type="button" data-prompt="How does agent orchestration work?" data-demo="subagents"><span class="explainer-title">Sub-agents</span><span class="explainer-copy">Delegate work to specialized agents sharing durable state.</span></button>
       <button type="button" data-prompt="How is agent state validated?"><span class="explainer-title">Validated state</span><span class="explainer-copy">State transitions are typed and validated at runtime.</span></button>
     </div>
     <div class="explainer" data-explainer="evolutionary" aria-hidden="true">
@@ -187,7 +187,7 @@
       <button type="button" data-prompt="How is this different from other agent frameworks?"><span class="explainer-title">Why projector?</span><span class="explainer-copy">How it compares to the frameworks you know.</span></button>
     </div>
     <div class="explainer explainer-rest" data-explainer="rest-2" aria-hidden="true">
-      <button type="button" data-prompt="How do sub-agents share state?"><span class="explainer-title">Sub-agents</span><span class="explainer-copy">Specialized agents over one shared, durable state.</span></button>
+      <button type="button" data-prompt="How do sub-agents share state?" data-demo="subagents"><span class="explainer-title">Sub-agents</span><span class="explainer-copy">Specialized agents over one shared, durable state.</span></button>
       <button type="button" data-prompt="What should I ask you first?"><span class="explainer-title">Kick the tires</span><span class="explainer-copy">This page is the demo — ask it anything.</span></button>
     </div>
   </div>
@@ -301,13 +301,35 @@
     const CENTER = {};
     const contentTargetSelector = ".features .feature, .why > p:not(.label), .box, .docs li, .talk-card";
     let hoverEl = null;
+    let lastDirect = null;
+    let releasedByScroll = null;
+    let claimScrollY = scrollY;
+    let releaseAfterScroll = false;
+    let refocusTimer = null;
     // The composer is the hero: the beam opens on it and holds until the
     // reader scrolls or points somewhere else.
     let sticky = document.querySelector(".talk-card");
-    addEventListener("scroll", () => { sticky = null; }, { passive: true });
+    addEventListener("scroll", () => {
+      clearTimeout(refocusTimer);
+      refocusTimer = null;
+      if (Math.abs(scrollY - claimScrollY) > 10) releaseAfterScroll = true;
+    }, { passive: true });
+    addEventListener("scrollend", () => {
+      if (!releaseAfterScroll) return;
+      refocusTimer = setTimeout(() => {
+        releasedByScroll = lastDirect;
+        lastDirect = null;
+        hoverEl = null;
+        sticky = null;
+        claimScrollY = scrollY;
+        releaseAfterScroll = false;
+        refocusTimer = null;
+      }, 50);
+    }, { passive: true });
     document.addEventListener("pointermove", (e) => {
       if (e.pointerType && e.pointerType !== "mouse") return;
       hoverEl = e.target.closest(contentTargetSelector) || e.target.closest("a, button");
+      releasedByScroll = null;
     }, { passive: true });
     document.addEventListener("pointerout", (e) => {
       if (!e.relatedTarget) hoverEl = null;
@@ -315,6 +337,7 @@
     document.addEventListener("focusin", (e) => {
       if (e.target instanceof Element && e.target.matches("a, button, .talk-input")) {
         hoverEl = null;
+        releasedByScroll = null;
       }
     });
     const cur = { x: -1, x2: 0, y: scrollY + innerHeight * 0.5, h: 12 };
@@ -327,9 +350,6 @@
     let locked = null;
     let settling = true;
     let docH = 0;
-    const DEFOCUS_DELAY = 300;
-    let defocusEl = null;
-    let defocusAt = 0;
     const frame = (t) => {
       // The conversation is up: the marketing page is hidden, so the beam has
       // nothing to light. Keep the loop alive but idle for the return trip.
@@ -353,32 +373,24 @@
       const focused = ae && ae !== document.body && ae.matches && ae.matches("a, button, .talk-input")
         ? (ae.closest(".talk") ? document.querySelector(".talk-card") : ae)
         : null;
-      // The initially focused composer is the default target. Pointer and
-      // keyboard targets claim the ray immediately; when that claim ends,
-      // hold it briefly before returning to the default target.
-      const direct = hovered || focused;
-      let ovr = direct;
+      // Pointer and keyboard targets claim the ray immediately. Once claimed,
+      // the ray stays there until a new hover or focus explicitly retargets it.
+      const candidate = hovered || focused;
+      const direct = candidate === releasedByScroll ? null : candidate;
       if (direct) {
-        defocusEl = direct;
-        defocusAt = 0;
-      } else if (defocusEl) {
-        if (!defocusAt) defocusAt = t + DEFOCUS_DELAY;
-        if (t < defocusAt && defocusEl.isConnected) {
-          ovr = defocusEl;
-        } else {
-          // An active headline word behaves like a focused control: pointer
-          // exit does not release its ray lock. A later target can still
-          // replace `sticky` immediately through the normal claim path.
-          if (sticky === defocusEl && !defocusEl.matches(".hot[data-active]")) sticky = null;
-          defocusEl = null;
-          defocusAt = 0;
-        }
+        if (direct !== lastDirect) claimScrollY = scrollY;
+        lastDirect = direct;
+      } else if (lastDirect && !lastDirect.isConnected) {
+        lastDirect = null;
       }
+      const ovr = lastDirect;
       let claimed = false;
       if (ovr) {
         const r = ovr.getBoundingClientRect();
-        const c = r.top + r.height / 2;
-        if (c >= 0 && c <= innerHeight) { best = r; bestEl = ovr; sticky = ovr; claimed = true; }
+        best = r;
+        bestEl = ovr;
+        sticky = ovr;
+        claimed = true;
       } else {
         const sel = getSelection();
         if (sel && !sel.isCollapsed && sel.rangeCount) {

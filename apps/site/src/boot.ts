@@ -37,7 +37,10 @@ const withTransition = (mutate: () => void) => {
   return Promise.resolve();
 };
 
-const enterApp = (mod: AppModule, opts: { initialMessage?: string; sessionId?: string }) => {
+const enterApp = (
+  mod: AppModule,
+  opts: { initialMessage?: string; initialTopic?: string; sessionId?: string },
+) => {
   root.classList.add("launching");
   return withTransition(() => {
     root.dataset.app = "1";
@@ -65,16 +68,22 @@ talkInput.addEventListener("focus", loadApp, { once: true });
 addEventListener("pointerdown", loadApp, { once: true });
 setTimeout(loadApp, 8000);
 
+// Set by a demo card just before it submits: the turn opens as a prebuilt
+// rich explainer (see convex/topics.ts) instead of a model call.
+let pendingTopic: string | undefined;
+
 talk.addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = talkInput.value.trim() || talkInput.placeholder.trim();
   if (!text) return;
+  const initialTopic = pendingTopic;
+  pendingTopic = undefined;
   retireResting();
   talkCard.classList.add("talk-waiting");
   try {
     const mod = await loadApp();
     history.pushState({ app: true }, "", "/s/new");
-    await enterApp(mod, { initialMessage: text });
+    await enterApp(mod, { initialMessage: text, initialTopic });
   } finally {
     talkCard.classList.remove("talk-waiting");
     talkInput.value = "";
@@ -192,6 +201,7 @@ for (const prompt of document.querySelectorAll<HTMLButtonElement>("[data-prompt]
   prompt.addEventListener("click", () => {
     commitPreview();
     talkInput.value = ask;
+    pendingTopic = prompt.dataset.demo;
     talk.requestSubmit();
   });
 }

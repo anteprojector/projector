@@ -6,15 +6,17 @@ import { ConvexProvider, ConvexReactClient, useAction, useMutation, useQuery } f
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { EXPLAINERS } from "./explainers";
 import { Inspector } from "./Inspector";
 
 type AppProps = {
   client: ConvexReactClient | null;
   initialMessage?: string;
+  initialTopic?: string;
   sessionId?: string;
 };
 
-export function App({ client, initialMessage, sessionId }: AppProps) {
+export function App({ client, initialMessage, initialTopic, sessionId }: AppProps) {
   if (!client) {
     return (
       <div className="app">
@@ -40,7 +42,11 @@ export function App({ client, initialMessage, sessionId }: AppProps) {
   }
   return (
     <ConvexProvider client={client}>
-      <Conversation initialMessage={initialMessage} sessionId={sessionId} />
+      <Conversation
+        initialMessage={initialMessage}
+        initialTopic={initialTopic}
+        sessionId={sessionId}
+      />
     </ConvexProvider>
   );
 }
@@ -70,8 +76,9 @@ type LocalMessage = {
   pending?: boolean;
 };
 
-function Conversation({ initialMessage, sessionId: sessionIdProp }: {
+function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }: {
   initialMessage?: string;
+  initialTopic?: string;
   sessionId?: string;
 }) {
   const [sessionId, setSessionId] = useState<Id<"sessions"> | null>(
@@ -83,6 +90,7 @@ function Conversation({ initialMessage, sessionId: sessionIdProp }: {
 
   const createSession = useMutation(api.sessions.create);
   const sendMessage = useAction(api.agent.sendMessage);
+  const openTopic = useMutation(api.topics.open);
 
   const serverMessages = useQuery(
     api.messages.list,
@@ -90,7 +98,7 @@ function Conversation({ initialMessage, sessionId: sessionIdProp }: {
   );
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, topic?: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
       setOptimistic((prev) => [
@@ -105,12 +113,15 @@ function Conversation({ initialMessage, sessionId: sessionIdProp }: {
         history.replaceState({ app: true }, "", `/s/${id}`);
       }
       try {
-        await sendMessage({ sessionId: id, text: trimmed });
+        // A topic turn is prebuilt server-side — a rich explainer lands as a
+        // real frame with no model call, so the answer is effectively instant.
+        if (topic) await openTopic({ sessionId: id, topic, ask: trimmed });
+        else await sendMessage({ sessionId: id, text: trimmed });
       } finally {
         setWaitingSince(null);
       }
     },
-    [sessionId, createSession, sendMessage],
+    [sessionId, createSession, sendMessage, openTopic],
   );
 
   // The message typed on the marketing page is the first turn. StrictMode
@@ -119,14 +130,14 @@ function Conversation({ initialMessage, sessionId: sessionIdProp }: {
   useEffect(() => {
     if (bootRef.current) return;
     bootRef.current = true;
-    if (initialMessage) void send(initialMessage);
+    if (initialMessage) void send(initialMessage, initialTopic);
     else if (!sessionId) {
       void createSession({}).then((id) => {
         setSessionId(id);
         history.replaceState({ app: true }, "", `/s/${id}`);
       });
     }
-  }, [initialMessage, sessionId, send, createSession]);
+  }, [initialMessage, initialTopic, sessionId, send, createSession]);
 
   // Server truth replaces optimism as soon as it covers it: any optimistic
   // user message whose text has landed server-side is dropped.
@@ -162,7 +173,9 @@ function Conversation({ initialMessage, sessionId: sessionIdProp }: {
                   key={m.id}
                   role={m.role}
                   content={m.content}
+                  widget={m.widget}
                   pending={m.streamState === "streaming"}
+                  onAsk={send}
                 />
               ))}
               {visibleOptimistic.map((m) => (
@@ -201,15 +214,22 @@ function Conversation({ initialMessage, sessionId: sessionIdProp }: {
   );
 }
 
-function Message({ role, content, pending }: {
+function Message({ role, content, widget, pending, onAsk }: {
   role: "user" | "assistant";
   content: string;
+  widget?: string;
   pending?: boolean;
+  onAsk?: (text: string) => void;
 }) {
+  // A widget message renders its rich explainer in place of the prose (the
+  // prose is the LLM-facing equivalent). Unknown widget ids fall back to it.
+  const Explainer = widget ? EXPLAINERS[widget] : undefined;
   return (
     <div className={`msg msg-${role}${pending ? " msg-pending" : ""}`}>
       <span className="msg-role">{role === "user" ? "you" : "projector"}</span>
-      <p className="msg-body">{content}</p>
+      {Explainer && onAsk
+        ? <Explainer onAsk={(text) => void onAsk(text)} />
+        : <p className="msg-body">{content}</p>}
     </div>
   );
 }

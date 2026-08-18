@@ -20,6 +20,7 @@ export const add = mutation({
     idempotencyKey: v.optional(v.string()),
     streamState: v.optional(v.string()),
     streamSeq: v.optional(v.number()),
+    widget: v.optional(v.string()),
   },
   returns: v.id("messages"),
   handler: async (ctx, args) => {
@@ -63,6 +64,7 @@ export const add = mutation({
       role: args.role,
       content: args.content,
       frameId,
+      ...(args.widget !== undefined ? { widget: args.widget } : {}),
       ...(args.idempotencyKey !== undefined ? { idempotencyKey: args.idempotencyKey } : {}),
       ...(args.streamState !== undefined ? { streamState: args.streamState } : {}),
       ...(args.streamSeq !== undefined ? { streamSeq: args.streamSeq } : {}),
@@ -87,6 +89,7 @@ export const list = query({
       content: v.string(),
       createdAt: v.number(),
       streamState: v.optional(v.string()),
+      widget: v.optional(v.string()),
     }),
   ),
   handler: async (ctx, { sessionId }) => {
@@ -97,6 +100,7 @@ export const list = query({
       content: message.content,
       createdAt: message.createdAt,
       ...(message.streamState !== undefined ? { streamState: message.streamState } : {}),
+      ...(message.widget !== undefined ? { widget: message.widget } : {}),
     }));
   },
 });

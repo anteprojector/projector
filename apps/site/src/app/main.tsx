@@ -16,7 +16,11 @@ export function warm(): void {
   if (!client && url) client = new ConvexReactClient(url);
 }
 
-export function launch(opts: { initialMessage?: string; sessionId?: string }): void {
+export function launch(opts: {
+  initialMessage?: string;
+  initialTopic?: string;
+  sessionId?: string;
+}): void {
   warm();
   const container = document.getElementById("app");
   if (!container) return;
@@ -28,6 +32,7 @@ export function launch(opts: { initialMessage?: string; sessionId?: string }): v
         <App
           client={client}
           initialMessage={opts.initialMessage}
+          initialTopic={opts.initialTopic}
           sessionId={opts.sessionId}
         />
       </StrictMode>,
