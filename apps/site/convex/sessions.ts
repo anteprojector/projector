@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import {
+  internalMutation,
   internalQuery,
   mutation,
   query,
@@ -117,6 +118,7 @@ export const get = query({
       v.null(),
       v.object({ version: v.number(), title: v.string(), source: v.string() }),
     ),
+    workStartedAt: v.optional(v.number()),
   }),
   handler: async (ctx, { sessionId }) => {
     const session = await ctx.db.get(sessionId);
@@ -148,6 +150,7 @@ export const get = query({
       clientSnapshot,
       syncState,
       surface,
+      ...(session.workStartedAt !== undefined ? { workStartedAt: session.workStartedAt } : {}),
     };
   },
 });
@@ -231,12 +234,19 @@ export const appendMachineFrameSequence = mutation({
   returns: v.array(v.id("frames")),
   handler: async (ctx, { sessionId, referenceFrameId, frames }) => {
     const session = await getSessionOrThrow(ctx, sessionId);
-    return await appendMachineFrameSequenceInternal(ctx, {
+    const frameIds = await appendMachineFrameSequenceInternal(ctx, {
       sessionId,
       session,
       referenceFrameId,
       frames: restoreConvexJson(frames) as Frame[],
     });
+    // The run these frames came from is over; retiring the thinking indicator
+    // in the same transaction keeps it from flickering between the stream's
+    // last patch and the durable rows landing.
+    if (session.workStartedAt !== undefined) {
+      await ctx.db.patch(sessionId, { workStartedAt: undefined });
+    }
+    return frameIds;
   },
 });
 
@@ -301,10 +311,28 @@ export const sendCommand = mutation({
       }
 
       if (containsWorkActivation(produced)) {
+        // Same transaction as the scheduling: the moment the poke commits,
+        // every subscribed client's thinking indicator starts — no waiting
+        // for the model to say its first token.
+        await ctx.db.patch(sessionId, { workStartedAt: Date.now() });
         await ctx.scheduler.runAfter(0, internal.agent.continueAfterCommand, {
           sessionId,
         });
       }
+    }
+    return null;
+  },
+});
+
+// Safety net for runs that die or produce no frames — the transactional clear
+// lives in appendMachineFrameSequence.
+export const clearWork = internalMutation({
+  args: { sessionId: v.id("sessions") },
+  returns: v.null(),
+  handler: async (ctx, { sessionId }) => {
+    const session = await ctx.db.get(sessionId);
+    if (session?.workStartedAt !== undefined) {
+      await ctx.db.patch(sessionId, { workStartedAt: undefined });
     }
     return null;
   },

@@ -6,6 +6,11 @@ export default defineSchema({
     contextEpoch: v.number(),
     title: v.optional(v.string()),
     syncState: v.optional(v.any()),
+    // Set when a client command schedules an agent wake (appPanePing), cleared
+    // when the run's frames persist. Presence bookkeeping, deliberately NOT
+    // machine state: the client shows the thinking indicator from it, and a
+    // crashed run only ever strands a timestamp the client ages out.
+    workStartedAt: v.optional(v.number()),
   }),
 
   frames: defineTable({

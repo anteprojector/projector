@@ -76,13 +76,20 @@ export const continueAfterCommand = internalAction({
   args: { sessionId: v.id("sessions") },
   returns: v.null(),
   handler: async (ctx, { sessionId }) => {
-    const { machine, referenceFrameId, streamWrites } = await loadAgentMachine(ctx, sessionId);
-    await runAndPersistAgent(ctx, {
-      sessionId,
-      machine,
-      referenceFrameId,
-      streamWrites,
-    });
+    try {
+      const { machine, referenceFrameId, streamWrites } = await loadAgentMachine(ctx, sessionId);
+      await runAndPersistAgent(ctx, {
+        sessionId,
+        machine,
+        referenceFrameId,
+        streamWrites,
+      });
+    } finally {
+      // The frame-persist mutation clears workStartedAt transactionally; this
+      // covers runs that crash or produce no frames so the thinking indicator
+      // can't stay lit.
+      await ctx.runMutation(internal.sessions.clearWork, { sessionId });
+    }
     return null;
   },
 });

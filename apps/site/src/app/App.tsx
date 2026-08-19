@@ -666,14 +666,37 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
   }, [paneAgentNotice?.id]);
 
   const streaming = server.some((m) => m.streamState === "streaming");
+
+  // A poke (appPanePing) marks the session doc the moment its mutation
+  // commits, so the thinking indicator starts as soon as the agent wake is
+  // scheduled — not when the model's first token arrives. Survives refresh
+  // mid-run; a timestamp a dead run stranded ages out client-side.
+  const workStartedAt = (session as { workStartedAt?: number } | undefined)?.workStartedAt;
+  const WORK_STALE_MS = 90_000;
+  const [, bumpWorkTick] = useState(0);
   useEffect(() => {
-    if (waitingSince !== null && streaming) setFinalResponseStarted(true);
-  }, [waitingSince, streaming]);
+    if (workStartedAt === undefined) return;
+    const remaining = WORK_STALE_MS - (Date.now() - workStartedAt);
+    if (remaining <= 0) return;
+    const timeout = setTimeout(() => bumpWorkTick((v) => v + 1), remaining);
+    return () => clearTimeout(timeout);
+  }, [workStartedAt]);
+  const agentWorking =
+    workStartedAt !== undefined && Date.now() - workStartedAt < WORK_STALE_MS;
+  // Each new poke re-arms the latch so its own turn blinks again.
+  useEffect(() => {
+    if (agentWorking) setFinalResponseStarted(false);
+  }, [workStartedAt]);
+
+  useEffect(() => {
+    if ((waitingSince !== null || agentWorking) && streaming) setFinalResponseStarted(true);
+  }, [waitingSince, agentWorking, streaming]);
   // Commentary is an assistant message too, but it does not finish the turn.
   // Keep the existing blinking rectangle up through that gap, then latch it
   // off once the final response starts so it cannot briefly reappear between
   // stream completion and the action returning.
-  const thinking = waitingSince !== null && !streaming && !finalResponseStarted;
+  const thinking =
+    (waitingSince !== null || agentWorking) && !streaming && !finalResponseStarted;
 
   // Every visited session lands in the device-local past-conversations list,
   // titled by its first user message (deep links included — the title fills
@@ -1030,7 +1053,7 @@ function Message({ messageId, role, content, widget, card, api, pending, turnSta
           pane isn't already on screen (the parent passes the handler). */}
       {onOpenAppPane && (
         <button className="msg-open-pane" type="button" onClick={onOpenAppPane}>
-          open the app pane
+          open app pane
         </button>
       )}
     </div>
@@ -1038,8 +1061,7 @@ function Message({ messageId, role, content, widget, card, api, pending, turnSta
 }
 
 // An inline chat card: the same surface runtime as the app pane, but frame
-// content — immutable, pinned to its turn. Promote copies it into the pane
-// through the ordinary writeAppSurface command (which opens the pane).
+// content — immutable and pinned to its turn.
 function CardMessage({ card, api }: {
   card: { title: string; source: string };
   api: ReturnType<typeof createSurfaceApi>;
@@ -1048,16 +1070,6 @@ function CardMessage({ card, api }: {
     <div className="msg-card">
       <div className="msg-card-head">
         <span className="msg-card-title">{card.title}</span>
-        <button
-          type="button"
-          onClick={() =>
-            void api
-              .run("writeAppSurface", { title: card.title, source: card.source })
-              .catch(() => {})
-          }
-        >
-          open in app pane
-        </button>
       </div>
       <SurfaceHost source={card.source} version={1} api={api} onError={() => {}} />
     </div>

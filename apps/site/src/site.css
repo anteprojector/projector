@@ -2251,16 +2251,4 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   color: var(--muted);
   flex: 1;
 }
-.msg-card-head button {
-  font-family: var(--mono);
-  font-size: 0.625rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  border: 0;
-  background: none;
-  color: var(--faint);
-  cursor: pointer;
-  padding: 0;
-}
-.msg-card-head button:hover { color: var(--accent); }
 .msg-card .surface-host { min-height: 0; }
