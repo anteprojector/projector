@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "catalog:",
+    "@convex-dev/auth": "0.0.95",
+    "@convex-dev/rate-limiter": "0.3.2",
     "@projectors/aisdk-executor": "workspace:*",
     "@projectors/core": "workspace:*",
     "ai": "catalog:",
