@@ -6,6 +6,7 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from "./_generated/server";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   applyInstanceMessage,
@@ -28,9 +29,11 @@ import {
   createSiteClientSnapshot,
   hydrateSiteInstance,
   hydrateSourceInstance,
+  readCardData,
   serializeSourceInstance,
   siteCharter,
 } from "../src/agent/charter";
+import { addMessageInternal } from "./messages";
 import { escapeConvexJson, restoreConvexJson, stripClientSchemas } from "./convexJson";
 import {
   getFrameIndexForSession,
@@ -137,19 +140,25 @@ export const getForAction = internalQuery({
     return {
       sessionId,
       frameId: latestFrame._id,
-      instance,
+      // Escaped: return values cross a Convex validation boundary, and a
+      // serialized instance with a spawned child carries inline JSON Schema
+      // ($-keys). The action restores it.
+      instance: escapeConvexJson(instance),
       syncState: restoreSyncState(session.syncState),
     };
   },
 });
 
-export const listMachineContextFrames = query({
+// Internal + escaped: restored frames contain spawn messages whose inline
+// nodes carry JSON Schema ($-keys), which Convex rejects at any function
+// return boundary. Only the agent action consumes this; it restores.
+export const listMachineContextFrames = internalQuery({
   args: { sessionId: v.id("sessions") },
   returns: v.array(v.any()),
   handler: async (ctx, { sessionId }) => {
     const session = await ctx.db.get(sessionId);
     if (!session) return [];
-    return await getMachineContextFrames(ctx, session);
+    return escapeConvexJson(await getMachineContextFrames(ctx, session));
   },
 });
 
@@ -195,11 +204,11 @@ export const appendMachineFrameSequence = mutation({
   },
 });
 
-// Client-issued commands (e.g. the pane toggles) run against the same machine
-// the executor runs, in a transaction: execute the command, drain the frames
-// it produced (scheduleWork: false — a UI command must never wake the model),
-// and append them to the durable log, which also folds any state.update
-// messages into the instance snapshot. No model call anywhere in the path.
+// Client-issued commands run against the same machine as the executor, in a
+// transaction. Routine commands only write state. A command such as
+// appPanePing may deliberately emit an actor message; the scheduler reconciles
+// that into a work activation while still avoiding a model call in this
+// mutation, then an internal action drains the activation after commit.
 export const sendCommand = mutation({
   args: {
     sessionId: v.id("sessions"),
@@ -226,16 +235,52 @@ export const sendCommand = mutation({
       produced.push(frame);
     }
     if (produced.length > 0) {
-      await appendMachineFrameSequenceInternal(ctx, {
+      const frameIds = await appendMachineFrameSequenceInternal(ctx, {
         sessionId,
         session,
         referenceFrameId: latestFrame._id,
         frames: produced,
       });
+      // Command-produced assistant messages (e.g. a postCard run as a client
+      // command) enter the transcript here, mirroring the agent action's
+      // persistence path.
+      for (const [index, frame] of produced.entries()) {
+        const frameId = frameIds[index];
+        if (!frameId) continue;
+        for (const [messageIndex, message] of frame.messages.entries()) {
+          if (message.type !== "assistant") continue;
+          if ((message as { audience?: unknown }).audience === "self") continue;
+          const text = typeof message.text === "string" ? message.text : "";
+          if (!text.trim()) continue;
+          const card = readCardData(message);
+          await addMessageInternal(ctx, {
+            sessionId,
+            role: "assistant",
+            content: text,
+            frameId,
+            ...(card ? { card: { title: card.title, source: card.source } } : {}),
+            idempotencyKey: `assistant:${frame.id}:${messageIndex}`,
+          });
+        }
+      }
+
+      if (containsWorkActivation(produced)) {
+        await ctx.scheduler.runAfter(0, internal.agent.continueAfterCommand, {
+          sessionId,
+        });
+      }
     }
     return null;
   },
 });
+
+function containsWorkActivation(frames: Frame[]): boolean {
+  return frames.some((frame) =>
+    frame.messages.some(
+      (message) => message.type === "work" && message.kind === "activation",
+    ),
+  );
+}
 
 async function getSessionOrThrow(ctx: MutationCtx, sessionId: Id<"sessions">) {
   const session = await ctx.db.get(sessionId);
@@ -327,45 +372,53 @@ async function appendMachineFrameSequenceInternal(
   return frameIds;
 }
 
+// All of one frame's instance messages fold into ONE snapshot row per source
+// instance. Per-message rows share a createdAt millisecond, which makes
+// "latest snapshot" ambiguous (the id tiebreak is effectively random), so a
+// mid-frame snapshot could win the read and silently drop later mutations in
+// the same frame — e.g. writeAppSurface's pane-open patch.
 async function applyFrameInstanceMessages(
   ctx: MutationCtx,
   sessionId: Id<"sessions">,
   frameId: Id<"frames">,
   messages: Frame["messages"],
 ): Promise<void> {
+  const sources = new Map<string, Instance>();
+  const applied = new Map<string, InstanceMessage[]>();
+
   for (const message of messages) {
     if (!isInstanceMessage(message)) continue;
-    await applyFrameInstanceMessage(ctx, sessionId, frameId, message);
+    const targetInstanceId = instanceMessageTargetId(message);
+    let source = [...sources.values()].find(
+      (candidate) =>
+        containsInstance(candidate, targetInstanceId) ||
+        (message.kind === "remove" && sources.size > 0),
+    );
+    if (!source) {
+      source =
+        (await getLatestSourceForInstanceMessage(ctx, sessionId, message, targetInstanceId)) ??
+        undefined;
+      if (!source) {
+        throw new Error(`No source instance contains target instance "${targetInstanceId}"`);
+      }
+      sources.set(source.id, source);
+    }
+    applyInstanceMessage(source, message, siteCharter);
+    const messagesForSource = applied.get(source.id);
+    if (messagesForSource) messagesForSource.push(message);
+    else applied.set(source.id, [message]);
   }
-}
 
-async function applyFrameInstanceMessage(
-  ctx: MutationCtx,
-  sessionId: Id<"sessions">,
-  frameId: Id<"frames">,
-  message: InstanceMessage,
-): Promise<void> {
-  const targetInstanceId = instanceMessageTargetId(message);
-  const source = await getLatestSourceForInstanceMessage(
-    ctx,
-    sessionId,
-    message,
-    targetInstanceId,
-  );
-  if (!source) {
-    throw new Error(`No source instance contains target instance "${targetInstanceId}"`);
+  for (const [instanceId, source] of sources) {
+    await ctx.db.insert("projectorInstanceLog", {
+      sessionId,
+      instanceId,
+      frameId,
+      message: escapeConvexJson(applied.get(instanceId) ?? []),
+      instance: escapeConvexJson(serializeSourceInstance(source)),
+      createdAt: Date.now(),
+    });
   }
-
-  applyInstanceMessage(source, message, siteCharter);
-
-  await ctx.db.insert("projectorInstanceLog", {
-    sessionId,
-    instanceId: source.id,
-    frameId,
-    message: escapeConvexJson(message),
-    instance: escapeConvexJson(serializeSourceInstance(source)),
-    createdAt: Date.now(),
-  });
 }
 
 function instanceMessageTargetId(message: InstanceMessage): string {
@@ -499,16 +552,21 @@ function createEmptySyncState(): MachineSyncState {
   return { recentCommandResidue: [] };
 }
 
+// _creationTime, not the custom createdAt: many log rows land in one
+// millisecond (a generator run enqueues a frame per state write), and the
+// id tiebreak is random — a mid-sequence snapshot could win "latest" and
+// silently drop later writes. Convex guarantees _creationTime is unique per
+// table and preserves insertion order within a mutation.
 function compareLogAsc(
   a: Doc<"projectorInstanceLog">,
   b: Doc<"projectorInstanceLog">,
 ): number {
-  return a.createdAt - b.createdAt || a._id.localeCompare(b._id);
+  return a._creationTime - b._creationTime;
 }
 
 function compareLogDesc(
   a: Doc<"projectorInstanceLog">,
   b: Doc<"projectorInstanceLog">,
 ): number {
-  return b.createdAt - a.createdAt || b._id.localeCompare(a._id);
+  return b._creationTime - a._creationTime;
 }

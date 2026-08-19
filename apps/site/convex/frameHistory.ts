@@ -87,6 +87,11 @@ async function framesForIndexRows(
     .sort(compareFrames);
 }
 
+// _creationTime, not the custom createdAt: createdAt is Date.now() with
+// millisecond precision, and a generator run appends many frames in one
+// millisecond — the id tiebreak is random, which scrambles history order.
+// Convex guarantees _creationTime is unique per table and preserves
+// insertion order within a mutation.
 function compareFrames(a: FrameDoc, b: FrameDoc): number {
-  return a.createdAt - b.createdAt || a._id.localeCompare(b._id);
+  return a._creationTime - b._creationTime;
 }

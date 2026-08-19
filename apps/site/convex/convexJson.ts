@@ -45,9 +45,12 @@ export function stripClientSchemas<T>(value: T): T {
     return value;
   }
 
+  // Drop $-prefixed keys at EVERY level, not just under schema/inputSchema:
+  // Convex rejects them anywhere in a return value, and serialized inline
+  // nodes carry JSON Schema under other keys (params, spawn-message nodes).
   return Object.fromEntries(
     Object.entries(value)
-      .filter(([, entryValue]) => entryValue !== undefined)
+      .filter(([key, entryValue]) => !key.startsWith("$") && entryValue !== undefined)
       .map(([key, entryValue]) => [
         key,
         key === "schema" || key === "inputSchema"

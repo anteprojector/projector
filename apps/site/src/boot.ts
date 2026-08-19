@@ -4,6 +4,8 @@
 // conversation composer on submit. The React app is never imported unless
 // intent happens, so the landing stays static-page fast.
 
+import { listStoredSessions } from "./sessions-store";
+
 type AppModule = typeof import("./app/main");
 
 const root = document.documentElement;
@@ -58,7 +60,66 @@ const exitApp = async () => {
     page.inert = false;
     mod.unmount();
   });
+  refreshPastLink();
 };
+
+// Already home: the brand is a no-op instead of a same-page reload.
+document.querySelector<HTMLAnchorElement>(".nav-brand")?.addEventListener("click", (e) => {
+  if (location.pathname === "/") e.preventDefault();
+});
+
+// Past conversations: a device-local pointer list (see sessions-store.ts).
+// The link under the composer appears once anything is stored; the dialog
+// lists sessions newest-first and opens straight into the conversation.
+const pastLink = document.querySelector<HTMLButtonElement>(".talk-past");
+const pastDialog = document.querySelector<HTMLDialogElement>(".past-dialog");
+const refreshPastLink = () => {
+  if (pastLink) pastLink.hidden = listStoredSessions().length === 0;
+};
+refreshPastLink();
+// bfcache restores skip boot: re-check on every pageshow so returning from a
+// conversation (or another tab's work) surfaces the link.
+addEventListener("pageshow", refreshPastLink);
+
+const relativeTime = (at: number): string => {
+  const mins = Math.round((Date.now() - at) / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+};
+
+pastLink?.addEventListener("click", () => {
+  const list = pastDialog?.querySelector<HTMLElement>(".past-list");
+  if (!pastDialog || !list) return;
+  list.replaceChildren(
+    ...listStoredSessions().map((session) => {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "past-row";
+      const title = document.createElement("span");
+      title.className = "past-title";
+      title.textContent = session.title || "untitled conversation";
+      const when = document.createElement("span");
+      when.className = "past-when";
+      when.textContent = relativeTime(session.at);
+      row.append(title, when);
+      row.addEventListener("click", async () => {
+        pastDialog.close();
+        const mod = await loadApp();
+        history.pushState({ app: true }, "", `/s/${session.id}`);
+        await enterApp(mod, { sessionId: session.id });
+      });
+      return row;
+    }),
+  );
+  pastDialog.showModal();
+});
+// A click on the dialog element itself is a click on the backdrop.
+pastDialog?.addEventListener("click", (e) => {
+  if (e.target === pastDialog) pastDialog.close();
+});
 
 // Intent warms the chunk: hovering near the composer, focusing it, or even
 // touching the page at all after a beat. By the time enter is pressed the
@@ -102,12 +163,56 @@ const commitPreview = () => {
 };
 const hotWords = [...document.querySelectorAll<HTMLButtonElement>(".hero h1 .hot")];
 const explainers = [...document.querySelectorAll<HTMLElement>("[data-explainer]")];
+
+// On phones a panel is a single column two cards tall; a panel holding more
+// pages through them in pairs, riding the panel's own opacity transition so
+// each page change reads like the panel swaps the site already does.
+const mobileMq = matchMedia("(max-width: 775px)");
+let cardTimer: ReturnType<typeof setInterval> | undefined;
+let cardPanel: HTMLElement | undefined;
+const showCardPage = (panel: HTMLElement, page: number) => {
+  for (const [i, card] of [...panel.querySelectorAll("button")].entries()) {
+    card.toggleAttribute("data-cycle-hidden", Math.floor(i / 2) !== page);
+  }
+};
+const cycleCards = (panel: HTMLElement | undefined) => {
+  clearInterval(cardTimer);
+  cardTimer = undefined;
+  if (cardPanel) cardPanel.style.opacity = "";
+  cardPanel = panel;
+  if (!panel) return;
+  const count = panel.querySelectorAll("button").length;
+  if (!mobileMq.matches || count <= 2) {
+    for (const card of panel.querySelectorAll("[data-cycle-hidden]")) {
+      card.removeAttribute("data-cycle-hidden");
+    }
+    return;
+  }
+  showCardPage(panel, 0);
+  if (still.matches) return; // first pair, static
+  const pages = Math.ceil(count / 2);
+  let page = 0;
+  cardTimer = setInterval(() => {
+    page = (page + 1) % pages;
+    panel.style.opacity = "0";
+    setTimeout(() => {
+      if (cardPanel !== panel) return;
+      showCardPage(panel, page);
+      panel.style.opacity = "";
+    }, 340);
+  }, 5000);
+};
+mobileMq.addEventListener("change", () => cycleCards(cardPanel));
+
 const showExplainer = (topic: string | undefined) => {
+  let activePanel: HTMLElement | undefined;
   for (const explainer of explainers) {
     const active = explainer.dataset.explainer === topic;
     explainer.toggleAttribute("data-active", active);
     explainer.setAttribute("aria-hidden", String(!active));
+    if (active) activePanel = explainer;
   }
+  cycleCards(activePanel);
 };
 const activateHotWord = (hot: HTMLButtonElement) => {
   retireResting();
@@ -177,15 +282,34 @@ talkClear.addEventListener("click", () => {
 });
 for (const hot of hotWords) {
   const ask = hot.dataset.ask ?? "";
+  // Touch has no hover, so the first tap plays the hover role: activate the
+  // word, preview its question in the composer, and grow the send badge (CSS
+  // on [data-active]). A second tap on the armed word sends. Mouse clicks
+  // (and keyboard activation) still send immediately — hover already
+  // previewed. Armed-ness is read at pointerdown: the tap's own focus event
+  // activates the word before click lands, so click can't tell first tap
+  // from second on its own.
+  let touchTap = false;
+  let armedAtTap = false;
   hot.addEventListener("pointerenter", (e) => {
     loadApp();
     if (e.pointerType !== "mouse") return;
     activateHotWord(hot);
     previewAsk(ask);
   });
+  hot.addEventListener("pointerdown", (e) => {
+    touchTap = e.pointerType !== "mouse";
+    armedAtTap = hot.hasAttribute("data-active");
+  });
   hot.addEventListener("focus", () => activateHotWord(hot));
   hot.addEventListener("click", () => {
     activateHotWord(hot);
+    if (touchTap && !armedAtTap) {
+      touchTap = false;
+      previewAsk(ask);
+      return;
+    }
+    touchTap = false;
     commitPreview();
     talkInput.value = ask;
     talk.requestSubmit();
@@ -211,7 +335,7 @@ for (const prompt of document.querySelectorAll<HTMLButtonElement>("[data-prompt]
 addEventListener("keydown", (e) => {
   const target = e.target as HTMLElement | null;
   const editing = target?.matches("input, textarea, select, [contenteditable]");
-  if (root.dataset.app || editing || e.metaKey || e.ctrlKey || e.altKey || e.key.length !== 1) return;
+  if (root.dataset.app || pastDialog?.open || editing || e.metaKey || e.ctrlKey || e.altKey || e.key.length !== 1) return;
   e.preventDefault();
   talkInput.focus({ preventScroll: true });
   if (talkInput.hasAttribute("data-suggested")) {
@@ -243,3 +367,5 @@ addEventListener("popstate", () => {
     void exitApp();
   }
 });
+
+

@@ -10,13 +10,15 @@
     "typecheck": "tsgo"
   },
   "dependencies": {
+    "@ai-sdk/openai": "catalog:",
     "@projectors/aisdk-executor": "workspace:*",
     "@projectors/core": "workspace:*",
-    "@ai-sdk/openai": "catalog:",
     "ai": "catalog:",
     "convex": "^1.31.2",
+    "lucide-react": "^1.32.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
+    "sucrase": "^3.35.1",
     "zod": "catalog:"
   },
   "devDependencies": {

@@ -47,6 +47,12 @@ export default defineSchema({
     // widget. content stays the plain-text equivalent — it is what the LLM
     // sees as history and what renders if the widget id is unknown.
     widget: v.optional(v.string()),
+    // Agent-authored chat card (postCard): TSX rendered inline by the surface
+    // runtime. Frame content, not state — immutable, pinned to this turn.
+    card: v.optional(v.object({ title: v.string(), source: v.string() })),
+    // The turn that produced this message also wrote the app surface; the
+    // transcript offers "open the app pane" at the end of the response.
+    updatedSurface: v.optional(v.boolean()),
     createdAt: v.number(),
     idempotencyKey: v.optional(v.string()),
     streamState: v.optional(v.string()),

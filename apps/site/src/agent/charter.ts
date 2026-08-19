@@ -6,17 +6,20 @@
 
 import {
   action,
+  actionResult,
   createAction,
   createCharter,
   createNode,
   createRoot,
   createSourceInstance,
   createState,
+  dataContent,
   hydrateInstance,
   patchState,
   recencyRegion,
   resolveStates,
   serializeInstance,
+  type FrameMessage,
   type Instance,
   type SerializedInstance,
 } from "@projectors/core";
@@ -27,6 +30,7 @@ import {
 import { z } from "zod";
 
 export const SITE_SOURCE_INSTANCE_ID = "guide";
+export const COMMENTARY_ACTION_NAME = "sendCommentary";
 
 const siteParamsSchema = z.object({
   sessionId: z.string(),
@@ -57,6 +61,17 @@ const noteAudience = createAction({
     ctx.updateState?.(patchState(input));
     return "noted";
   },
+});
+
+const sendCommentary = createAction({
+  state: null,
+  name: COMMENTARY_ACTION_NAME,
+  description:
+    "Send a brief user-visible progress update before work that may take a while. The update appears immediately as a normal assistant message and remains in the conversation. Keep it specific to what you are doing, not generic filler; do not reveal private chain-of-thought.",
+  inputSchema: z.object({
+    message: z.string().trim().min(1).max(280),
+  }),
+  run: () => "commentary sent",
 });
 
 // The shell's chrome as machine state: which side panes are open. One action,
@@ -90,7 +105,7 @@ const setPanes = createAction({
   state: panesState,
   name: "setPanes",
   description:
-    "Open, close, or resize the shell's side panes. The right pane is the machine inspector; open it when you point the visitor at the frame log or your state. The left pane is the app surface where your dynamic UI will render — it is empty scaffolding today, so only open it when asked. Widths are in rem (14–44). Partial input: pass just the knobs you're changing.",
+    "Open, close, or resize the shell's side panes. The right pane is the machine inspector; open it when you point the visitor at the frame log or your state. The left pane renders the app surface written by writeAppSurface (writing a surface opens it by default). Widths are in rem (14–44). Partial input: pass just the knobs you're changing.",
   inputSchema: panesSchema.partial(),
   run: (input, ctx) => {
     ctx.updateState?.(patchState(input));
@@ -98,13 +113,345 @@ const setPanes = createAction({
   },
 });
 
+// --- The app surface: agent-authored UI rendered in the left pane. Split
+// into two descriptors so each gets the projection policy it needs: the meta
+// state renders natively every turn (small, always relevant), while the TSX
+// source sits behind deferred exposure — the model retrieves it with getState
+// only when it wants to edit, so the prompt stays small and cache-stable.
+
+const appSurfaceSchema = z.object({
+  version: z.number(),
+  title: z.string(),
+  lastError: z.string().nullable(),
+});
+
+export const appSurfaceState = createState({
+  key: "appSurface",
+  schema: appSurfaceSchema,
+  init: { version: 0, title: "", lastError: null } satisfies z.infer<typeof appSurfaceSchema>,
+  projection: {
+    slot: recencyRegion,
+    render: (value) => {
+      const surface = appSurfaceSchema.parse(value);
+      if (surface.version === 0) return "app surface: none written yet";
+      const error = surface.lastError
+        ? ` — lastError: ${surface.lastError} (your surface is broken: getState its source, fix it, and writeAppSurface again)`
+        : "";
+      return `app surface: v${surface.version} "${surface.title}"${error}`;
+    },
+  },
+});
+
+const appSurfaceSourceSchema = z.object({
+  source: z.string().max(32_000),
+});
+
+export const appSurfaceSourceState = createState({
+  key: "appSurfaceSource",
+  schema: appSurfaceSourceSchema,
+  init: { source: "" } satisfies z.infer<typeof appSurfaceSourceSchema>,
+  projection: {
+    exposure: "deferred",
+    note: (address) =>
+      `The current app surface's TSX source is retrievable with getState at address "${address}" — retrieve it before making incremental edits.`,
+  },
+});
+
+// The design brief both UI-authoring tools carry. The failure mode without
+// it is consistent: big bordered boxes, oversized type, decoration — so the
+// brief is mostly prohibitions with one positive direction (quiet, dense,
+// modern) up front.
+const DESIGN_BRIEF = `Design brief — quiet, minimal, modern; a tool, not a poster:
+- Prefer the design system components. Write custom CSS only for layout a component can't express, never to restyle what a component already does.
+- The pane is narrow. Rows and hairline Dividers over boxes; at most one Card per view and never a Card inside a Card. Whitespace is the default grouping device.
+- Type: body is 0.8125rem and nothing renders larger than Stat's value. Label is the only heading. Don't bold whole sentences.
+- Color: ink on paper. --muted for secondary text, --accent for at most one focal element per view. Theme tokens only — any hardcoded color breaks dark mode.
+- Space on the 0.25rem grid (0.25 / 0.5 / 0.75 / 1). Buttons stay small: one primary per view, everything else ghost.
+- No gradients, no shadows (Card raised is the one sanctioned exception, at most once), no emoji as decoration, no borders around everything. When unsure, remove.`;
+
+const writeAppSurface = createAction({
+  state: appSurfaceState,
+  name: "writeAppSurface",
+  description: `Write (or replace) the app surface — the UI rendered in the left app pane. There is one surface; writing replaces it (every prior version stays in the frame log).
+
+The source is a single TSX module. Contract:
+- Default-export a React function component: \`export default function Surface({ api }) { ... }\`.
+- Imports allowed: "react" and "projector/ds" ONLY. No other packages, no relative imports.
+- Design system (import { ... } from "projector/ds"):
+  Card({ title?, raised?, children }) (raised = the landing's chunky paper card; at most one),
+  Stack({ gap?: "s"|"m"|"l", children }), Inline({ justify?: "start"|"between"|"end", children }),
+  Divider(), Empty({ children }) (faint centered empty-state note),
+  Label({ children }) (mono eyebrow),
+  Button({ children, onClick?, kind?: "primary"|"ghost", disabled? }),
+  Input({ value, onChange: (text) => void, placeholder?, onSubmit? }),
+  Checkbox({ checked, onChange: (checked) => void, label? }),
+  Row({ children, onClick?, active? }), Stat({ label, value }).
+- Custom styling: render a <style> element in your JSX. Styles are scoped to your surface (shadow DOM). Use the site's theme tokens so light and dark both work: --ink, --bg, --muted, --faint, --rule, --accent, --shadow; font stacks var(--mono) and var(--sans).
+
+${DESIGN_BRIEF}
+
+- api.machine() returns the projected client instance tree (states and commands); api.useMachine() is the subscribed hook form; api.run(commandName, input) executes a machine command. Bind UI to machine state — never hold app data in component state.
+- Child data binding: walk api.useMachine() for the child instance (by node key); its states entries carry { key, value, address }. Render from value; mutate with api.run("updateState", { address, op: "replace"|"patch"|"append", value }).
+- To have the agent respond to an interaction, call api.run("appPanePing", { message, data? }). Await any updateState call first so the agent sees the resulting state. Use this only when a conversational reaction adds value; routine controls should stay silent.
+- Keep it focused and under 32KB.
+
+A compile or runtime error in your surface lands in appSurface.lastError; the previous working version is one frame back in the log.`,
+  inputSchema: z.object({
+    title: z.string(),
+    source: z.string().min(1).max(32_000),
+    requestOpenPane: z
+      .boolean()
+      .optional()
+      .describe("Open the app pane so the surface is visible. Default true; pass false for silent edits."),
+  }),
+  run: ({ title, source, requestOpenPane }, ctx) => {
+    const version = (ctx.state?.version ?? 0) + 1;
+    ctx.updateState?.(patchState({ version, title, lastError: null }));
+    ctx.updateStateAt?.(appSurfaceSourceState, patchState({ source }));
+    if (requestOpenPane !== false) {
+      ctx.updateStateAt?.(panesState, patchState({ app: true }));
+    }
+    return `surface v${version} written`;
+  },
+});
+
+// The client's half of the repair loop: a surface that throws reports here,
+// so the error is durable state the agent reads on its next turn.
+const reportSurfaceError = createAction({
+  state: appSurfaceState,
+  name: "reportSurfaceError",
+  description:
+    "Record a compile or runtime error thrown by the current app surface. Client-reported; shows up in appSurface.lastError.",
+  inputSchema: z.object({ error: z.string().max(4_000) }),
+  run: ({ error }, ctx) => {
+    ctx.updateState?.(patchState({ lastError: error }));
+    return "recorded";
+  },
+});
+
+// The explicit bridge from an agent-authored surface back into generation.
+// Most client commands are intentionally quiet: they write durable machine
+// state, but their action bookkeeping is not an actor stimulus. This command
+// adds one broadcast user message to the frame. The command mutation notices
+// the resulting work activation and schedules the existing agent runner.
+const appPanePing = createAction({
+  state: null,
+  name: "appPanePing",
+  description:
+    "Wake the agent after a meaningful app-pane interaction. Pass a short semantic description of what the visitor did and optional structured context. Routine UI changes should use their normal commands without a ping.",
+  inputSchema: z.object({
+    message: z.string().trim().min(1).max(500),
+    data: z.unknown().optional(),
+  }),
+  run: ({ message, data }) => {
+    const context = data === undefined ? "" : `\nContext: ${serializePingData(data)}`;
+    return actionResult({
+      value: "agent notified",
+      messages: [
+        {
+          type: "user",
+          text: `[App pane interaction] ${message}${context}`,
+          audience: "broadcast",
+        },
+      ],
+    });
+  },
+});
+
+function serializePingData(value: unknown): string {
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(value) ?? String(value);
+  } catch {
+    serialized = String(value);
+  }
+  return serialized.length <= 4_000 ? serialized : `${serialized.slice(0, 3_999)}…`;
+}
+
+// --- Spawned children: the agent grows capabilities at runtime. A child is
+// an inline node (text instructions only — no code can be minted at runtime)
+// carrying one JSON-Schema-validated local state. Inline nodes and
+// descriptors round-trip through serialization by design, so spawned
+// children are as durable as everything else. The LLM cannot author actions,
+// so children are manipulated through the generic updateState below —
+// schema-validated on every write by the child's own descriptor.
+
+// Keys that spawned children may not take: registered state keys and node
+// keys (one descriptor identity per state key is charter-wide law). Keep in
+// sync with the registered states/nodes above.
+const RESERVED_CHILD_KEYS = new Set([
+  "audience",
+  "panes",
+  "appSurface",
+  "appSurfaceSource",
+  "guide",
+  "ui",
+  "session",
+]);
+
+const spawnChild = createAction({
+  state: null,
+  name: "spawnChild",
+  description: `Grow a new capability: spawn a child node with its own schema-validated state. Use this when the visitor asks you to BE something (a todo app, a tracker, a counter) — the child's state is the app's data; your surface renders it; updateState mutates it.
+
+- key: short camelCase identifier (also the child's state key and its getState/updateState address, e.g. "todos").
+- purpose: one or two sentences of instructions — they compile into your own prompt while the child is alive.
+- stateSchema: a JSON Schema OBJECT (plain object/array/string/number/boolean subset — no $ref, no unions of objects). This validates every future write.
+- init: the initial state value; must satisfy stateSchema.
+
+The spawn is a durable frame: the machine tree, your compiled prompt, and the inspector all change visibly. Spawning an existing key fails; cede it first to replace it.`,
+  inputSchema: z.object({
+    key: z
+      .string()
+      .regex(/^[a-z][a-zA-Z0-9]{1,30}$/, "short camelCase identifier"),
+    name: z.string().max(60),
+    purpose: z.string().max(500),
+    stateSchema: z.record(z.string(), z.unknown()),
+    init: z.unknown(),
+  }),
+  run: ({ key, name, purpose, stateSchema, init }, ctx) => {
+    if (RESERVED_CHILD_KEYS.has(key)) {
+      throw new Error(`"${key}" is reserved; pick another key`);
+    }
+    let schema: z.ZodType<unknown>;
+    try {
+      schema = z.fromJSONSchema(stateSchema as Parameters<typeof z.fromJSONSchema>[0]);
+    } catch (error) {
+      throw new Error(
+        `stateSchema is not a convertible JSON Schema (stick to the plain object subset): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    const parsedInit = schema.parse(init);
+    const childState = createState({
+      key,
+      schema,
+      init: parsedInit,
+      // Local: the container lives on the child instance itself. Hoist would
+      // land it on the parent source and outlive the child.
+      scope: "local",
+      projection: { slot: recencyRegion },
+    });
+    const childNode = createNode({
+      key,
+      name,
+      instructions: purpose,
+      states: [childState],
+    });
+    ctx.instance.spawn(childNode);
+    return `spawned "${key}" — its state projects every turn and is writable via updateState at address "${key}"`;
+  },
+});
+
+const cedeChild = createAction({
+  state: null,
+  name: "cedeChild",
+  description:
+    "Remove a spawned child (and its state) from the machine. The removal is a frame; the child's whole history stays in the log.",
+  inputSchema: z.object({ key: z.string() }),
+  run: ({ key }, ctx) => {
+    ctx.instance.cede(createNode({ key }));
+    return `ceded "${key}"`;
+  },
+});
+
+// The generic mutation primitive: the agent's write tool, the client
+// command, and generated UI's mutation path are one action writing through
+// ctx.updateStateAt — every write schema-validated by the target descriptor,
+// every write a durable frame.
+const updateStateAction = createAction({
+  state: null,
+  name: "updateState",
+  description: `Write any projected state by address. Address forms: the alias string from your prompt/state notes (e.g. "todos"), or a structured { instanceId, stateKey } (client snapshots carry these). Ops:
+- replace: value becomes the new state.
+- patch: shallow-merge value (an object) at path (default: root).
+- append: push values (or value) onto the array at path.
+Writes are validated against the target state's schema and land as durable frames.`,
+  inputSchema: z.object({
+    address: z.union([
+      z.string(),
+      z.object({ instanceId: z.string(), stateKey: z.string() }),
+    ]),
+    op: z.enum(["replace", "patch", "append"]),
+    value: z.unknown().optional(),
+    values: z.array(z.unknown()).optional(),
+    path: z.array(z.union([z.string(), z.number()])).optional(),
+  }),
+  run: ({ address, op, value, values, path }, ctx) => {
+    const update =
+      op === "replace"
+        ? { op: "replace" as const, value }
+        : op === "patch"
+          ? { op: "patch" as const, value: (value ?? {}) as Record<string, unknown>, ...(path ? { path } : {}) }
+          : { op: "append" as const, values: values ?? [value], ...(path ? { path } : {}) };
+    ctx.updateStateAt?.(address, update);
+    return "ok";
+  },
+});
+
 const uiNode = createNode({
   key: "ui",
   name: "site ui",
-  states: [panesState],
-  parts: [action(setPanes, "any")],
+  states: [panesState, appSurfaceState, appSurfaceSourceState],
+  parts: [
+    action(setPanes, "any"),
+    action(writeAppSurface, "any"),
+    action(updateStateAction, "any"),
+  ],
+  commands: [reportSurfaceError, appPanePing],
   instructions:
-    "The conversation shell has two side panes whose visibility and widths live in the panes state: an inspector on the right and an (empty for now) app surface on the left. The visitor toggles them with buttons (cmd+j for the inspector, cmd+b for the app pane) and drags their widths; you can move the same knobs with setPanes. Both routes write the same durable state.",
+    "The conversation shell has two side panes whose visibility and widths live in the panes state: an inspector on the right and the app surface on the left. The visitor toggles them with buttons (cmd+j for the inspector, cmd+b for the app pane) and drags their widths; you can move the same knobs with setPanes. The left pane renders whatever writeAppSurface last wrote. Both routes write the same durable state.",
+});
+
+// --- Chat cards: rich TSX rendered inline in the transcript. The projector
+// distinction the demo gets to narrate: the app pane is STATE (mutable,
+// current, one surface), a card is FRAME CONTENT (immutable, pinned to its
+// turn, scrolling into history). A card is an assistant message carrying a
+// data content part; the persistence layer lifts it onto the message row.
+
+export type SiteCardData = {
+  kind: "surface-card";
+  title: string;
+  source: string;
+};
+
+export function readCardData(message: unknown): SiteCardData | undefined {
+  const record = message as { content?: Array<{ type?: string; data?: unknown }> };
+  for (const part of record?.content ?? []) {
+    if (part?.type !== "data") continue;
+    const data = part.data as Partial<SiteCardData> | undefined;
+    if (
+      data?.kind === "surface-card" &&
+      typeof data.title === "string" &&
+      typeof data.source === "string"
+    ) {
+      return data as SiteCardData;
+    }
+  }
+  return undefined;
+}
+
+const postCard = createAction({
+  state: null,
+  name: "postCard",
+  description: `Post a small rich card inline in the conversation, pinned to this turn. Same TSX contract and design brief as writeAppSurface (default-export a component receiving { api }; imports "react" and "projector/ds" only; <style> for custom CSS, theme tokens available) — but a card is frame content, not state: it is immutable, stays with this moment of the conversation, and scrolls into history. Use cards for transient visualizations and worked illustrations mid-explanation; use writeAppSurface for anything the visitor should keep using. Keep cards small (under 8KB) and even quieter than surfaces — a card sits inside the transcript's type, so no Card wrapper chrome, no headings, minimal ink. Also pass text: the prose equivalent of the card — it is what the transcript history records and what renders if the card cannot.`,
+  inputSchema: z.object({
+    title: z.string().max(60),
+    source: z.string().min(1).max(8_000),
+    text: z.string().min(1).max(2_000),
+  }),
+  run: ({ title, source, text }) => {
+    // The charter doesn't anchor a data-content type yet (threading
+    // TDataContent through the executor generics is a bigger change than one
+    // card kind justifies); construct the typed part and cast at the edge.
+    const message = {
+      type: "assistant",
+      content: [dataContent<SiteCardData>({ kind: "surface-card", title, source })],
+      text,
+    } as unknown as FrameMessage;
+    return actionResult({ value: `card "${title}" posted`, messages: [message] });
+  },
 });
 
 const guideNode = createNode({
@@ -112,7 +459,8 @@ const guideNode = createNode({
   name: "projector guide",
   params: siteParamsSchema,
   states: [audienceState],
-  tools: [noteAudience],
+  tools: [noteAudience, sendCommentary],
+  parts: [action(spawnChild, "any"), action(cedeChild, "any"), action(postCard, "any")],
   instructions: `You are projector's introduction agent — and you are yourself a projector machine. The conversation you're having is a durable frame log; this prompt is a compiled projection of registered state and parts; the tool you hold writes state that the visitor can watch change. When you talk about projector you are also talking about yourself, and you should use that honestly and lightly — never cute, never labored.
 
 What projector is: an agent framework for state-complete agents. The core claims:
@@ -125,8 +473,11 @@ Who you're talking to: visitors arrive from the marketing page. Some think at th
 
 How to behave:
 - Be quietly competent. Explain concepts plainly and concretely; reveal depth on demand rather than performing it.
+- Before work that will take more than a quick direct answer, call sendCommentary with a short, specific progress update. It is a durable message the visitor will keep seeing, so write it conversationally and do not narrate private reasoning. Skip it for near-instant answers.
 - Ground claims in what the visitor can see: there is an inspector beside this conversation showing the frame log and your state. When you change state (like noting your audience read), you may point at it.
-- This demo is early. Today you can converse, hold durable state, and be inspected. Growing new capabilities live (spawning child machines with their own state, commands, and UI — "can you be my todo app?") is coming; if asked, describe how it will work rather than pretending to do it.
+- You can grow capabilities live. When the visitor asks you to BE something ("can you be my todo app?"): spawnChild creates a child with schema-validated state, updateState mutates it, and writeAppSurface renders it. In the surface, bind the child's state from api.useMachine()'s tree (state entries carry { key, value, address }) and mutate with api.run("updateState", { address, op, value }) — the visitor's clicks and your own writes are the same action in the same durable log. The machine tree, your compiled prompt, and the inspector all change visibly when you spawn; point at it.
+- Surfaces may wake you after a meaningful interaction with api.run("appPanePing", { message, data? }). Wire this only when a response is useful (a request for judgment, a completed flow, a consequential choice); ordinary toggles and edits should update state without making you speak. If an interaction both changes state and pings, await updateState first.
+- Author UI when it genuinely helps, and pick the right kind: postCard for a transient illustration pinned to this moment of the conversation (frame content — immutable, scrolls into history), writeAppSurface for anything the visitor should keep using (state — one live surface, replaceable, survives refresh). The distinction is projector's own storage model and worth narrating once when it comes up. Don't force UI into conversations that are going fine as prose.
 - Some conversations open with a prebuilt rich explainer (a diagram card) persisted into the frame log as an assistant turn of yours. Treat it as something you genuinely said and build on it — don't re-explain what it already covered.
 - Voice is coming soon; the mic button is a stub.
 - Keep responses tight. Short paragraphs, no headers unless genuinely structural, no bullet-point avalanches.`,
@@ -137,9 +488,12 @@ export const siteCharter = createCharter({
   version: "0.0.1",
   params: siteParamsSchema,
   nodes: [guideNode, uiNode],
-  tools: [noteAudience],
-  actions: [setPanes],
-  states: [audienceState, panesState],
+  tools: [noteAudience, sendCommentary],
+  actions: [setPanes, writeAppSurface, spawnChild, cedeChild, updateStateAction, postCard],
+  commands: [reportSurfaceError, appPanePing],
+  // appSurface carries projection code (render/note), so registration is
+  // required, not just preferred.
+  states: [audienceState, panesState, appSurfaceState, appSurfaceSourceState],
 });
 
 // --- Instance lifecycle. The durable artifact is the serialized SOURCE

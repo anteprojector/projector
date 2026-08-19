@@ -3,7 +3,8 @@
 // not like they navigated somewhere else.
 
 import { ConvexProvider, ConvexReactClient, useAction, useMutation, useQuery } from "convex/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { TextAlignStart } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import {
@@ -11,8 +12,11 @@ import {
   createOptimisticEffigy,
   type OptimisticEffigy,
 } from "@projectors/core/client";
+import { recordStoredSession } from "../sessions-store";
 import { EXPLAINERS } from "./explainers";
 import { Inspector, PaneIcon } from "./Inspector";
+import { createSurfaceApi } from "./surface/api";
+import { SurfaceHost } from "./surface/Surface";
 
 // The side panes' visibility and widths are machine state (the ui node's
 // panes state in the charter). The client goes through the framework's own
@@ -31,17 +35,32 @@ const DEFAULT_PANES: Panes = { app: false, inspector: false, appWidth: 22, inspe
 const PANE_MIN_REM = 14;
 const PANE_MAX_REM = 44;
 
-type PanesEntry = { value: Panes; address: unknown };
+type StateEntry = { value: unknown; address: unknown };
 
-function findPanesEntry(value: unknown): PanesEntry | undefined {
+// Depth-first search for a realized state entry in the projected client
+// instance tree. Unrealized states (never written) have no entry; callers
+// fall back to their init-equivalent default.
+function findStateEntry(value: unknown, key: string): StateEntry | undefined {
   if (!value || typeof value !== "object") return undefined;
   const record = value as {
     states?: Array<{ key?: string; value?: unknown; address?: unknown }>;
     children?: unknown[];
   };
   const entry = Array.isArray(record.states)
-    ? record.states.find((s) => s?.key === "panes")
+    ? record.states.find((s) => s?.key === key)
     : undefined;
+  if (entry) return { value: entry.value, address: entry.address };
+  for (const child of record.children ?? []) {
+    const found = findStateEntry(child, key);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+type PanesEntry = { value: Panes; address: unknown };
+
+function findPanesEntry(value: unknown): PanesEntry | undefined {
+  const entry = findStateEntry(value, "panes");
   const v = entry?.value as Partial<Panes> | undefined;
   if (v && typeof v.app === "boolean" && typeof v.inspector === "boolean") {
     return {
@@ -55,11 +74,24 @@ function findPanesEntry(value: unknown): PanesEntry | undefined {
       },
     };
   }
-  for (const child of record.children ?? []) {
-    const found = findPanesEntry(child);
-    if (found) return found;
-  }
   return undefined;
+}
+
+type SurfaceMeta = { version: number; title: string; lastError: string | null };
+
+function findSurface(instances: unknown): (SurfaceMeta & { source: string }) | null {
+  const meta = findStateEntry(instances, "appSurface")?.value as Partial<SurfaceMeta> | undefined;
+  const sourceEntry = findStateEntry(instances, "appSurfaceSource")?.value as
+    | { source?: unknown }
+    | undefined;
+  const source = typeof sourceEntry?.source === "string" ? sourceEntry.source : "";
+  if (!meta || typeof meta.version !== "number" || meta.version < 1 || !source) return null;
+  return {
+    version: meta.version,
+    title: typeof meta.title === "string" ? meta.title : "",
+    lastError: typeof meta.lastError === "string" ? meta.lastError : null,
+    source,
+  };
 }
 
 type AppProps = {
@@ -116,13 +148,14 @@ function AppNav({ sessionId }: { sessionId?: string }) {
   return (
     <header className="app-nav">
       <div className="app-nav-left">
-        <a className="app-brand" href="/" onClick={exit}>projector</a>
+        <a className="nav-brand" href="/" onClick={exit}>projector</a>
         {sessionId && <span className="app-nav-session">s/{sessionId.slice(0, 12)}</span>}
       </div>
       <div className="start" aria-label="Project actions">
         <div className="steps">
           <InstallStep />
-          <a className="step" href="https://github.com/markov-machines/markov-machines">
+          <a className="step step-github" href="https://github.com/markov-machines/markov-machines" aria-label="Star markov-machines on GitHub">
+            <svg className="i-gh" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.27-.01-1.17-.02-2.12-3.2.7-3.88-1.36-3.88-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.76 2.69 1.25 3.35.96.1-.75.4-1.25.72-1.54-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18.92-.26 1.91-.39 2.9-.39.98 0 1.97.13 2.9.39 2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.12 3.05.74.81 1.18 1.83 1.18 3.09 0 4.42-2.69 5.39-5.25 5.67.41.36.78 1.06.78 2.14 0 1.55-.01 2.79-.01 3.17 0 .31.21.67.8.56A11.52 11.52 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z"/></svg>
             <span className="step-body"><span className="step-label">GitHub</span><code>Star</code></span>
             <span className="step-act step-stars"><svg className="i-star" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.9 6 6.5.9-4.7 4.6 1.1 6.5L12 17.9 6.2 21l1.1-6.5L2.6 9.9 9.1 9z"/></svg><span className="count">1</span><span className="vh">stars</span></span>
           </a>
@@ -146,8 +179,10 @@ function InstallStep() {
       setTimeout(() => setCopied(false), 3000);
     } catch {}
   };
+  // data-copy is inert here (the landing's copy script ran before this
+  // mounted) but keys the same hide-on-mobile CSS as the landing's step.
   return (
-    <button className="step" type="button" data-copied={copied ? "" : undefined} onClick={() => void copy()}>
+    <button className="step" type="button" data-copy="" data-copied={copied ? "" : undefined} onClick={() => void copy()}>
       <span className="step-body"><span className="step-label">Install</span><code>npm i @projectors/core</code></span>
       <span className="step-act"><span className="vh">Copy</span><svg className="i-copy" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg><svg className="i-done" viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5 10-11"/></svg></span>
     </button>
@@ -193,6 +228,12 @@ type LocalMessage = {
   pending?: boolean;
 };
 
+type PaneAgentNotice = {
+  id: string;
+  content: string;
+  pending?: boolean;
+};
+
 function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }: {
   initialMessage?: string;
   initialTopic?: string;
@@ -203,7 +244,9 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
   );
   const [optimistic, setOptimistic] = useState<LocalMessage[]>([]);
   const [waitingSince, setWaitingSince] = useState<number | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
   const [input, setInput] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const createSession = useMutation(api.sessions.create);
   const sendMessage = useAction(api.agent.sendMessage);
@@ -219,6 +262,7 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
   sessionIdRef.current = sessionId;
   const sendCommandRef = useRef(sendCommand);
   sendCommandRef.current = sendCommand;
+  const beginPaneAgentNoticeRef = useRef<(callId: string) => void>(() => {});
   // TInstances is `any`: the site has no generated client-instance types yet,
   // and the command surface is discovered from the snapshot at runtime.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -229,7 +273,11 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
       createMachineEffigy<any>(async (message) => {
         const id = sessionIdRef.current;
         if (!id) throw new Error("No active session");
-        return await sendCommandRef.current({ sessionId: id, message });
+        const result = await sendCommandRef.current({ sessionId: id, message });
+        if (message.name === "appPanePing") {
+          beginPaneAgentNoticeRef.current(message.callId);
+        }
+        return result;
       }),
     );
   }
@@ -248,6 +296,21 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
   const [, bumpEffigyVersion] = useState(0);
   useEffect(
     () => effigy.subscribe(() => bumpEffigyVersion((v) => v + 1)),
+    [effigy],
+  );
+
+  // The surface api is the effigy itself, thinly wrapped — agent-authored UI
+  // reads the same projection and runs the same commands as the shell.
+  const surfaceApi = useMemo(() => createSurfaceApi(effigy), [effigy]);
+  const surface = findSurface(effigy.getInstances());
+  const reportSurfaceError = useCallback(
+    (error: string) => {
+      if (!sessionIdRef.current) return;
+      void effigy
+        .getCommand("reportSurfaceError")
+        .run({ error } as never)
+        .catch(() => {});
+    },
     [effigy],
   );
 
@@ -285,6 +348,80 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
     [effigy, runSetPanes],
   );
 
+  // Narrow viewports: the panes become view-local full-screen layers, one at
+  // a time, over the chat. The machine's pane state keeps meaning "the agent
+  // opened this" — the phone renders that as a badge on the toggle instead of
+  // a takeover, and never writes view choice back through setPanes.
+  const [isNarrow, setIsNarrow] = useState(() => matchMedia("(max-width: 900px)").matches);
+  useEffect(() => {
+    const mq = matchMedia("(max-width: 900px)");
+    const onChange = () => setIsNarrow(mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  const [layer, setLayer] = useState<"app" | "inspector" | null>(null);
+  const [closingLayer, setClosingLayer] = useState<"app" | "inspector" | null>(null);
+  const layerCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (layerCloseTimerRef.current) clearTimeout(layerCloseTimerRef.current);
+    },
+    [],
+  );
+  const openMobileLayer = useCallback((pane: "app" | "inspector") => {
+    if (layerCloseTimerRef.current) clearTimeout(layerCloseTimerRef.current);
+    layerCloseTimerRef.current = null;
+    setClosingLayer(null);
+    setLayer(pane);
+  }, []);
+  const closeMobileLayer = useCallback(() => {
+    if (!layer) return;
+    const departing = layer;
+    if (layerCloseTimerRef.current) clearTimeout(layerCloseTimerRef.current);
+    setClosingLayer(departing);
+    setLayer(null);
+    layerCloseTimerRef.current = setTimeout(() => {
+      setClosingLayer((current) => (current === departing ? null : current));
+      layerCloseTimerRef.current = null;
+    }, 220);
+  }, [layer]);
+  const toggleView = useCallback(
+    (pane: "app" | "inspector") => {
+      if (!isNarrow) {
+        togglePane(pane);
+        return;
+      }
+      if (layer === pane) closeMobileLayer();
+      else openMobileLayer(pane);
+    },
+    [closeMobileLayer, isNarrow, layer, openMobileLayer, togglePane],
+  );
+  // On a phone the three views form a small horizontal pager:
+  // app <- chat -> inspector. The edge controls move one page at a time;
+  // desktop keeps the independent pane toggles and their shortcuts.
+  const moveViewLeft = useCallback(() => {
+    if (!isNarrow) {
+      togglePane("app");
+      return;
+    }
+    if (layer === "inspector") closeMobileLayer();
+    else openMobileLayer("app");
+  }, [closeMobileLayer, isNarrow, layer, openMobileLayer, togglePane]);
+  const moveViewRight = useCallback(() => {
+    if (!isNarrow) {
+      togglePane("inspector");
+      return;
+    }
+    if (layer === "app") closeMobileLayer();
+    else openMobileLayer("inspector");
+  }, [closeMobileLayer, isNarrow, layer, openMobileLayer, togglePane]);
+  // "open the app pane" at the end of a surface-writing response: view-local
+  // on a phone, the machine's own setPanes on a desktop.
+  const openAppPane = useCallback(() => {
+    if (isNarrow) openMobileLayer("app");
+    else runSetPanes({ app: true });
+  }, [isNarrow, openMobileLayer, runSetPanes]);
+
   // Dragging previews per pointer frame; on release the final width goes
   // through the same setPanes command as everything else.
   const startResize = useCallback(
@@ -315,19 +452,77 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const editing = e.composedPath().some(
+        (target) =>
+          target instanceof HTMLElement &&
+          (target.matches("input, textarea, select") || target.isContentEditable),
+      );
+      if (
+        isNarrow &&
+        !e.defaultPrevented &&
+        !e.isComposing &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !e.shiftKey &&
+        !editing &&
+        (e.key === "ArrowLeft" || e.key === "ArrowRight")
+      ) {
+        e.preventDefault();
+        if (e.key === "ArrowLeft") moveViewLeft();
+        else moveViewRight();
+        return;
+      }
       if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return;
       const key = e.key.toLowerCase();
       if (key === "j") {
         e.preventDefault();
-        togglePane("inspector");
+        toggleView("inspector");
       } else if (key === "b") {
         e.preventDefault();
-        togglePane("app");
+        toggleView("app");
       }
     };
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
-  }, [togglePane]);
+  }, [isNarrow, moveViewLeft, moveViewRight, toggleView]);
+
+  // The conversation is the demo's default keyboard destination. Printable
+  // keys pressed outside an editor flow into the composer, while embedded
+  // surfaces can keep keys they explicitly handle by preventing the event.
+  useEffect(() => {
+    const onType = (e: KeyboardEvent) => {
+      if (
+        e.defaultPrevented ||
+        e.isComposing ||
+        e.metaKey ||
+        e.ctrlKey ||
+        e.altKey ||
+        e.key.length !== 1
+      ) {
+        return;
+      }
+      const editing = e.composedPath().some(
+        (target) =>
+          target instanceof HTMLElement &&
+          (target.matches("input, textarea, select") || target.isContentEditable),
+      );
+      if (editing) return;
+
+      const field = inputRef.current;
+      if (!field || field.disabled || field.readOnly) return;
+      e.preventDefault();
+      field.focus({ preventScroll: true });
+      const start = field.selectionStart ?? field.value.length;
+      const end = field.selectionEnd ?? field.value.length;
+      const next = `${field.value.slice(0, start)}${e.key}${field.value.slice(end)}`;
+      const caret = start + e.key.length;
+      setInput(next);
+      requestAnimationFrame(() => field.setSelectionRange(caret, caret));
+    };
+    addEventListener("keydown", onType);
+    return () => removeEventListener("keydown", onType);
+  }, []);
 
   const serverMessages = useQuery(
     api.messages.list,
@@ -350,10 +545,18 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
         history.replaceState({ app: true }, "", `/s/${id}`);
       }
       try {
+        setSendError(null);
         // A topic turn is prebuilt server-side — a rich explainer lands as a
         // real frame with no model call, so the answer is effectively instant.
         if (topic) await openTopic({ sessionId: id, topic, ask: trimmed });
         else await sendMessage({ sessionId: id, text: trimmed });
+      } catch {
+        // The turn died server-side (model error, action crash). Anything the
+        // machine durably did before the failure is already in the log; say
+        // so instead of sitting silent.
+        setSendError(
+          "that turn hit an error before projector could answer — anything it already did is in the frame log; try sending again",
+        );
       } finally {
         setWaitingSince(null);
       }
@@ -382,8 +585,88 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
   const visibleOptimistic = optimistic.filter(
     (o) => !server.some((m) => m.role === o.role && m.content === o.content),
   );
+
+  // A full-screen narrow pane hides the conversation, but it should not hide
+  // a newly arriving agent turn. Existing messages establish the baseline;
+  // only assistant rows first observed after that can become a notice. Stream
+  // patches update the same notice without restarting its lifetime.
+  const [paneAgentNotice, setPaneAgentNotice] = useState<PaneAgentNotice | null>(null);
+  const seenPaneAgentMessagesRef = useRef<{
+    sessionId: string | null;
+    ids: Set<string>;
+  }>({ sessionId: null, ids: new Set() });
+  beginPaneAgentNoticeRef.current = (callId) => {
+    if (!isNarrow || !layer) return;
+    setPaneAgentNotice({
+      id: `pending:${callId}`,
+      content: "",
+      pending: true,
+    });
+  };
+  useEffect(() => {
+    if (serverMessages === undefined) return;
+    const assistantMessages = serverMessages.filter(
+      (message) => message.role === "assistant" && message.content.trim(),
+    );
+    const tracker = seenPaneAgentMessagesRef.current;
+    if (tracker.sessionId !== sessionId) {
+      seenPaneAgentMessagesRef.current = {
+        sessionId,
+        ids: new Set(assistantMessages.map((message) => String(message.id))),
+      };
+      setPaneAgentNotice(null);
+      return;
+    }
+
+    let newest: (typeof assistantMessages)[number] | undefined;
+    for (const message of assistantMessages) {
+      const id = String(message.id);
+      if (!tracker.ids.has(id)) newest = message;
+      tracker.ids.add(id);
+    }
+
+    setPaneAgentNotice((current) => {
+      if (newest && isNarrow && layer) {
+        return { id: String(newest.id), content: newest.content };
+      }
+      if (!current) return null;
+      if (current.pending) return current;
+      const updated = assistantMessages.find((message) => String(message.id) === current.id);
+      return updated ? { ...current, content: updated.content } : null;
+    });
+  }, [serverMessages, sessionId, isNarrow, layer]);
+  useEffect(() => {
+    if (isNarrow && layer) return;
+    setPaneAgentNotice(null);
+  }, [isNarrow, layer]);
+  useEffect(() => {
+    // The cursor stays up while generation is pending. Once the first text
+    // arrives, replacing the pending notice with the real message starts the
+    // requested ten-second reading window.
+    if (!paneAgentNotice || paneAgentNotice.pending) return;
+    const noticeId = paneAgentNotice.id;
+    const timeout = setTimeout(() => {
+      setPaneAgentNotice((current) => (current?.id === noticeId ? null : current));
+    }, 10_000);
+    return () => clearTimeout(timeout);
+  }, [paneAgentNotice?.id]);
+
   const streaming = server.some((m) => m.streamState === "streaming");
-  const thinking = waitingSince !== null && !streaming;
+  const thinking =
+    waitingSince !== null &&
+    !streaming &&
+    (visibleOptimistic.length > 0 || server.at(-1)?.role !== "assistant");
+
+  // Every visited session lands in the device-local past-conversations list,
+  // titled by its first user message (deep links included — the title fills
+  // in once messages load).
+  const firstUserText =
+    server.find((m) => m.role === "user")?.content ??
+    optimistic.find((m) => m.role === "user")?.content ??
+    "";
+  useEffect(() => {
+    if (sessionId) recordStoredSession(sessionId, firstUserText);
+  }, [sessionId, firstUserText]);
 
   // One turn at a time: less a chat feed than pages with an input at the
   // bottom. When the speaker changes, the new turn scrolls to the top of the
@@ -399,6 +682,8 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
       role: m.role,
       content: m.content,
       widget: m.widget,
+      card: m.card,
+      updatedSurface: m.updatedSurface === true,
       pending: m.streamState === "streaming",
     })),
     ...visibleOptimistic.map((m) => ({
@@ -406,6 +691,8 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
       role: m.role,
       content: m.content,
       widget: undefined as string | undefined,
+      card: undefined as { title: string; source: string } | undefined,
+      updatedSurface: false,
       pending: false,
     })),
   ];
@@ -445,54 +732,104 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
     setInput("");
   };
 
+  const revealPaneAgentNotice = useCallback(() => {
+    const messageId = paneAgentNotice?.id;
+    setPaneAgentNotice(null);
+    closeMobileLayer();
+    if (!messageId) return;
+    requestAnimationFrame(() => {
+      const message = scrollRef.current?.querySelector<HTMLElement>(
+        `[data-message-id="${messageId}"]`,
+      );
+      message?.scrollIntoView({
+        block: "start",
+        behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth",
+      });
+    });
+  }, [closeMobileLayer, paneAgentNotice?.id]);
+
+  // Wide: the machine's pane state renders as side-by-side panes. Narrow:
+  // the view-local layer decides what's on screen.
+  const showApp = isNarrow ? layer === "app" || closingLayer === "app" : panes.app;
+  const showInspector = isNarrow
+    ? layer === "inspector" || closingLayer === "inspector"
+    : panes.inspector;
+
   return (
     <div className="app">
       <AppNav sessionId={sessionId ?? undefined} />
-      <div className="app-body">
-        {/* The pane toggles live at the body's top corners, never in the nav.
-            Fixed in place: over an open pane's header they read as minimize,
-            over the chat they read as open — same button, same spot. */}
+      <div className="app-body" data-layer-closing={closingLayer ?? undefined}>
+        {/* Desktop gets independent pane glyphs. On a phone these become
+            contextual pager chips docked over the nav's bottom rule. */}
         <button
           className="pane-btn pane-toggle pane-toggle-left"
           type="button"
-          aria-label="Toggle app pane (⌘B)"
-          title="⌘B"
-          aria-pressed={panes.app}
-          onClick={() => togglePane("app")}
+          aria-label={isNarrow ? (layer === "inspector" ? "Back to chat" : "Open app") : "Toggle app pane (⌘B)"}
+          title={isNarrow ? undefined : "⌘B"}
+          aria-pressed={isNarrow ? undefined : showApp}
+          data-mobile-hidden={isNarrow && layer === "app" ? "" : undefined}
+          onClick={moveViewLeft}
         >
           <PaneIcon side="left" />
+          <span className="pane-toggle-label" aria-hidden="true">
+            {layer === "inspector" ? "< chat" : "< app"}
+          </span>
         </button>
         <button
           className="pane-btn pane-toggle pane-toggle-right"
           type="button"
-          aria-label="Toggle inspector (⌘J)"
-          title="⌘J"
-          aria-pressed={panes.inspector}
-          onClick={() => togglePane("inspector")}
+          aria-label={isNarrow ? (layer === "app" ? "Back to chat" : "Open inspector") : "Toggle inspector (⌘J)"}
+          title={isNarrow ? undefined : "⌘J"}
+          aria-pressed={isNarrow ? undefined : showInspector}
+          data-mobile-hidden={isNarrow && layer === "inspector" ? "" : undefined}
+          onClick={moveViewRight}
         >
           <PaneIcon side="right" />
+          <span className="pane-toggle-label" aria-hidden="true">
+            {layer === "app" ? "chat >" : "inspector >"}
+          </span>
         </button>
-        {panes.app && <AppPane width={panes.appWidth} onResizeStart={startResize("app")} />}
+        {showApp && (
+          <AppPane
+            width={panes.appWidth}
+            onResizeStart={startResize("app")}
+            surface={surface}
+            api={surfaceApi}
+            onSurfaceError={reportSurfaceError}
+            onAsk={(text) => void send(text)}
+          />
+        )}
         <div className="app-chat">
           <div className="app-scroll" ref={scrollRef}>
             <div className="app-thread">
               {items.map((m) => (
                 <Message
                   key={m.key}
+                  messageId={String(m.key)}
                   role={m.role}
                   content={m.content}
                   widget={m.widget}
+                  card={m.card}
+                  api={surfaceApi}
                   pending={m.pending}
                   turnStart={m.turnStart}
                   onAsk={send}
+                  onOpenAppPane={m.updatedSurface && !showApp ? openAppPane : undefined}
                 />
               ))}
               {thinking && <Message role="assistant" content="" pending />}
+              {sendError && (
+                <div className="msg msg-send-error">
+                  <span className="msg-role">error</span>
+                  <p className="msg-body">{sendError}</p>
+                </div>
+              )}
             </div>
           </div>
           <form className="app-composer" onSubmit={submit} autoComplete="off">
             <div className="talk-card">
               <input
+                ref={inputRef}
                 className="talk-input"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -511,58 +848,165 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
             </div>
           </form>
         </div>
-        {panes.inspector && (
+        {showInspector && (
           <Inspector
             sessionId={sessionId}
             width={panes.inspectorWidth}
             onResizeStart={startResize("inspector")}
           />
         )}
+        {isNarrow && layer && !paneAgentNotice && (
+          <button
+            className="pane-chat-return"
+            type="button"
+            onClick={closeMobileLayer}
+            aria-label="Back to chat"
+          >
+            <span className="pane-chat-return-mark" aria-hidden="true">
+              <TextAlignStart strokeWidth={1.75} />
+            </span>
+          </button>
+        )}
+        {isNarrow && layer && paneAgentNotice && (
+          <button
+            className="pane-agent-notice"
+            type="button"
+            onClick={revealPaneAgentNotice}
+            data-pending={paneAgentNotice.pending ? "" : undefined}
+            aria-label={
+              paneAgentNotice.pending
+                ? "Projector is responding"
+                : "Open the conversation to read projector's new message"
+            }
+          >
+            {paneAgentNotice.pending ? (
+              <span className="pane-agent-notice-cursor" aria-hidden="true" />
+            ) : (
+              <>
+                <span className="pane-agent-notice-role">projector</span>
+                <span className="pane-agent-notice-copy">{paneAgentNotice.content}</span>
+              </>
+            )}
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
-// The left pane: the app surface, where the agent will draw dynamic UI.
-// Empty scaffolding for now — the pane exists so its visibility is real
-// machine state before anything renders into it.
-function AppPane({ width, onResizeStart }: {
+// The left pane: the app surface. Renders whatever writeAppSurface last
+// wrote — the surface is machine state, so it survives refresh and its
+// whole history sits in the frame log.
+function AppPane({ width, onResizeStart, surface, api, onSurfaceError, onAsk }: {
   width: number;
   onResizeStart: (e: React.PointerEvent) => void;
+  surface: ReturnType<typeof findSurface>;
+  api: ReturnType<typeof createSurfaceApi>;
+  onSurfaceError: (error: string) => void;
+  onAsk: (text: string) => void;
 }) {
   return (
     <aside className="app-pane" aria-label="App pane" style={{ width: `min(${width}rem, 42vw)` }}>
       <div className="app-pane-head">
-        <span className="app-pane-title">app</span>
+        <span className="app-pane-title">{surface?.title ? surface.title : "app"}</span>
+        {surface && <span className="app-pane-version">v{surface.version}</span>}
       </div>
       <div className="app-pane-body">
-        <p className="inspector-empty">nothing here yet — the agent draws UI into this pane</p>
+        {surface ? (
+          <>
+            {surface.lastError && (
+              <div className="surface-error">
+                <p>{surface.lastError}</p>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onAsk(`The app surface failed with: ${surface.lastError}. Please fix it.`)
+                  }
+                >
+                  ask projector to fix it
+                </button>
+              </div>
+            )}
+            <SurfaceHost
+              source={surface.source}
+              version={surface.version}
+              api={api}
+              onError={onSurfaceError}
+            />
+          </>
+        ) : (
+          <p className="inspector-empty">
+            nothing here yet — ask projector to draw something and it writes this pane as state
+          </p>
+        )}
       </div>
       <div className="pane-resize pane-resize-app" onPointerDown={onResizeStart} />
     </aside>
   );
 }
 
-function Message({ role, content, widget, pending, turnStart, onAsk }: {
+function Message({ messageId, role, content, widget, card, api, pending, turnStart, onAsk, onOpenAppPane }: {
+  messageId?: string;
   role: "user" | "assistant";
   content: string;
   widget?: string;
+  card?: { title: string; source: string };
+  api?: ReturnType<typeof createSurfaceApi>;
   pending?: boolean;
   turnStart?: boolean;
   onAsk?: (text: string) => void;
+  onOpenAppPane?: () => void;
 }) {
-  // A widget message renders its rich explainer in place of the prose (the
-  // prose is the LLM-facing equivalent). Unknown widget ids fall back to it.
+  // Rich renderings replace the prose (the prose is the LLM-facing
+  // equivalent): an agent-authored card first, then prebuilt explainer
+  // widgets. Unknown widget ids fall back to the prose.
   const Explainer = widget ? EXPLAINERS[widget] : undefined;
   return (
     <div
       className={`msg msg-${role}${pending ? " msg-pending" : ""}`}
+      data-message-id={messageId}
       data-turn-start={turnStart ? "" : undefined}
     >
       <span className="msg-role">{role === "user" ? "you" : "projector"}</span>
-      {Explainer && onAsk
-        ? <Explainer onAsk={(text) => void onAsk(text)} />
-        : <p className="msg-body">{content}</p>}
+      {card && api
+        ? <CardMessage card={card} api={api} />
+        : Explainer && onAsk
+          ? <Explainer onAsk={(text) => void onAsk(text)} />
+          : <p className="msg-body">{content}</p>}
+      {/* This response also wrote the app surface; offered only while the
+          pane isn't already on screen (the parent passes the handler). */}
+      {onOpenAppPane && (
+        <button className="msg-open-pane" type="button" onClick={onOpenAppPane}>
+          open the app pane
+        </button>
+      )}
+    </div>
+  );
+}
+
+// An inline chat card: the same surface runtime as the app pane, but frame
+// content — immutable, pinned to its turn. Promote copies it into the pane
+// through the ordinary writeAppSurface command (which opens the pane).
+function CardMessage({ card, api }: {
+  card: { title: string; source: string };
+  api: ReturnType<typeof createSurfaceApi>;
+}) {
+  return (
+    <div className="msg-card">
+      <div className="msg-card-head">
+        <span className="msg-card-title">{card.title}</span>
+        <button
+          type="button"
+          onClick={() =>
+            void api
+              .run("writeAppSurface", { title: card.title, source: card.source })
+              .catch(() => {})
+          }
+        >
+          open in app pane
+        </button>
+      </div>
+      <SurfaceHost source={card.source} version={1} api={api} onError={() => {}} />
     </div>
   );
 }

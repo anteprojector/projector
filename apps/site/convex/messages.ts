@@ -11,6 +11,19 @@ type MessageDoc = Doc<"messages">;
 
 const MAX_SESSION_MESSAGES = 2000;
 
+export type AddMessageArgs = {
+  sessionId: Id<"sessions">;
+  role: "user" | "assistant";
+  content: string;
+  frameId?: Id<"frames">;
+  idempotencyKey?: string;
+  streamState?: string;
+  streamSeq?: number;
+  widget?: string;
+  card?: { title: string; source: string };
+  updatedSurface?: boolean;
+};
+
 export const add = mutation({
   args: {
     sessionId: v.id("sessions"),
@@ -21,9 +34,20 @@ export const add = mutation({
     streamState: v.optional(v.string()),
     streamSeq: v.optional(v.number()),
     widget: v.optional(v.string()),
+    card: v.optional(v.object({ title: v.string(), source: v.string() })),
+    updatedSurface: v.optional(v.boolean()),
   },
   returns: v.id("messages"),
-  handler: async (ctx, args) => {
+  handler: (ctx, args) => addMessageInternal(ctx, args),
+});
+
+// Shared by the agent action (via the mutation) and sendCommand (directly):
+// idempotent, stream-seq-guarded message upsert.
+export async function addMessageInternal(
+  ctx: MutationCtx,
+  args: AddMessageArgs,
+): Promise<Id<"messages">> {
+  {
     const session = await ctx.db.get(args.sessionId);
     if (!session) throw new Error("Session not found");
 
@@ -55,6 +79,7 @@ export const add = mutation({
         };
         if (args.streamState !== undefined) patch.streamState = args.streamState;
         if (args.streamSeq !== undefined) patch.streamSeq = args.streamSeq;
+        if (args.updatedSurface !== undefined) patch.updatedSurface = args.updatedSurface;
         await ctx.db.patch(existing._id, patch);
         return existing._id;
       }
@@ -65,6 +90,8 @@ export const add = mutation({
       content: args.content,
       frameId,
       ...(args.widget !== undefined ? { widget: args.widget } : {}),
+      ...(args.card !== undefined ? { card: args.card } : {}),
+      ...(args.updatedSurface !== undefined ? { updatedSurface: args.updatedSurface } : {}),
       ...(args.idempotencyKey !== undefined ? { idempotencyKey: args.idempotencyKey } : {}),
       ...(args.streamState !== undefined ? { streamState: args.streamState } : {}),
       ...(args.streamSeq !== undefined ? { streamSeq: args.streamSeq } : {}),
@@ -77,8 +104,8 @@ export const add = mutation({
     });
 
     return messageId;
-  },
-});
+  }
+}
 
 export const list = query({
   args: { sessionId: v.id("sessions") },
@@ -90,6 +117,8 @@ export const list = query({
       createdAt: v.number(),
       streamState: v.optional(v.string()),
       widget: v.optional(v.string()),
+      card: v.optional(v.object({ title: v.string(), source: v.string() })),
+      updatedSurface: v.optional(v.boolean()),
     }),
   ),
   handler: async (ctx, { sessionId }) => {
@@ -101,6 +130,8 @@ export const list = query({
       createdAt: message.createdAt,
       ...(message.streamState !== undefined ? { streamState: message.streamState } : {}),
       ...(message.widget !== undefined ? { widget: message.widget } : {}),
+      ...(message.card !== undefined ? { card: message.card } : {}),
+      ...(message.updatedSurface !== undefined ? { updatedSurface: message.updatedSurface } : {}),
     }));
   },
 });
