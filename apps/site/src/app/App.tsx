@@ -170,6 +170,14 @@ function AppNav({ sessionId }: { sessionId?: string }) {
   );
 }
 
+function PaneCloseIcon() {
+  return (
+    <svg className="pane-toggle-close" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M6 6l12 12M18 6 6 18" />
+    </svg>
+  );
+}
+
 function InstallStep() {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
@@ -244,6 +252,7 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
   );
   const [optimistic, setOptimistic] = useState<LocalMessage[]>([]);
   const [waitingSince, setWaitingSince] = useState<number | null>(null);
+  const [finalResponseStarted, setFinalResponseStarted] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -537,6 +546,7 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
         ...prev,
         { key: `opt-${Date.now()}-${prev.length}`, role: "user", content: trimmed },
       ]);
+      setFinalResponseStarted(false);
       setWaitingSince(Date.now());
       let id = sessionId;
       if (!id) {
@@ -652,10 +662,14 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
   }, [paneAgentNotice?.id]);
 
   const streaming = server.some((m) => m.streamState === "streaming");
-  const thinking =
-    waitingSince !== null &&
-    !streaming &&
-    (visibleOptimistic.length > 0 || server.at(-1)?.role !== "assistant");
+  useEffect(() => {
+    if (waitingSince !== null && streaming) setFinalResponseStarted(true);
+  }, [waitingSince, streaming]);
+  // Commentary is an assistant message too, but it does not finish the turn.
+  // Keep the existing blinking rectangle up through that gap, then latch it
+  // off once the final response starts so it cannot briefly reappear between
+  // stream completion and the action returning.
+  const thinking = waitingSince !== null && !streaming && !finalResponseStarted;
 
   // Every visited session lands in the device-local past-conversations list,
   // titled by its first user message (deep links included — the title fills
@@ -664,9 +678,10 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
     server.find((m) => m.role === "user")?.content ??
     optimistic.find((m) => m.role === "user")?.content ??
     "";
+  const threadTitle = session?.title?.trim() || firstUserText;
   useEffect(() => {
-    if (sessionId) recordStoredSession(sessionId, firstUserText);
-  }, [sessionId, firstUserText]);
+    if (sessionId) recordStoredSession(sessionId, threadTitle);
+  }, [sessionId, threadTitle]);
 
   // One turn at a time: less a chat feed than pages with an input at the
   // bottom. When the speaker changes, the new turn scrolls to the top of the
@@ -681,6 +696,7 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
       key: m.id,
       role: m.role,
       content: m.content,
+      activationId: m.activationId,
       widget: m.widget,
       card: m.card,
       updatedSurface: m.updatedSurface === true,
@@ -690,6 +706,7 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
       key: m.key,
       role: m.role,
       content: m.content,
+      activationId: undefined as string | undefined,
       widget: undefined as string | undefined,
       card: undefined as { title: string; source: string } | undefined,
       updatedSurface: false,
@@ -698,7 +715,18 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
   ];
   let turnCount = 0;
   const items = rendered.map((m, i) => {
-    const turnStart = i === 0 || rendered[i - 1].role !== m.role;
+    const previous = rendered[i - 1];
+    const speakerStart = i === 0 || previous.role !== m.role;
+    // An autonomous activation has no visible user row to create a speaker
+    // boundary. Its changed activation value arms a one-message latch: the
+    // first assistant row starts a page, then later rows from that same run
+    // retain the current scroll position.
+    const activationStart =
+      m.role === "assistant" &&
+      previous?.role === "assistant" &&
+      m.activationId !== undefined &&
+      m.activationId !== previous.activationId;
+    const turnStart = speakerStart || activationStart;
     if (turnStart) turnCount += 1;
     return { ...m, turnStart };
   });
@@ -759,35 +787,55 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
     <div className="app">
       <AppNav sessionId={sessionId ?? undefined} />
       <div className="app-body" data-layer-closing={closingLayer ?? undefined}>
-        {/* Desktop gets independent pane glyphs. On a phone these become
-            contextual pager chips docked over the nav's bottom rule. */}
+        {/* The same contextual chips control panes at every size. On a phone
+            they dock over the nav rule; desktop keeps them just below it. */}
         <button
           className="pane-btn pane-toggle pane-toggle-left"
           type="button"
-          aria-label={isNarrow ? (layer === "inspector" ? "Back to chat" : "Open app") : "Toggle app pane (⌘B)"}
+          aria-label={
+            isNarrow
+              ? layer === "inspector" ? "Back to chat" : "Open app"
+              : showApp ? "Close app pane (⌘B)" : "Open app pane (⌘B)"
+          }
           title={isNarrow ? undefined : "⌘B"}
           aria-pressed={isNarrow ? undefined : showApp}
           data-mobile-hidden={isNarrow && layer === "app" ? "" : undefined}
           onClick={moveViewLeft}
         >
-          <PaneIcon side="left" />
-          <span className="pane-toggle-label" aria-hidden="true">
-            {layer === "inspector" ? "< chat" : "< app"}
-          </span>
+          {!isNarrow && showApp ? (
+            <PaneCloseIcon />
+          ) : (
+            <>
+              <PaneIcon side="left" />
+              <span className="pane-toggle-label" aria-hidden="true">
+                {isNarrow ? (layer === "inspector" ? "< chat" : "< app") : "app"}
+              </span>
+            </>
+          )}
         </button>
         <button
           className="pane-btn pane-toggle pane-toggle-right"
           type="button"
-          aria-label={isNarrow ? (layer === "app" ? "Back to chat" : "Open inspector") : "Toggle inspector (⌘J)"}
+          aria-label={
+            isNarrow
+              ? layer === "app" ? "Back to chat" : "Open inspector"
+              : showInspector ? "Close inspector (⌘J)" : "Open inspector (⌘J)"
+          }
           title={isNarrow ? undefined : "⌘J"}
           aria-pressed={isNarrow ? undefined : showInspector}
           data-mobile-hidden={isNarrow && layer === "inspector" ? "" : undefined}
           onClick={moveViewRight}
         >
-          <PaneIcon side="right" />
-          <span className="pane-toggle-label" aria-hidden="true">
-            {layer === "app" ? "chat >" : "inspector >"}
-          </span>
+          {!isNarrow && showInspector ? (
+            <PaneCloseIcon />
+          ) : (
+            <>
+              <span className="pane-toggle-label" aria-hidden="true">
+                {isNarrow ? (layer === "app" ? "chat >" : "inspector >") : "inspector"}
+              </span>
+              <PaneIcon side="right" />
+            </>
+          )}
         </button>
         {showApp && (
           <AppPane
@@ -851,6 +899,7 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
         {showInspector && (
           <Inspector
             sessionId={sessionId}
+            fallbackTitle={firstUserText}
             width={panes.inspectorWidth}
             onResizeStart={startResize("inspector")}
           />

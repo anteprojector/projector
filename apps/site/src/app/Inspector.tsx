@@ -2,12 +2,13 @@
 // Deliberately spare for the first pass — mono rows in the terminal box's
 // vocabulary. The agent references this panel when it talks about itself.
 
-import { useQuery } from "convex/react";
-import { useState } from "react";
+import { useMutation, useQuery } from "convex/react";
+import { useEffect, useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 
-type Tab = "frames" | "state";
+type Tab = "overview" | "frames" | "state";
+type SessionView = { title?: string; clientSnapshot?: unknown };
 
 // The t3-style sidebar glyph: a panel outline with the divider on the side
 // the pane lives on. Shared by the nav toggles and the pane minimize buttons.
@@ -20,14 +21,16 @@ export function PaneIcon({ side }: { side: "left" | "right" }) {
   );
 }
 
-export function Inspector({ sessionId, width, onResizeStart }: {
+export function Inspector({ sessionId, fallbackTitle, width, onResizeStart }: {
   sessionId: Id<"sessions"> | null;
+  fallbackTitle?: string;
   width?: number;
   onResizeStart?: (e: React.PointerEvent) => void;
 }) {
-  const [tab, setTab] = useState<Tab>("frames");
+  const [tab, setTab] = useState<Tab>("overview");
   const frames = useQuery(api.sessions.listFrames, sessionId ? { sessionId } : "skip");
   const session = useQuery(api.sessions.get, sessionId ? { sessionId } : "skip");
+  const title = session?.title?.trim() || fallbackTitle?.trim() || "untitled conversation";
 
   return (
     <aside
@@ -37,6 +40,9 @@ export function Inspector({ sessionId, width, onResizeStart }: {
     >
       {onResizeStart && <div className="pane-resize pane-resize-inspector" onPointerDown={onResizeStart} />}
       <div className="app-inspector-head">
+        <button type="button" data-active={tab === "overview" ? "" : undefined} onClick={() => setTab("overview")}>
+          overview
+        </button>
         <button type="button" data-active={tab === "frames" ? "" : undefined} onClick={() => setTab("frames")}>
           frames
         </button>
@@ -45,9 +51,74 @@ export function Inspector({ sessionId, width, onResizeStart }: {
         </button>
       </div>
       <div className="app-inspector-body">
-        {tab === "frames" ? <FrameLog frames={frames} /> : <StateView session={session} />}
+        {tab === "overview" ? (
+          <Overview sessionId={sessionId} title={title} />
+        ) : tab === "frames" ? (
+          <FrameLog frames={frames} />
+        ) : (
+          <StateView session={session} />
+        )}
       </div>
     </aside>
+  );
+}
+
+function Overview({ sessionId, title }: {
+  sessionId: Id<"sessions"> | null;
+  title: string;
+}) {
+  const renameSession = useMutation(api.sessions.rename);
+  const [draft, setDraft] = useState(title);
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDraft(title);
+    setStatus(null);
+  }, [sessionId, title]);
+
+  const trimmed = draft.trim();
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!sessionId || !trimmed || trimmed === title || saving) return;
+    setSaving(true);
+    setStatus(null);
+    try {
+      await renameSession({ sessionId, title: trimmed });
+      setStatus("saved");
+    } catch {
+      setStatus("couldn’t rename thread");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="inspector-overview">
+      <p className="inspector-overview-label">thread</p>
+      <form className="inspector-title-form" onSubmit={(event) => void save(event)}>
+        <label htmlFor="inspector-thread-title">title</label>
+        <div className="inspector-title-control">
+          <input
+            id="inspector-thread-title"
+            value={draft}
+            maxLength={80}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              setStatus(null);
+            }}
+            disabled={!sessionId || saving}
+          />
+          <button
+            type="submit"
+            disabled={!sessionId || !trimmed || trimmed === title || saving}
+          >
+            {saving ? "saving…" : "rename"}
+          </button>
+        </div>
+        {status && <p className="inspector-title-status" aria-live="polite">{status}</p>}
+      </form>
+    </section>
   );
 }
 
@@ -104,7 +175,7 @@ function FrameLog({ frames }: { frames: FrameDoc[] | undefined }) {
 const pad = (frame: number, message: number) =>
   `${String(frame).padStart(4, "0")}${message > 0 ? `.${message}` : ""}`;
 
-function StateView({ session }: { session: { clientSnapshot?: unknown } | undefined }) {
+function StateView({ session }: { session: SessionView | undefined }) {
   if (!session) return <p className="inspector-empty">…</p>;
   const snapshot = session.clientSnapshot as
     | { instance?: { states?: Record<string, unknown> } }

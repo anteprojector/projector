@@ -81,6 +81,7 @@ export async function addMessageInternal(
         if (args.streamSeq !== undefined) patch.streamSeq = args.streamSeq;
         if (args.updatedSurface !== undefined) patch.updatedSurface = args.updatedSurface;
         await ctx.db.patch(existing._id, patch);
+        await setDefaultSessionTitle(ctx, session, args.role, args.content);
         return existing._id;
       }
     }
@@ -102,9 +103,21 @@ export async function addMessageInternal(
       messageId,
       ...(args.idempotencyKey !== undefined ? { idempotencyKey: args.idempotencyKey } : {}),
     });
+    await setDefaultSessionTitle(ctx, session, args.role, args.content);
 
     return messageId;
   }
+}
+
+async function setDefaultSessionTitle(
+  ctx: MutationCtx,
+  session: Doc<"sessions">,
+  role: "user" | "assistant",
+  content: string,
+): Promise<void> {
+  if (role !== "user" || session.title) return;
+  const title = content.trim().slice(0, 80);
+  if (title) await ctx.db.patch(session._id, { title });
 }
 
 export const list = query({
@@ -115,6 +128,7 @@ export const list = query({
       role: v.union(v.literal("user"), v.literal("assistant")),
       content: v.string(),
       createdAt: v.number(),
+      activationId: v.optional(v.string()),
       streamState: v.optional(v.string()),
       widget: v.optional(v.string()),
       card: v.optional(v.object({ title: v.string(), source: v.string() })),
@@ -123,16 +137,33 @@ export const list = query({
   ),
   handler: async (ctx, { sessionId }) => {
     const messages = await listMessagesForSession(ctx, sessionId);
-    return messages.map((message) => ({
-      id: message._id,
-      role: message.role,
-      content: message.content,
-      createdAt: message.createdAt,
-      ...(message.streamState !== undefined ? { streamState: message.streamState } : {}),
-      ...(message.widget !== undefined ? { widget: message.widget } : {}),
-      ...(message.card !== undefined ? { card: message.card } : {}),
-      ...(message.updatedSurface !== undefined ? { updatedSurface: message.updatedSurface } : {}),
-    }));
+    const frameIds = [
+      ...new Set(
+        messages.flatMap((message) => (message.frameId ? [message.frameId] : [])),
+      ),
+    ];
+    const frames = await Promise.all(frameIds.map((frameId) => ctx.db.get(frameId)));
+    const activationByFrameId = new Map(
+      frames
+        .filter((frame) => frame !== null)
+        .map((frame) => [frame._id, frame.activationId] as const),
+    );
+    return messages.map((message) => {
+      const activationId = message.frameId
+        ? activationByFrameId.get(message.frameId)
+        : undefined;
+      return {
+        id: message._id,
+        role: message.role,
+        content: message.content,
+        createdAt: message.createdAt,
+        ...(activationId !== undefined ? { activationId } : {}),
+        ...(message.streamState !== undefined ? { streamState: message.streamState } : {}),
+        ...(message.widget !== undefined ? { widget: message.widget } : {}),
+        ...(message.card !== undefined ? { card: message.card } : {}),
+        ...(message.updatedSurface !== undefined ? { updatedSurface: message.updatedSurface } : {}),
+      };
+    });
   },
 });
 

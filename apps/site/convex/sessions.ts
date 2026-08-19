@@ -84,10 +84,27 @@ export const create = mutation({
   },
 });
 
+export const rename = mutation({
+  args: {
+    sessionId: v.id("sessions"),
+    title: v.string(),
+  },
+  returns: v.null(),
+  handler: async (ctx, { sessionId, title }) => {
+    const session = await ctx.db.get(sessionId);
+    if (!session) throw new Error("Session not found");
+    const nextTitle = title.trim().slice(0, 80);
+    if (!nextTitle) throw new Error("Title cannot be empty");
+    await ctx.db.patch(sessionId, { title: nextTitle });
+    return null;
+  },
+});
+
 export const get = query({
   args: { sessionId: v.id("sessions") },
   returns: v.object({
     sessionId: v.id("sessions"),
+    title: v.optional(v.string()),
     frameId: v.id("frames"),
     clientSnapshot: v.any(),
     syncState: v.any(),
@@ -109,6 +126,7 @@ export const get = query({
 
     return {
       sessionId,
+      ...(session.title !== undefined ? { title: session.title } : {}),
       frameId: latestFrame._id,
       clientSnapshot,
       syncState,

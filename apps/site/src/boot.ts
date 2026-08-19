@@ -4,7 +4,7 @@
 // conversation composer on submit. The React app is never imported unless
 // intent happens, so the landing stays static-page fast.
 
-import { listStoredSessions } from "./sessions-store";
+import { listStoredSessions, removeStoredSession } from "./sessions-store";
 
 type AppModule = typeof import("./app/main");
 
@@ -90,30 +90,79 @@ const relativeTime = (at: number): string => {
   return `${Math.round(hours / 24)}d ago`;
 };
 
-pastLink?.addEventListener("click", () => {
+const renderPastSessions = () => {
   const list = pastDialog?.querySelector<HTMLElement>(".past-list");
-  if (!pastDialog || !list) return;
+  if (!list) return;
   list.replaceChildren(
     ...listStoredSessions().map((session) => {
-      const row = document.createElement("button");
-      row.type = "button";
+      const row = document.createElement("div");
       row.className = "past-row";
+
+      const open = document.createElement("button");
+      open.type = "button";
+      open.className = "past-open";
       const title = document.createElement("span");
       title.className = "past-title";
       title.textContent = session.title || "untitled conversation";
       const when = document.createElement("span");
       when.className = "past-when";
       when.textContent = relativeTime(session.at);
-      row.append(title, when);
-      row.addEventListener("click", async () => {
-        pastDialog.close();
+      open.append(title, when);
+      open.addEventListener("click", async () => {
+        pastDialog?.close();
         const mod = await loadApp();
         history.pushState({ app: true }, "", `/s/${session.id}`);
         await enterApp(mod, { sessionId: session.id });
       });
+
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "past-remove";
+      remove.textContent = "×";
+      remove.title = "Remove";
+      remove.setAttribute(
+        "aria-label",
+        `Remove ${session.title || "untitled conversation"} from past conversations`,
+      );
+      remove.addEventListener("click", () => {
+        if (!remove.hasAttribute("data-confirm")) {
+          for (const armed of list.querySelectorAll<HTMLButtonElement>(".past-remove[data-confirm]")) {
+            const armedTitle = armed
+              .closest(".past-row")
+              ?.querySelector<HTMLElement>(".past-title")
+              ?.textContent || "untitled conversation";
+            armed.removeAttribute("data-confirm");
+            armed.textContent = "×";
+            armed.title = "Remove";
+            armed.setAttribute(
+              "aria-label",
+              `Remove ${armedTitle} from past conversations`,
+            );
+          }
+          remove.setAttribute("data-confirm", "");
+          remove.textContent = "confirm";
+          remove.title = "Confirm removal";
+          remove.setAttribute(
+            "aria-label",
+            `Confirm removal of ${session.title || "untitled conversation"} from past conversations`,
+          );
+          return;
+        }
+        removeStoredSession(session.id);
+        renderPastSessions();
+        refreshPastLink();
+        if (listStoredSessions().length === 0) pastDialog?.close();
+      });
+
+      row.append(open, remove);
       return row;
     }),
   );
+};
+
+pastLink?.addEventListener("click", () => {
+  if (!pastDialog) return;
+  renderPastSessions();
   pastDialog.showModal();
 });
 // A click on the dialog element itself is a click on the backdrop.
@@ -367,5 +416,3 @@ addEventListener("popstate", () => {
     void exitApp();
   }
 });
-
-

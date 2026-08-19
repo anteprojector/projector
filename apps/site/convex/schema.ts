@@ -4,6 +4,7 @@ import { v } from "convex/values";
 export default defineSchema({
   sessions: defineTable({
     contextEpoch: v.number(),
+    title: v.optional(v.string()),
     syncState: v.optional(v.any()),
   }),
 

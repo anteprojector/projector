@@ -44,3 +44,14 @@ export function recordStoredSession(id: string, title?: string): void {
     // Storage unavailable (private mode, quota): the list is a nicety.
   }
 }
+
+export function removeStoredSession(id: string): void {
+  try {
+    localStorage.setItem(
+      KEY,
+      JSON.stringify(listStoredSessions().filter((session) => session.id !== id)),
+    );
+  } catch {
+    // Storage unavailable: there is no local row to remove.
+  }
+}

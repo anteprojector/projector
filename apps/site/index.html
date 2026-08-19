@@ -69,6 +69,23 @@
     <filter id="ray-core-spot-dark" x="-60%" y="-60%" width="220%" height="220%">
       <feGaussianBlur stdDeviation="30"/>
     </filter>
+    <!-- Tighter mobile diffusion for compact targets. The composer keeps the
+         full-size filters above so its larger illuminated field is unchanged. -->
+    <filter id="ray-soft-spot-compact" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="17"/>
+    </filter>
+    <filter id="ray-core-spot-compact" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="11"/>
+    </filter>
+    <filter id="ray-soft-spot-thin-compact" x="-120%" y="-120%" width="340%" height="340%">
+      <feGaussianBlur stdDeviation="30"/>
+    </filter>
+    <filter id="ray-soft-spot-dark-compact" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="34"/>
+    </filter>
+    <filter id="ray-core-spot-dark-compact" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="23"/>
+    </filter>
   </defs>
   <polygon class="l-glow" fill="url(#ray-grad-edge)" filter="url(#ray-soft)" points="0,0 0,0 0,0 0,0"/>
 </svg>
@@ -138,13 +155,13 @@
       <button class="talk-clear" type="button" aria-label="Clear input">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg>
       </button>
+      <button class="talk-mic" type="button" disabled title="voice — coming soon" aria-label="Voice input, coming soon">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+      </button>
       <button class="talk-go" type="submit" aria-label="Send">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15M13 6l6 6-6 6"/></svg>
       </button>
     </div>
-    <button class="talk-mic" type="button" disabled title="voice — coming soon" aria-label="Voice input, coming soon">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
-    </button>
     <!-- Shown by boot.ts when localStorage holds past sessions. -->
     <button class="talk-past" type="button" hidden>past conversations</button>
   </form>
@@ -280,8 +297,9 @@
     const core = document.querySelector(".l-core");
     const edgeGradient = document.querySelector("#ray-grad-edge");
     const bodyGradient = document.querySelector("#ray-grad-body");
+    const composer = document.querySelector(".talk-card");
     const targets = [
-      document.querySelector(".talk-card"),
+      composer,
       ...document.querySelectorAll(".steps .step"),
       ...document.querySelectorAll(".features .feature"),
       ...document.querySelectorAll(".why > p:not(.label)"),
@@ -309,7 +327,7 @@
     };
     // The composer is the hero: the beam opens on it and holds until the
     // reader points or focuses somewhere else.
-    let sticky = document.querySelector(".talk-card");
+    let sticky = composer;
     document.documentElement.classList.toggle("ray-hidden", effectsHidden);
     addEventListener("scroll", () => {
       const wasHidden = effectsHidden;
@@ -366,7 +384,7 @@
     const INTRO_DELAY = 200;
     const WASH_AT = 0.65;
     let introStart = null, introMs = 900, washed = false;
-    let washX = null, washY = null, washH = null, washApex = null, washDocY = null;
+    let washX = null, washY = null, washH = null, washDocY = null;
     let locked = null;
     let settling = true;
     let docH = 0;
@@ -491,32 +509,32 @@
       const fy = Math.min(Math.max(cur.y, scrollY), scrollY + innerHeight);
       const dark = isDark();
       const thin = !dark && cur.h < 16;
-      const shape = "spot" + (dark ? "-d" : "") + (thin ? "-t" : "");
+      const compact = innerWidth <= 775 && bestEl !== composer;
+      const shape = "spot" + (dark ? "-d" : "") + (thin ? "-t" : "") + (compact ? "-c" : "");
       if (shape !== drawn) {
         drawn = shape;
         glow.setAttribute("filter",
-          dark ? "url(#ray-soft-spot-dark)"
-               : thin ? "url(#ray-soft-spot-thin)" : "url(#ray-soft-spot)");
+          dark ? compact ? "url(#ray-soft-spot-dark-compact)" : "url(#ray-soft-spot-dark)"
+               : thin ? compact ? "url(#ray-soft-spot-thin-compact)" : "url(#ray-soft-spot-thin)"
+                      : compact ? "url(#ray-soft-spot-compact)" : "url(#ray-soft-spot)");
         core.setAttribute("filter",
-          dark ? "url(#ray-core-spot-dark)" : "url(#ray-core-spot)");
+          dark ? compact ? "url(#ray-core-spot-dark-compact)" : "url(#ray-core-spot-dark)"
+               : compact ? "url(#ray-core-spot-compact)" : "url(#ray-core-spot)");
       }
       {
         const sg = 26, sc = 9;
-        // The origin follows the focus vertically without going completely
-        // flat: halfway from the viewport centre on desktop, and three
-        // quarters on mobile where the shorter run otherwise exaggerates the
-        // angle at the left boundary.
-        const sourceFollow = innerWidth <= 775 ? 0.75 : 0.5;
+        // Follow the focus a little more closely on mobile, where the shorter
+        // horizontal run otherwise exaggerates the angle at the left edge.
+        // Desktop retains the original halfway rule.
+        const sourceFollow = innerWidth <= 775 ? 0.6 : 0.5;
         const viewportCenterY = scrollY + mid;
         const sy = viewportCenterY + (fy - viewportCenterY) * sourceFollow;
         const L = Math.max(cur.x, 1);
         const X = Math.max(cur.x2, L + 1);
         const half = Math.max(cur.h, 24);
-        // Continue the beam beyond the SVG's left edge by more than four
-        // standard deviations of its widest blur. Without this hidden cap,
-        // the filter samples transparency at x=0 and the ray fades exactly
-        // where it should appear to pass cleanly through the page boundary.
-        const SOURCE_OVERSCAN = 192;
+        // On mobile, continue the ray well beyond the left edge so the blur
+        // samples beam rather than transparency at the viewport boundary.
+        const sourceOverscan = innerWidth <= 775 ? 256 : 0;
         const shapePts = (pad, src, overscan = 0) => {
           const t2 = fy - half - pad, b = fy + half + pad;
           const pts = [[-overscan, sy - src]];
@@ -528,13 +546,13 @@
           pts.push([-overscan, sy + src]);
           return pts;
         };
-        const gp = shapePts(dark ? 20 : 12, sg, SOURCE_OVERSCAN);
-        const cp = shapePts(2, sc, SOURCE_OVERSCAN);
+        const gp = shapePts(dark ? 20 : 12, sg, sourceOverscan);
+        const cp = shapePts(2, sc, sourceOverscan);
         const visibleCp = shapePts(2, sc);
         glow.setAttribute("points", gp.map((p) => p.join(",")).join(" "));
         core.setAttribute("points", cp.map((p) => p.join(",")).join(" "));
-        // The geometry now extends left, so pin the gradient to the visible
-        // ray (x=0 through the target) instead of its enlarged bounding box.
+        // Keep the gradient fixed to the visible portion of the ray rather
+        // than allowing the mobile-only cap to shift its stops.
         edgeGradient.setAttribute("x2", String(X));
         bodyGradient.setAttribute("x2", String(X));
         let a2 = 0;
@@ -551,22 +569,15 @@
         const f = Math.min(1, Math.max(0.3, Math.pow(0.0108 / distanceNormalizedFrac, 0.7)));
         glow.setAttribute("fill-opacity", f.toFixed(3));
         core.setAttribute("fill-opacity", f.toFixed(3));
-        // Keep the wash anchored inside the target at the original handoff
-        // point. For narrow targets, compress only its soft apex so the fade
-        // begins around the target's first quarter and reaches full strength
-        // by the ray's midpoint instead of leaving a dark seam between them.
-        const px = Math.round(L + (X - L) * 0.25);
-        const apexWidth = Math.round(Math.min(24, Math.max(1, (X - px - 6) / 2.5)) * 10) / 10;
-        const py = Math.round(fy - scrollY);
+        const px = Math.round(L + (X - L) * 0.25), py = Math.round(fy - scrollY);
         const ph = Math.round(half);
         washDocY = fy;
-        if (px !== washX || py !== washY || ph !== washH || apexWidth !== washApex) {
-          washX = px; washY = py; washH = ph; washApex = apexWidth;
+        if (px !== washX || py !== washY || ph !== washH) {
+          washX = px; washY = py; washH = ph;
           const s = document.documentElement.style;
           s.setProperty("--fx", px + "px");
           s.setProperty("--fy", py + "px");
           s.setProperty("--fh", ph + "px");
-          s.setProperty("--apex-width", apexWidth + "px");
           // Past the midpoint the wash has less room to fan out. Preserve its
           // color strength, but widen the angular feather so the compressed
           // wedge still dissolves gently at its boundaries.

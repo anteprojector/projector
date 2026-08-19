@@ -34,10 +34,11 @@
   --spec-b: #4f7fbb;
   --spec-v: #7b5fb5;
   --spec-a: 0.32;    /* even, luminous wash without overpowering the page */
-  /* Keep the beam close to neutral white. The edge carries only a trace of
-     coolness so the halo separates from the body without reading yellow. */
-  --ray-edge: #f5f7ff;
-  --ray-body: #fcfdff;
+  /* On paper the beam is warm light throughout: a pale yellow body with a
+     slightly warmer soft glow, never a dark outline. Dark mode overrides
+     both back to white light. */
+  --ray-edge: #fff0ad;
+  --ray-body: #fff8d8;
   /* terminal roles */
   --t-actor: #6d28d9;
   --t-state: #8a5a00;
@@ -125,9 +126,9 @@
 
 * { box-sizing: border-box; }
 
-/* Locked to the viewport's width: anything that pokes past the edge (the
-   composer's mic, a blur halo) is clipped, never a horizontal scroll. clip,
-   not hidden, so no scroll container is created. */
+/* Locked to the viewport's width: anything that pokes past the edge (such as
+   a blur halo) is clipped, never a horizontal scroll. clip, not hidden, so no
+   scroll container is created. */
 html {
   font-size: 125%;
   overflow-x: clip;
@@ -406,7 +407,6 @@ body {
   --fy: 50vh;
   --fh: 40px;   /* the target's half-height, published by the tracker */
   --fw: 36px;   /* horizontally the origin is a point; vertically it isn't */
-  --apex-width: 24px;
   --wedge-half: 38deg;
   --wedge-feather: 30deg;
   --apex-fill: 0;
@@ -430,7 +430,7 @@ body {
      and fades in outward, so the wash opens at the height of the thing the
      ray is lighting rather than at a vertex. Horizontally tight, so it only
      eats the apex and not the body of the wedge. */
-  --apex: radial-gradient(var(--apex-width) var(--fh) at var(--fx) var(--fy),
+  --apex: radial-gradient(24px var(--fh) at var(--fx) var(--fy),
     rgba(0, 0, 0, var(--apex-fill)) 0,
     rgba(0, 0, 0, var(--apex-fill)) 100%,
     rgba(0, 0, 0, var(--apex-mid)) 150%,
@@ -1225,12 +1225,9 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 .talk-clear:hover { color: var(--ink); }
 .talk-input:placeholder-shown + .talk-clear { display: none; }
 .talk-mic {
-  position: absolute;
-  top: 50%;
-  left: calc(100% + 0.5rem);
+  flex: none;
   color: var(--faint);
   cursor: default;
-  transform: translateY(-50%);
 }
 .talk-mic[disabled] { opacity: 0.55; }
 .talk-go {
@@ -1285,12 +1282,19 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 }
 .past-row {
   display: flex;
+  align-items: stretch;
+  width: 100%;
+  border-bottom: 1px solid var(--rule);
+}
+.past-row:last-child { border-bottom: 0; }
+.past-open {
+  display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 0.75rem;
-  width: 100%;
+  min-width: 0;
+  flex: 1;
   border: 0;
-  border-bottom: 1px solid var(--rule);
   background: none;
   padding: 0.5rem 0.25rem;
   font: inherit;
@@ -1299,9 +1303,30 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   text-align: left;
   cursor: pointer;
 }
-.past-row:last-child { border-bottom: 0; }
-.past-row:hover .past-title { color: var(--accent); }
-.past-row:focus-visible { outline: 2px solid var(--ink); outline-offset: -0.125rem; border-radius: 0.25rem; }
+.past-open:hover .past-title { color: var(--accent); }
+.past-open:focus-visible,
+.past-remove:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: -0.125rem;
+  border-radius: 0.25rem;
+}
+.past-remove {
+  flex: 0 0 auto;
+  width: 2rem;
+  border: 0;
+  background: none;
+  color: var(--faint);
+  font: 400 1rem/1 var(--sans);
+  cursor: pointer;
+}
+.past-remove:hover { color: var(--ink); }
+.past-remove[data-confirm] {
+  width: 4.5rem;
+  color: var(--ink);
+  font: 600 0.5625rem/1 var(--mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
 .past-title {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1328,13 +1353,6 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
    Narrow and short viewports. These blocks live below every base rule they
    override — same specificity, so order is what makes them win.
    --------------------------------------------------------------------------- */
-
-/* The mic hangs outside the card's right edge; once the card is near the
-   viewport's width it has no room to live in. It's a disabled teaser — drop
-   it rather than let it clip. */
-@media (max-width: 800px) {
-  .talk-mic { display: none; }
-}
 
 @media (max-width: 775px) {
   :root { --nav-height: 3.5rem; }
@@ -1433,7 +1451,6 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   }
   .talk { margin: 0 auto; }
   .talk-explainers { width: min(100%, 44rem); margin: 1.25rem auto 0; }
-  .talk-mic { display: none; }
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1536,17 +1553,16 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   flex: 1;
   min-height: 0;
 }
-/* The pane toggles: pinned to the body's top corners, above the panes. Same
-   button whether its pane is open (minimize) or closed (open) — it never
-   moves, and it never lives in the nav. */
+/* Pane chips sit beneath the nav on desktop. Mobile pulls the same controls
+   upward onto the rule, turning them into contextual page navigation. */
 .pane-toggle {
   position: absolute;
-  top: 0.55rem;
+  top: 0.75rem;
   z-index: 6;
 }
-.pane-toggle-left { left: 0.75rem; }
-.pane-toggle-right { right: 0.75rem; }
-.pane-toggle-label { display: none; }
+.pane-toggle-left { left: 1rem; }
+.pane-toggle-right { right: 1rem; }
+.pane-toggle-label { display: inline; white-space: nowrap; }
 /* A response that also wrote the app surface ends with this offer; rendered
    only while the pane isn't on screen. Same chip language as .xp-asks. */
 .msg-open-pane {
@@ -1573,6 +1589,42 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   flex: 1;
   overflow-y: auto;
   scroll-behavior: smooth;
+}
+.app-scroll,
+.app-pane-body,
+.app-inspector-body {
+  scrollbar-gutter: auto;
+}
+@supports not selector(::-webkit-scrollbar) {
+  .app-scroll,
+  .app-pane-body,
+  .app-inspector-body {
+    scrollbar-color: color-mix(in srgb, var(--ink) 24%, transparent) transparent;
+    scrollbar-width: thin;
+  }
+}
+.app-scroll::-webkit-scrollbar,
+.app-pane-body::-webkit-scrollbar,
+.app-inspector-body::-webkit-scrollbar {
+  width: 0.25rem;
+  height: 0.25rem;
+  background: transparent;
+}
+.app-scroll::-webkit-scrollbar-track,
+.app-pane-body::-webkit-scrollbar-track,
+.app-inspector-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.app-scroll::-webkit-scrollbar-thumb,
+.app-pane-body::-webkit-scrollbar-thumb,
+.app-inspector-body::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 24%, transparent);
+}
+.app-scroll:hover::-webkit-scrollbar-thumb,
+.app-pane-body:hover::-webkit-scrollbar-thumb,
+.app-inspector-body:hover::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--ink) 42%, transparent);
 }
 .app-thread {
   max-width: 44rem;
@@ -1746,6 +1798,33 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   stroke-width: 1.5;
   stroke-linejoin: round;
 }
+.pane-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  min-height: 1.25rem;
+  border: 1px solid var(--rule);
+  border-radius: 0.25rem;
+  padding: 0.0625rem 0.5rem;
+  background: var(--bg);
+  color: var(--muted);
+  font: 500 0.625rem/1 var(--mono);
+  letter-spacing: 0.02em;
+  transition: color 0.12s, border-color 0.12s, opacity 0.12s;
+}
+.pane-toggle:hover { color: var(--ink); border-color: var(--ink); }
+.pane-toggle svg { display: block; }
+.pane-toggle > svg:not(.pane-toggle-close) {
+  width: 0.625rem;
+  height: 0.625rem;
+}
+.pane-toggle .pane-toggle-close {
+  display: block;
+  width: 0.75rem;
+  height: 0.75rem;
+  stroke-linecap: round;
+}
 .app-pane-spacer { flex: 1; }
 
 /* Drag rails: a slim grab strip straddling each pane's inner edge. Width is
@@ -1779,8 +1858,8 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   display: flex;
   align-items: center;
   gap: 0.25rem;
-  /* Left inset clears the floating pane toggle sitting over this header. */
-  padding: 0.625rem 0.75rem 0.625rem 2.5rem;
+  /* Left inset clears the floating app chip sitting over this header. */
+  padding: 0.625rem 0.75rem 0.625rem 3.25rem;
   border-bottom: 1px solid var(--rule);
 }
 .app-pane-title {
@@ -1818,27 +1897,15 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
    (z 5) and below the toggles. */
 @media (max-width: 900px) {
   .pane-resize { display: none; }
+  .pane-toggle svg { display: none; }
   .pane-toggle {
     top: 0;
     z-index: 7;
-    min-height: 1.25rem;
-    border: 1px solid var(--rule);
-    border-radius: 0.25rem;
-    padding: 0.0625rem 0.5rem;
-    background: var(--bg);
-    color: var(--muted);
-    font: 500 0.625rem/1 var(--mono);
-    letter-spacing: 0.02em;
     transform: translateY(-50%);
-    transition: color 0.12s, border-color 0.12s, opacity 0.12s;
   }
-  .pane-toggle-left { left: 1rem; }
-  .pane-toggle-right { right: 1rem; }
   /* Touch browsers can retain :hover after a tap; keep the newly revealed
      pager chip quiet unless the device has a real hovering pointer. */
   .pane-toggle:hover { color: var(--muted); border-color: var(--rule); }
-  .pane-toggle svg { display: none; }
-  .pane-toggle-label { display: inline; white-space: nowrap; }
   .pane-toggle[data-mobile-hidden] {
     visibility: hidden;
     opacity: 0;
@@ -2000,8 +2067,8 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 .app-inspector-head {
   display: flex;
   gap: 0.25rem;
-  /* Right inset clears the floating pane toggle sitting over this header. */
-  padding: 0.625rem 2.5rem 0.625rem 0.75rem;
+  /* Right inset clears the floating inspector chip sitting over this header. */
+  padding: 0.625rem 3.25rem 0.625rem 0.75rem;
   border-bottom: 1px solid var(--rule);
 }
 .app-inspector-head button {
@@ -2048,6 +2115,70 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 }
 .state-json .k { color: var(--ink); }
 .inspector-empty { color: var(--faint); padding: 1rem 0.25rem; }
+.inspector-overview {
+  font-family: var(--sans);
+  padding: 0.25rem;
+}
+.inspector-overview-label {
+  margin: 0 0 1rem;
+  color: var(--muted);
+  font: 600 0.625rem/1.2 var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.inspector-title-form label {
+  display: block;
+  margin-bottom: 0.375rem;
+  color: var(--faint);
+  font: 500 0.6875rem/1.4 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.inspector-title-control {
+  display: flex;
+  align-items: stretch;
+  gap: 0.375rem;
+}
+.inspector-title-control input {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid var(--rule);
+  border-radius: 0.375rem;
+  background: var(--bg);
+  color: var(--ink);
+  padding: 0.5rem 0.625rem;
+  font: 400 0.8125rem/1.35 var(--sans);
+}
+.inspector-title-control input:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 0.125rem;
+}
+.inspector-title-control button {
+  border: 1px solid var(--ink);
+  border-radius: 0.375rem;
+  background: var(--ink);
+  color: var(--bg);
+  padding: 0.5rem 0.625rem;
+  font: 600 0.625rem/1 var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.inspector-title-control button:disabled {
+  border-color: var(--rule);
+  background: var(--wash);
+  color: var(--faint);
+  cursor: default;
+}
+.inspector-title-control button:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 0.125rem;
+}
+.inspector-title-status {
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+  font: 400 0.6875rem/1.4 var(--sans);
+}
 
 /* ------------------------------------------------------------------------- */
 /* Agent-authored surfaces in the app pane. The surface's own styles live in */
