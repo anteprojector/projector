@@ -956,6 +956,42 @@ describe("state resolution and state projection", () => {
       resolveStates({ id: "r", isSource: true, node: erroring, states: { x: { value: "bad" } } }),
     ).toThrow(/invalid/);
   });
+
+  it("heals schema-evolved object state by merging init under the existing value", () => {
+    // The common evolution: a new required field. The existing value keeps
+    // everything it had; init fills only what is missing.
+    const evolved = createNode({
+      key: "evolved",
+      states: [
+        {
+          key: "panes",
+          schema: z.object({ open: z.boolean(), width: z.number() }),
+          init: { open: false, width: 22 },
+          onInitConflict: "replace",
+        },
+      ],
+    });
+    const instance: Instance = {
+      id: "r",
+      isSource: true,
+      node: evolved,
+      states: { panes: { value: { open: true } } },
+    };
+    const resets: unknown[] = [];
+    resolveStates(instance, { onReset: (reset) => resets.push(reset) });
+    expect(instance.states?.panes?.value).toEqual({ open: true, width: 22 });
+    expect(resets).toHaveLength(1);
+
+    // A field whose type broke can't be healed by merging: full init reset.
+    const broken: Instance = {
+      id: "r",
+      isSource: true,
+      node: evolved,
+      states: { panes: { value: { open: "yes" } } },
+    };
+    resolveStates(broken);
+    expect(broken.states?.panes?.value).toEqual({ open: false, width: 22 });
+  });
 });
 
 describe("retrieval aliases", () => {

@@ -78,19 +78,22 @@ function findPanesEntry(value: unknown): PanesEntry | undefined {
 }
 
 type SurfaceMeta = { version: number; title: string; lastError: string | null };
+type SurfaceArtifact = { version: number; title: string; source: string };
 
-function findSurface(instances: unknown): (SurfaceMeta & { source: string }) | null {
+// The surface's TSX is a server-side artifact (sessions.get joins the latest
+// artifacts row); machine state carries only the small meta — lastError is
+// the piece the pane still reads from it.
+function findSurface(
+  instances: unknown,
+  artifact: SurfaceArtifact | null | undefined,
+): (SurfaceMeta & { source: string }) | null {
+  if (!artifact?.source) return null;
   const meta = findStateEntry(instances, "appSurface")?.value as Partial<SurfaceMeta> | undefined;
-  const sourceEntry = findStateEntry(instances, "appSurfaceSource")?.value as
-    | { source?: unknown }
-    | undefined;
-  const source = typeof sourceEntry?.source === "string" ? sourceEntry.source : "";
-  if (!meta || typeof meta.version !== "number" || meta.version < 1 || !source) return null;
   return {
-    version: meta.version,
-    title: typeof meta.title === "string" ? meta.title : "",
-    lastError: typeof meta.lastError === "string" ? meta.lastError : null,
-    source,
+    version: artifact.version,
+    title: artifact.title,
+    lastError: typeof meta?.lastError === "string" ? meta.lastError : null,
+    source: artifact.source,
   };
 }
 
@@ -311,7 +314,8 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
   // The surface api is the effigy itself, thinly wrapped — agent-authored UI
   // reads the same projection and runs the same commands as the shell.
   const surfaceApi = useMemo(() => createSurfaceApi(effigy), [effigy]);
-  const surface = findSurface(effigy.getInstances());
+  const surfaceArtifact = (session as { surface?: SurfaceArtifact | null } | undefined)?.surface;
+  const surface = findSurface(effigy.getInstances(), surfaceArtifact);
   const reportSurfaceError = useCallback(
     (error: string) => {
       if (!sessionIdRef.current) return;
@@ -944,8 +948,8 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
 }
 
 // The left pane: the app surface. Renders whatever writeAppSurface last
-// wrote — the surface is machine state, so it survives refresh and its
-// whole history sits in the frame log.
+// wrote — the source is an immutable server-side artifact (every version is
+// kept), with the small meta (version/title/lastError) in machine state.
 function AppPane({ width, onResizeStart, surface, api, onSurfaceError, onAsk }: {
   width: number;
   onResizeStart: (e: React.PointerEvent) => void;

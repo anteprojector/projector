@@ -40,6 +40,23 @@ export default defineSchema({
     .index("by_session_instance", ["sessionId", "instanceId"])
     .index("by_frame", ["frameId"]),
 
+  // Generative UI, immutable and versioned. The app surface's TSX source
+  // lives here — NOT in machine state — so charter/state-schema evolution can
+  // never reset it, instance snapshots stay small, and every version remains
+  // recoverable (and LLM-migratable) forever. Rows are append-only.
+  artifacts: defineTable({
+    sessionId: v.id("sessions"),
+    kind: v.literal("surface"),
+    version: v.number(),
+    title: v.string(),
+    source: v.string(),
+    frameId: v.optional(v.id("frames")),
+    // The charter version that authored this artifact — the hook for an
+    // LLM-led migration pass if the surface contract ever changes.
+    charterVersion: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_session_kind_version", ["sessionId", "kind", "version"]),
+
   messages: defineTable({
     frameId: v.optional(v.id("frames")),
     role: v.union(v.literal("user"), v.literal("assistant")),

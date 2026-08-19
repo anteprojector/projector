@@ -9,6 +9,7 @@
  */
 
 import type * as agent from "../agent.js";
+import type * as artifacts from "../artifacts.js";
 import type * as convexJson from "../convexJson.js";
 import type * as frameHistory from "../frameHistory.js";
 import type * as messages from "../messages.js";
@@ -23,6 +24,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   agent: typeof agent;
+  artifacts: typeof artifacts;
   convexJson: typeof convexJson;
   frameHistory: typeof frameHistory;
   messages: typeof messages;

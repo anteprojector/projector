@@ -34,6 +34,11 @@ import {
   siteCharter,
 } from "../src/agent/charter";
 import { addMessageInternal } from "./messages";
+import {
+  getLatestSurfaceArtifact,
+  readLegacySurface,
+  recordSurfaceArtifacts,
+} from "./artifacts";
 import { escapeConvexJson, restoreConvexJson, stripClientSchemas } from "./convexJson";
 import {
   getFrameIndexForSession,
@@ -108,6 +113,10 @@ export const get = query({
     frameId: v.id("frames"),
     clientSnapshot: v.any(),
     syncState: v.any(),
+    surface: v.union(
+      v.null(),
+      v.object({ version: v.number(), title: v.string(), source: v.string() }),
+    ),
   }),
   handler: async (ctx, { sessionId }) => {
     const session = await ctx.db.get(sessionId);
@@ -124,12 +133,21 @@ export const get = query({
       createSiteClientSnapshot(latestInstance, syncState),
     );
 
+    // The surface's TSX lives in the artifacts table, not machine state; the
+    // legacy read keeps pre-artifacts sessions rendering from the source their
+    // snapshots still carry.
+    const artifact = await getLatestSurfaceArtifact(ctx, sessionId);
+    const surface = artifact
+      ? { version: artifact.version, title: artifact.title, source: artifact.source }
+      : readLegacySurface(latestInstance);
+
     return {
       sessionId,
       ...(session.title !== undefined ? { title: session.title } : {}),
       frameId: latestFrame._id,
       clientSnapshot,
       syncState,
+      surface,
     };
   },
 });
@@ -355,6 +373,7 @@ export async function appendMachineFrameInternal(
     contextEpoch: session.contextEpoch,
   });
   await applyFrameInstanceMessages(ctx, sessionId, frameId, frame.messages);
+  await recordSurfaceArtifacts(ctx, { sessionId, frameId, messages: frame.messages });
   await recordFrameCommandResidue(ctx, sessionId, frame.messages);
   return frameId;
 }

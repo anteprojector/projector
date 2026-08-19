@@ -18,6 +18,7 @@ import { action, internalAction, type ActionCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import {
   COMMENTARY_ACTION_NAME,
+  GET_SURFACE_SOURCE_ACTION_NAME,
   hydrateSiteInstance,
   readCardData,
   siteCharter,
@@ -202,6 +203,17 @@ function createExecutor(
               messageId: toolCallId,
             } as FrameMessage,
           ],
+        });
+      }
+      // The surface's TSX lives in the artifacts table, not machine state, so
+      // retrieval is an executor concern: read the latest artifact here.
+      if (action.name === GET_SURFACE_SOURCE_ACTION_NAME) {
+        const surface: { version: number; title: string; source: string } | null =
+          await ctx.runQuery(internal.artifacts.latestSurfaceSource, { sessionId });
+        return actionResult({
+          value: surface
+            ? `app surface v${surface.version} "${surface.title}":\n\n${surface.source}`
+            : "no app surface has been written yet",
         });
       }
       return await action.run?.(input as never, context as never);

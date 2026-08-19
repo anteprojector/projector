@@ -113,11 +113,12 @@ const setPanes = createAction({
   },
 });
 
-// --- The app surface: agent-authored UI rendered in the left pane. Split
-// into two descriptors so each gets the projection policy it needs: the meta
-// state renders natively every turn (small, always relevant), while the TSX
-// source sits behind deferred exposure — the model retrieves it with getState
-// only when it wants to edit, so the prompt stays small and cache-stable.
+// --- The app surface: agent-authored UI rendered in the left pane. The meta
+// state renders natively every turn (small, always relevant); the TSX source
+// itself is NOT machine state — every write lands as an immutable, versioned
+// row in the Convex artifacts table (see convex/artifacts.ts), so surfaces
+// survive any state-schema evolution and keep instance snapshots small. The
+// model retrieves the current source with the getSurfaceSource tool.
 
 const appSurfaceSchema = z.object({
   version: z.number(),
@@ -135,26 +136,24 @@ export const appSurfaceState = createState({
       const surface = appSurfaceSchema.parse(value);
       if (surface.version === 0) return "app surface: none written yet";
       const error = surface.lastError
-        ? ` — lastError: ${surface.lastError} (your surface is broken: getState its source, fix it, and writeAppSurface again)`
+        ? ` — lastError: ${surface.lastError} (your surface is broken: getSurfaceSource, fix it, and writeAppSurface again)`
         : "";
-      return `app surface: v${surface.version} "${surface.title}"${error}`;
+      return `app surface: v${surface.version} "${surface.title}" (source retrievable with getSurfaceSource)${error}`;
     },
   },
 });
 
-const appSurfaceSourceSchema = z.object({
-  source: z.string().max(32_000),
-});
-
-export const appSurfaceSourceState = createState({
-  key: "appSurfaceSource",
-  schema: appSurfaceSourceSchema,
-  init: { source: "" } satisfies z.infer<typeof appSurfaceSourceSchema>,
-  projection: {
-    exposure: "deferred",
-    note: (address) =>
-      `The current app surface's TSX source is retrievable with getState at address "${address}" — retrieve it before making incremental edits.`,
-  },
+// Executor-implemented (agent.ts intercepts by name and reads the artifacts
+// table); this run only answers if something other than the agent executor
+// ever invokes it.
+export const GET_SURFACE_SOURCE_ACTION_NAME = "getSurfaceSource";
+const getSurfaceSource = createAction({
+  state: null,
+  name: GET_SURFACE_SOURCE_ACTION_NAME,
+  description:
+    "Retrieve the current app surface's TSX source (the latest writeAppSurface artifact). Call this before making incremental edits so you patch what is actually rendered.",
+  inputSchema: z.object({}),
+  run: () => "surface source is only retrievable during an agent turn",
 });
 
 // The design brief both UI-authoring tools carry. The failure mode without
@@ -172,7 +171,7 @@ const DESIGN_BRIEF = `Design brief — quiet, minimal, modern; a tool, not a pos
 const writeAppSurface = createAction({
   state: appSurfaceState,
   name: "writeAppSurface",
-  description: `Write (or replace) the app surface — the UI rendered in the left app pane. There is one surface; writing replaces it (every prior version stays in the frame log).
+  description: `Write (or replace) the app surface — the UI rendered in the left app pane. There is one surface; writing replaces it (every version is kept as an immutable artifact). For incremental edits, getSurfaceSource first and patch what is actually rendered.
 
 The source is a single TSX module. Contract:
 - Default-export a React function component: \`export default function Surface({ api }) { ... }\`.
@@ -195,7 +194,7 @@ ${DESIGN_BRIEF}
 - To have the agent respond to an interaction, call api.run("appPanePing", { message, data? }). Await any updateState call first so the agent sees the resulting state. Use this only when a conversational reaction adds value; routine controls should stay silent.
 - Keep it focused and under 32KB.
 
-A compile or runtime error in your surface lands in appSurface.lastError; the previous working version is one frame back in the log.`,
+A compile or runtime error in your surface lands in appSurface.lastError; the previous working version is one artifact back (getSurfaceSource returns the latest).`,
   inputSchema: z.object({
     title: z.string(),
     source: z.string().min(1).max(32_000),
@@ -204,10 +203,13 @@ A compile or runtime error in your surface lands in appSurface.lastError; the pr
       .optional()
       .describe("Open the app pane so the surface is visible. Default true; pass false for silent edits."),
   }),
-  run: ({ title, source, requestOpenPane }, ctx) => {
+  // The source deliberately does not touch machine state: the action request
+  // carries it into the frame log, and the persistence layer folds it into
+  // the artifacts table (convex/artifacts.ts). Only the small meta state
+  // updates here.
+  run: ({ title, requestOpenPane }, ctx) => {
     const version = (ctx.state?.version ?? 0) + 1;
     ctx.updateState?.(patchState({ version, title, lastError: null }));
-    ctx.updateStateAt?.(appSurfaceSourceState, patchState({ source }));
     if (requestOpenPane !== false) {
       ctx.updateStateAt?.(panesState, patchState({ app: true }));
     }
@@ -393,10 +395,11 @@ Writes are validated against the target state's schema and land as durable frame
 const uiNode = createNode({
   key: "ui",
   name: "site ui",
-  states: [panesState, appSurfaceState, appSurfaceSourceState],
+  states: [panesState, appSurfaceState],
   parts: [
     action(setPanes, "any"),
     action(writeAppSurface, "any"),
+    action(getSurfaceSource, "any"),
     action(updateStateAction, "any"),
   ],
   commands: [reportSurfaceError, appPanePing],
@@ -489,11 +492,11 @@ export const siteCharter = createCharter({
   params: siteParamsSchema,
   nodes: [guideNode, uiNode],
   tools: [noteAudience, sendCommentary],
-  actions: [setPanes, writeAppSurface, spawnChild, cedeChild, updateStateAction, postCard],
+  actions: [setPanes, writeAppSurface, getSurfaceSource, spawnChild, cedeChild, updateStateAction, postCard],
   commands: [reportSurfaceError, appPanePing],
   // appSurface carries projection code (render/note), so registration is
   // required, not just preferred.
-  states: [audienceState, panesState, appSurfaceState, appSurfaceSourceState],
+  states: [audienceState, panesState, appSurfaceState],
 });
 
 // --- Instance lifecycle. The durable artifact is the serialized SOURCE
@@ -520,8 +523,22 @@ export const hydrateSourceInstance = (serialized: SerializedInstance): Instance 
   if (!(instance.children ?? []).some((child) => child.id === "ui")) {
     instance.children = [...(instance.children ?? []), { id: "ui", node: uiNode }];
   }
+  // The surface's TSX moved out of machine state into the artifacts table;
+  // drop the orphaned legacy container so old sessions stop re-serializing a
+  // dead 30k string into every snapshot. Run artifacts:backfillSurfaceArtifacts
+  // before shipping this to a deployment that has legacy sessions.
+  pruneStateContainers(instance, "appSurfaceSource");
   resolveStates(instance);
   return instance;
+};
+
+const pruneStateContainers = (instance: Instance, stateKey: string): void => {
+  if (instance.states && stateKey in instance.states) {
+    delete instance.states[stateKey];
+  }
+  for (const child of instance.children ?? []) {
+    pruneStateContainers(child, stateKey);
+  }
 };
 
 export const serializeSourceInstance = (instance: Instance): SerializedInstance => {
