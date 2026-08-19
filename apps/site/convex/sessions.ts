@@ -373,7 +373,6 @@ export async function appendMachineFrameInternal(
     contextEpoch: session.contextEpoch,
   });
   await applyFrameInstanceMessages(ctx, sessionId, frameId, frame.messages);
-  await recordSurfaceArtifacts(ctx, { sessionId, frameId, messages: frame.messages });
   await recordFrameCommandResidue(ctx, sessionId, frame.messages);
   return frameId;
 }
@@ -405,6 +404,17 @@ async function appendMachineFrameSequenceInternal(
     frameIds.push(frameId);
     currentReferenceFrameId = frameId;
   }
+
+  // Sequence-scoped on purpose: the machine emits one message per frame, so a
+  // writeAppSurface's request and result arrive in different frames of the
+  // same appended run.
+  await recordSurfaceArtifacts(ctx, {
+    sessionId,
+    entries: frames.map((frame, index) => ({
+      frameId: frameIds[index],
+      messages: frame.messages,
+    })),
+  });
 
   return frameIds;
 }

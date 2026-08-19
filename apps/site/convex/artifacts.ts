@@ -51,55 +51,81 @@ export const latestSurfaceSource = internalQuery({
   },
 });
 
-// Frame messages are already restored (plain JSON) when this runs. Each
-// successful writeAppSurface pairs its request (title + source) with the
-// version its state.update stamped on appSurface, in frame order.
+type FrameEntry = { frameId?: Id<"frames">; messages: readonly unknown[] };
+type SurfaceWrite = {
+  title: string;
+  source: string;
+  version?: number;
+  frameId?: Id<"frames">;
+};
+
+// The machine emits one message per frame, so a writeAppSurface's request,
+// its state.update (which stamps the version), and its result land in
+// SEPARATE frames — pairing must happen across the whole appended sequence,
+// never per frame. Versions pair with writes positionally, and only when the
+// counts agree (a failed write can leave a stray state.update behind).
+export function collectSurfaceWrites(entries: readonly FrameEntry[]): SurfaceWrite[] {
+  const requests = new Map<string, { title: string; source: string }>();
+  const results: Array<{ callId: string; frameId?: Id<"frames"> }> = [];
+  const versions: number[] = [];
+
+  for (const { frameId, messages } of entries) {
+    for (const raw of messages) {
+      const message = raw as Record<string, unknown>;
+      if (message.type === "action" && message.name === "writeAppSurface") {
+        if (message.kind === "request" && typeof message.callId === "string") {
+          const input = message.input as { title?: unknown; source?: unknown } | undefined;
+          if (typeof input?.title === "string" && typeof input?.source === "string") {
+            requests.set(message.callId, { title: input.title, source: input.source });
+          }
+        }
+        if (
+          message.kind === "result" &&
+          message.success === true &&
+          typeof message.callId === "string"
+        ) {
+          results.push({ callId: message.callId, frameId });
+        }
+      }
+      if (
+        message.type === "instance" &&
+        message.kind === "state.update" &&
+        message.stateKey === "appSurface"
+      ) {
+        const update = message.update as { value?: { version?: unknown } } | undefined;
+        if (typeof update?.value?.version === "number") versions.push(update.value.version);
+      }
+    }
+  }
+
+  const writes: SurfaceWrite[] = [];
+  for (const result of results) {
+    const request = requests.get(result.callId);
+    if (request) writes.push({ ...request, frameId: result.frameId });
+  }
+  if (versions.length === writes.length) {
+    for (const [index, write] of writes.entries()) write.version = versions[index];
+  }
+  return writes;
+}
+
 export async function recordSurfaceArtifacts(
   ctx: MutationCtx,
   {
     sessionId,
-    frameId,
-    messages,
+    entries,
   }: {
     sessionId: Id<"sessions">;
-    frameId: Id<"frames">;
-    messages: readonly unknown[];
+    entries: readonly FrameEntry[];
   },
 ): Promise<void> {
-  const requests = new Map<string, { title: string; source: string }>();
-  const writes: Array<{ title: string; source: string }> = [];
-  const versions: number[] = [];
-
-  for (const raw of messages) {
-    const message = raw as Record<string, unknown>;
-    if (message.type === "action" && message.name === "writeAppSurface") {
-      if (message.kind === "request" && typeof message.callId === "string") {
-        const input = message.input as { title?: unknown; source?: unknown } | undefined;
-        if (typeof input?.title === "string" && typeof input?.source === "string") {
-          requests.set(message.callId, { title: input.title, source: input.source });
-        }
-      }
-      if (
-        message.kind === "result" &&
-        message.success === true &&
-        typeof message.callId === "string"
-      ) {
-        const request = requests.get(message.callId);
-        if (request) writes.push(request);
-      }
-    }
-    if (message.type === "instance" && message.kind === "state.update" && message.stateKey === "appSurface") {
-      const update = message.update as { value?: { version?: unknown } } | undefined;
-      if (typeof update?.value?.version === "number") versions.push(update.value.version);
-    }
-  }
-
+  const writes = collectSurfaceWrites(entries);
   if (writes.length === 0) return;
 
   const latest = await getLatestSurfaceArtifact(ctx, sessionId);
   let fallbackVersion = latest?.version ?? 0;
-  for (const [index, write] of writes.entries()) {
-    const version = versions[index] ?? ++fallbackVersion;
+  for (const write of writes) {
+    const version = write.version ?? ++fallbackVersion;
     const existing = await ctx.db
       .query("artifacts")
       .withIndex("by_session_kind_version", (q) =>
@@ -113,7 +139,7 @@ export async function recordSurfaceArtifacts(
       version,
       title: write.title,
       source: write.source,
-      frameId,
+      ...(write.frameId !== undefined ? { frameId: write.frameId } : {}),
       charterVersion: siteCharter.version,
       createdAt: Date.now(),
     });
@@ -152,8 +178,11 @@ export function readLegacySurface(serialized: unknown): SurfaceArtifact | null {
   return null;
 }
 
-// One-shot: copy every legacy in-state surface into the artifacts table.
-// Idempotent — sessions that already have artifact rows are skipped. Run with
+// One-shot recovery: replay every session's frame log through the same
+// collector the live path uses (recovering full version history — the
+// request inputs carry the source), then fall back to the legacy in-state
+// snapshot for anything the frames didn't yield. Idempotent: existing
+// (session, version) rows are kept. Run with
 // `npx convex run artifacts:backfillSurfaceArtifacts`.
 export const backfillSurfaceArtifacts = internalMutation({
   args: {},
@@ -162,26 +191,59 @@ export const backfillSurfaceArtifacts = internalMutation({
     const sessions = await ctx.db.query("sessions").take(1000);
     let created = 0;
     for (const session of sessions) {
-      if (await getLatestSurfaceArtifact(ctx, session._id)) continue;
-      const logs = await ctx.db
-        .query("projectorInstanceLog")
+      const before = await countSurfaceArtifacts(ctx, session._id);
+
+      const indexRows = await ctx.db
+        .query("frameIndex")
         .withIndex("by_session", (q) => q.eq("sessionId", session._id))
-        .order("desc")
-        .take(20);
-      const legacy = logs
-        .map((log) => readLegacySurface(restoreConvexJson(log.instance)))
-        .find((surface) => surface !== null);
-      if (!legacy) continue;
-      await ctx.db.insert("artifacts", {
-        sessionId: session._id,
-        kind: "surface",
-        version: legacy.version,
-        title: legacy.title,
-        source: legacy.source,
-        createdAt: Date.now(),
-      });
-      created += 1;
+        .take(2000);
+      const entries: FrameEntry[] = [];
+      for (const row of indexRows) {
+        const frame = await ctx.db.get(row.frameId);
+        if (!frame) continue;
+        entries.push({
+          frameId: frame._id,
+          messages: restoreConvexJson(frame.messages) as unknown[],
+        });
+      }
+      await recordSurfaceArtifacts(ctx, { sessionId: session._id, entries });
+
+      if ((await countSurfaceArtifacts(ctx, session._id)) === 0) {
+        const logs = await ctx.db
+          .query("projectorInstanceLog")
+          .withIndex("by_session", (q) => q.eq("sessionId", session._id))
+          .order("desc")
+          .take(20);
+        const legacy = logs
+          .map((log) => readLegacySurface(restoreConvexJson(log.instance)))
+          .find((surface) => surface !== null);
+        if (legacy) {
+          await ctx.db.insert("artifacts", {
+            sessionId: session._id,
+            kind: "surface",
+            version: legacy.version,
+            title: legacy.title,
+            source: legacy.source,
+            createdAt: Date.now(),
+          });
+        }
+      }
+
+      created += (await countSurfaceArtifacts(ctx, session._id)) - before;
     }
     return created;
   },
 });
+
+async function countSurfaceArtifacts(
+  ctx: DbCtx,
+  sessionId: Id<"sessions">,
+): Promise<number> {
+  const rows = await ctx.db
+    .query("artifacts")
+    .withIndex("by_session_kind_version", (q) =>
+      q.eq("sessionId", sessionId).eq("kind", "surface"),
+    )
+    .take(500);
+  return rows.length;
+}
