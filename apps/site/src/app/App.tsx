@@ -5,7 +5,7 @@
 import { ConvexAuthProvider, useAuthActions, useConvexAuth } from "@convex-dev/auth/react";
 import { ConvexReactClient, useAction, useMutation, useQuery } from "convex/react";
 import { TextAlignStart } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import {
@@ -111,7 +111,87 @@ type AppProps = {
   sessionId?: string;
 };
 
+// Mobile Safari has two viewports: the layout viewport and the actually
+// visible one. Browser chrome and the software keyboard resize/offset only
+// the latter, so a fixed inset:0 shell can wind up underneath either. Keep a
+// pair of CSS variables in sync with the visual viewport; CSS still has a
+// 100dvh fallback for browsers without the API.
+function useAppViewport() {
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    const narrow = matchMedia("(max-width: 900px)");
+    const viewport = window.visualViewport;
+    let frame = 0;
+    let widest = viewport?.width ?? window.innerWidth;
+    let largestHeight = viewport?.height ?? window.innerHeight;
+
+    const isEditing = () => {
+      const active = document.activeElement;
+      return (
+        active instanceof HTMLElement &&
+        (active.matches("input, textarea, select") || active.isContentEditable)
+      );
+    };
+
+    const paint = () => {
+      frame = 0;
+      if (!narrow.matches) {
+        root.style.removeProperty("--app-viewport-height");
+        root.style.removeProperty("--app-viewport-top");
+        delete root.dataset.appKeyboard;
+        return;
+      }
+
+      const height = viewport?.height ?? window.innerHeight;
+      const width = viewport?.width ?? window.innerWidth;
+      const top = Math.max(0, viewport?.offsetTop ?? 0);
+      if (Math.abs(width - widest) > 1) {
+        widest = width;
+        largestHeight = height;
+      } else {
+        largestHeight = Math.max(largestHeight, height);
+      }
+
+      root.style.setProperty("--app-viewport-height", `${height}px`);
+      root.style.setProperty("--app-viewport-top", `${top}px`);
+
+      // Dropping the home-indicator inset while the keyboard is present
+      // avoids the large dead band iOS otherwise leaves above the keyboard.
+      const layoutGap = Math.max(0, window.innerHeight - height - top);
+      const keyboardOpen =
+        isEditing() && (largestHeight - height > 96 || layoutGap > 96);
+      root.toggleAttribute("data-app-keyboard", keyboardOpen);
+    };
+
+    const schedule = () => {
+      if (frame) cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(paint);
+    };
+
+    paint();
+    viewport?.addEventListener("resize", schedule);
+    viewport?.addEventListener("scroll", schedule);
+    narrow.addEventListener("change", schedule);
+    addEventListener("orientationchange", schedule);
+    document.addEventListener("focusin", schedule);
+    document.addEventListener("focusout", schedule);
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      viewport?.removeEventListener("resize", schedule);
+      viewport?.removeEventListener("scroll", schedule);
+      narrow.removeEventListener("change", schedule);
+      removeEventListener("orientationchange", schedule);
+      document.removeEventListener("focusin", schedule);
+      document.removeEventListener("focusout", schedule);
+      root.style.removeProperty("--app-viewport-height");
+      root.style.removeProperty("--app-viewport-top");
+      delete root.dataset.appKeyboard;
+    };
+  }, []);
+}
+
 export function App({ client, actionsUrl, initialMessage, initialTopic, sessionId }: AppProps) {
+  useAppViewport();
   if (!client) {
     return (
       <div className="app">
@@ -1025,7 +1105,9 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
                   spellCheck={false}
                   enterKeyHint="send"
                   aria-label="Message projector"
-                  autoFocus
+                  // Preserve the keyboard through the landing-to-chat handoff,
+                  // but don't summon it merely by opening an existing session.
+                  autoFocus={Boolean(initialMessage) || !isNarrow}
                 />
                 <button className="talk-mic" type="button" disabled title="voice — coming soon" aria-label="Voice input, coming soon">
                   <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
