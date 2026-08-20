@@ -18,7 +18,6 @@ import { internal } from "./_generated/api";
 import { action, internalAction, type ActionCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import {
-  COMMENTARY_ACTION_NAME,
   GET_SURFACE_SOURCE_ACTION_NAME,
   READ_SESSION_ARTIFACTS_ACTION_NAME,
   READ_SESSION_MESSAGES_ACTION_NAME,
@@ -26,24 +25,32 @@ import {
   readCardData,
   siteCharter,
 } from "../src/agent/charter";
+import { anonymousActor, type MessageActor } from "./actors";
 import { escapeConvexJson, restoreConvexJson } from "./convexJson";
 
 const MODEL_ID = process.env.OPENAI_MODEL ?? "gpt-5.6-sol";
+const STREAM_WRITE_INTERVAL_MS = 250;
 
 export const sendMessage = action({
   args: {
     sessionId: v.id("sessions"),
     text: v.string(),
+    clientMessageId: v.string(),
     guestSecret: v.optional(v.string()),
   },
   returns: v.object({ success: v.literal(true) }),
-  handler: async (ctx, { sessionId, text, guestSecret }): Promise<{ success: true }> => {
+  handler: async (
+    ctx,
+    { sessionId, text, clientMessageId, guestSecret },
+  ): Promise<{ success: true }> => {
     if (!(await getAuthUserId(ctx))) throw new Error("AUTH_REQUIRED");
     await ctx.runMutation(internal.sessions.authorizeAuthenticatedTurn, {
       sessionId,
       guestSecret,
     });
-    await runUserMessage(ctx, sessionId, text);
+    const actor = await ctx.runQuery(internal.actors.current, {});
+    if (!actor) throw new Error("AUTH_REQUIRED");
+    await runUserMessage(ctx, sessionId, text, clientMessageId, actor);
     return { success: true };
   },
 });
@@ -52,10 +59,14 @@ export const sendAnonymousMessage = internalAction({
   args: {
     sessionId: v.id("sessions"),
     text: v.string(),
+    clientMessageId: v.string(),
   },
   returns: v.object({ success: v.literal(true) }),
-  handler: async (ctx, { sessionId, text }): Promise<{ success: true }> => {
-    await runUserMessage(ctx, sessionId, text);
+  handler: async (
+    ctx,
+    { sessionId, text, clientMessageId },
+  ): Promise<{ success: true }> => {
+    await runUserMessage(ctx, sessionId, text, clientMessageId, anonymousActor(sessionId));
     return { success: true };
   },
 });
@@ -64,33 +75,46 @@ async function runUserMessage(
   ctx: ActionCtx,
   sessionId: Id<"sessions">,
   text: string,
+  clientMessageId: string,
+  actor: MessageActor,
 ): Promise<void> {
   const trimmed = text.trim();
   if (!trimmed) throw new Error("Message requires text");
+  const normalizedClientMessageId = requireClientMessageId(clientMessageId);
 
-  const { machine, referenceFrameId, streamWrites } = await loadAgentMachine(ctx, sessionId);
+  const { machine, referenceFrameId, streamWriter } = await loadAgentMachine(ctx, sessionId);
 
   // The user row is written before the run so it sorts ahead of the
   // assistant's streaming rows (createdAt is the thread order). The frame
   // persistence pass later finds it by the same idempotency key — derived
   // from this messageId — and patches on the real frameId.
-  const userMessageId = crypto.randomUUID();
+  const userMessageId = `${actor.id}:${normalizedClientMessageId}`;
   await ctx.runMutation(internal.messages.add, {
     sessionId,
     role: "user",
     content: trimmed,
+    actor,
+    clientMessageId: normalizedClientMessageId,
     idempotencyKey: `user:${userMessageId}`,
   });
 
   machine.enqueueFrame({
-    messages: [{ type: "user", text: trimmed, messageId: userMessageId }],
+    messages: [
+      {
+        type: "user",
+        text: trimmed,
+        actor,
+        clientMessageId: normalizedClientMessageId,
+        messageId: userMessageId,
+      },
+    ],
   });
 
   await runAndPersistAgent(ctx, {
     sessionId,
     machine,
     referenceFrameId,
-    streamWrites,
+    streamWriter,
   });
 }
 
@@ -103,12 +127,12 @@ export const continueAfterCommand = internalAction({
   returns: v.null(),
   handler: async (ctx, { sessionId }) => {
     try {
-      const { machine, referenceFrameId, streamWrites } = await loadAgentMachine(ctx, sessionId);
+      const { machine, referenceFrameId, streamWriter } = await loadAgentMachine(ctx, sessionId);
       await runAndPersistAgent(ctx, {
         sessionId,
         machine,
         referenceFrameId,
-        streamWrites,
+        streamWriter,
       });
     } finally {
       // The frame-persist mutation clears workStartedAt transactionally; this
@@ -135,15 +159,15 @@ async function loadAgentMachine(ctx: ActionCtx, sessionId: Id<"sessions">) {
   const contextFrames = restoreConvexJson(
     await ctx.runQuery(internal.sessions.listMachineContextFrames, { sessionId }),
   ) as Frame[];
-  const streamWrites: Promise<void>[] = [];
+  const streamWriter = createStreamWriter(ctx, sessionId);
   const machine = createMachine({
     id: sessionId,
     instance,
     charter: siteCharter,
-    executor: createExecutor(ctx, sessionId, streamWrites),
+    executor: createExecutor(ctx, sessionId, streamWriter),
     frames: contextFrames,
   });
-  return { machine, referenceFrameId: session.frameId, streamWrites };
+  return { machine, referenceFrameId: session.frameId, streamWriter };
 }
 
 async function runAndPersistAgent(
@@ -152,20 +176,24 @@ async function runAndPersistAgent(
     sessionId,
     machine,
     referenceFrameId,
-    streamWrites,
+    streamWriter,
   }: {
     sessionId: Id<"sessions">;
     machine: Machine;
     referenceFrameId: Id<"frames">;
-    streamWrites: Promise<void>[];
+    streamWriter: StreamWriter;
   },
 ): Promise<void> {
   const producedFrames: Frame[] = [];
-  for await (const frame of runMachine(machine)) {
-    producedFrames.push(frame);
+  try {
+    for await (const frame of runMachine(machine)) {
+      producedFrames.push(frame);
+    }
+  } finally {
+    // The executor reports stream failures out-of-band too. Always drain its
+    // final delta or terminal marker, even when model/tool execution throws.
+    await streamWriter.flush();
   }
-  await Promise.resolve();
-  await Promise.allSettled(streamWrites);
 
   if (producedFrames.length === 0) return;
 
@@ -205,39 +233,28 @@ async function runAndPersistAgent(
 function createExecutor(
   ctx: ActionCtx,
   sessionId: Id<"sessions">,
-  streamWrites: Promise<void>[],
+  streamWriter: StreamWriter,
 ) {
-  // Stream writes chain sequentially: concurrent patches to the same message
-  // row just make the mutation retry loop (OCC conflicts) — the streamSeq
-  // guard keeps them safe, but serial is both safe and quiet.
-  let lastWrite: Promise<void> = Promise.resolve();
   return new AiSdkExecutor({
     model: openai(MODEL_ID),
     maxOutputTokens: 4096,
     stream: true,
-    runAction: async ({ action, input, context, aiSdkContext }) => {
-      if (action.name === COMMENTARY_ACTION_NAME) {
-        const message = readStringField(input, "message")?.trim();
-        if (!message) throw new Error("sendCommentary requires a message");
-        const toolCallId = readStringField(aiSdkContext, "toolCallId") ?? crypto.randomUUID();
-        await ctx.runMutation(internal.messages.add, {
-          sessionId,
-          role: "assistant",
-          content: message,
-          idempotencyKey: assistantStreamKey(toolCallId),
-        });
-        return actionResult({
-          value: "commentary sent",
-          messages: [
-            {
-              type: "assistant",
-              text: message,
-              audience: "broadcast",
-              messageId: toolCallId,
-            } as FrameMessage,
-          ],
-        });
+    providerOptions: { openai: { parallelToolCalls: true } },
+    messageToModelMessage: (message) => {
+      if (message.type !== "user" || !message.actor || message.text === undefined) {
+        return undefined;
       }
+      const attribution = JSON.stringify({
+        id: message.actor.id,
+        label: message.actor.label,
+        kind: message.actor.kind,
+      });
+      return {
+        role: "user",
+        content: `<projector-actor>${attribution}</projector-actor>\n${message.text}`,
+      };
+    },
+    runAction: async ({ action, input, context }) => {
       // The surface's TSX lives in the artifacts table, not machine state, so
       // retrieval is an executor concern: read the latest artifact here.
       if (action.name === GET_SURFACE_SOURCE_ACTION_NAME) {
@@ -274,38 +291,118 @@ function createExecutor(
       return await action.run?.(input as never, context as never);
     },
     onStreamUpdate: (update) => {
-      lastWrite = lastWrite
-        .catch(() => {})
-        .then(() => persistStreamUpdate(ctx, sessionId, update));
-      streamWrites.push(lastWrite);
-      return lastWrite;
+      streamWriter.push(update);
     },
   });
+}
+
+type StreamWriter = {
+  push: (update: AiSdkStreamUpdate) => void;
+  flush: () => Promise<void>;
+};
+
+function createStreamWriter(
+  ctx: ActionCtx,
+  sessionId: Id<"sessions">,
+): StreamWriter {
+  // Keep only the latest pending snapshot for each assistant block and cap
+  // durable updates at a still-smooth 4 fps. Each successful write appends
+  // only the text since the prior write; coalesced provider chunks therefore
+  // become one small immutable delta rather than a cumulative message rewrite.
+  const pending = new Map<string, AiSdkStreamUpdate>();
+  const persistedText = new Map<string, string>();
+  const terminals = new Map<string, "cancelled" | "error">();
+  const failed = new Set<string>();
+  let draining: Promise<void> | undefined;
+  let lastWriteAt = 0;
+
+  const drain = async (): Promise<void> => {
+    while (pending.size > 0 || terminals.size > 0) {
+      const next = pending.entries().next().value as
+        | [string, AiSdkStreamUpdate]
+        | undefined;
+      if (next) {
+        const [messageId, update] = next;
+        pending.delete(messageId);
+        if (!failed.has(messageId)) {
+          const previous = persistedText.get(messageId) ?? "";
+          const delta = update.text.startsWith(previous)
+            ? update.text.slice(previous.length)
+            : update.text;
+          if (delta) {
+            const waitMs = STREAM_WRITE_INTERVAL_MS - (Date.now() - lastWriteAt);
+            if (waitMs > 0) {
+              await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+            }
+            try {
+              await ctx.runMutation(internal.messages.appendStreamDelta, {
+                sessionId,
+                messageKey: assistantStreamKey(messageId),
+                text: delta,
+                streamSeq: update.streamSeq,
+              });
+              persistedText.set(messageId, update.text);
+              lastWriteAt = Date.now();
+            } catch {
+              failed.add(messageId);
+              terminals.set(messageId, "error");
+            }
+          }
+        }
+        continue;
+      }
+
+      const terminal = terminals.entries().next().value as
+        | [string, "cancelled" | "error"]
+        | undefined;
+      if (!terminal) break;
+      const [messageId, state] = terminal;
+      terminals.delete(messageId);
+      await ctx.runMutation(internal.messages.markStreamFailed, {
+        sessionId,
+        messageKey: assistantStreamKey(messageId),
+        state,
+      }).catch(() => {});
+    }
+  };
+
+  const ensureDrain = (): Promise<void> => {
+    if (!draining) {
+      draining = drain().finally(() => {
+        draining = undefined;
+        if (pending.size > 0 || terminals.size > 0) void ensureDrain();
+      });
+    }
+    return draining;
+  };
+
+  return {
+    push(update) {
+      if (update.streamState === "streaming" && update.text.length > 0) {
+        pending.set(update.messageId, update);
+      }
+      if (update.streamState === "cancelled" || update.streamState === "error") {
+        terminals.set(update.messageId, update.streamState);
+      }
+      if (pending.size === 0 && terminals.size === 0) return;
+      void ensureDrain();
+    },
+    async flush() {
+      // Stream callbacks are deliberately out-of-band in the executor. Let
+      // the final callback enter this writer, then drain until it stays empty.
+      await Promise.resolve();
+      while (draining || pending.size > 0 || terminals.size > 0) {
+        await ensureDrain();
+        await Promise.resolve();
+      }
+    },
+  };
 }
 
 function requireSessionId(input: unknown): Id<"sessions"> {
   const sessionId = readStringField(input, "sessionId")?.trim();
   if (!sessionId) throw new Error("sessionId is required");
   return sessionId as Id<"sessions">;
-}
-
-async function persistStreamUpdate(
-  ctx: ActionCtx,
-  sessionId: Id<"sessions">,
-  update: AiSdkStreamUpdate,
-): Promise<void> {
-  // The executor announces a stream before it has text. Do not create the
-  // final-response row yet: commentary tools may run first, and message
-  // creation time is the transcript order.
-  if (update.streamState !== "streaming" || update.text.length === 0) return;
-  await ctx.runMutation(internal.messages.add, {
-    sessionId,
-    role: "assistant",
-    content: update.text,
-    idempotencyKey: assistantStreamKey(update.messageId),
-    streamState: "streaming",
-    streamSeq: update.streamSeq,
-  });
 }
 
 function findLastAssistantMessage(
@@ -340,11 +437,15 @@ async function persistFrameMessages(
   for (const [messageIndex, message] of frame.messages.entries()) {
     const text = typeof message.text === "string" ? message.text : "";
     if (message.type === "user" && text.trim()) {
+      const actor = readMessageActor(message);
+      const clientMessageId = readStringField(message, "clientMessageId");
       await ctx.runMutation(internal.messages.add, {
         sessionId,
         role: "user",
         content: text,
         frameId,
+        ...(actor ? { actor } : {}),
+        ...(clientMessageId ? { clientMessageId } : {}),
         idempotencyKey: frameMessageKey("user", frame, message, messageIndex),
       });
     }
@@ -408,4 +509,24 @@ function readNumberField(value: unknown, key: string): number | undefined {
   if (!value || typeof value !== "object") return undefined;
   const field = (value as Record<string, unknown>)[key];
   return typeof field === "number" && Number.isFinite(field) ? field : undefined;
+}
+
+function requireClientMessageId(value: string): string {
+  const id = value.trim();
+  if (!id || id.length > 100) throw new Error("Invalid client message id");
+  return id;
+}
+
+function readMessageActor(message: FrameMessage): MessageActor | undefined {
+  const actor = message.actor;
+  if (!actor || typeof actor !== "object") return undefined;
+  const { id, kind, label } = actor as Record<string, unknown>;
+  if (
+    typeof id !== "string" ||
+    (kind !== "anonymous" && kind !== "github") ||
+    typeof label !== "string"
+  ) {
+    return undefined;
+  }
+  return { id, kind, label };
 }

@@ -40,6 +40,7 @@ type Panes = {
 const DEFAULT_PANES: Panes = { app: false, inspector: false, appWidth: 22, inspectorWidth: 26 };
 const PANE_MIN_REM = 14;
 const PANE_MAX_REM = 44;
+const TURN_TOP_INSET = 12;
 
 type StateEntry = { value: unknown; address: unknown };
 
@@ -322,9 +323,16 @@ function ThemeToggle() {
 
 type LocalMessage = {
   key: string;
+  clientMessageId: string;
   role: "user" | "assistant";
   content: string;
   pending?: boolean;
+};
+
+type MessageActor = {
+  id: string;
+  kind: "anonymous" | "github";
+  label: string;
 };
 
 type PaneAgentNotice = {
@@ -351,7 +359,7 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
   const [input, setInput] = useState("");
   const [authPrompt, setAuthPrompt] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const guestSecret = useMemo(getGuestSecret, []);
   const { isLoading: authLoading, isAuthenticated } = useConvexAuth();
   const { signIn } = useAuthActions();
@@ -633,10 +641,12 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
     return () => removeEventListener("keydown", onType);
   }, []);
 
-  const serverMessages = useQuery(
+  const serverMessageResult = useQuery(
     api.messages.list,
-    sessionId ? { sessionId } : "skip",
+    sessionId ? { sessionId, guestSecret } : "skip",
   );
+  const serverMessages = serverMessageResult?.messages;
+  const viewerActorIds = serverMessageResult?.viewerActorIds ?? [];
 
   const requestAuthentication = useCallback((draft: string) => {
     setInput(draft);
@@ -664,10 +674,15 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
         history.replaceState({ app: true }, "", `/s/${id}`);
       }
 
-      const optimisticKey = `opt-${Date.now()}-${crypto.randomUUID()}`;
+      const clientMessageId = crypto.randomUUID();
       setOptimistic((prev) => [
         ...prev,
-        { key: optimisticKey, role: "user", content: trimmed },
+        {
+          key: clientMessageId,
+          clientMessageId,
+          role: "user",
+          content: trimmed,
+        },
       ]);
       setFinalResponseStarted(false);
       setWaitingSince(Date.now());
@@ -676,11 +691,27 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
         // A topic turn is prebuilt server-side — a rich explainer lands as a
         // real frame with no model call, so the answer is effectively instant.
         if (topic) {
-          await openTopic({ sessionId: id, topic, ask: trimmed, guestSecret });
+          await openTopic({
+            sessionId: id,
+            topic,
+            ask: trimmed,
+            clientMessageId,
+            guestSecret,
+          });
         } else if (isAuthenticated) {
-          await sendMessage({ sessionId: id, text: trimmed, guestSecret });
+          await sendMessage({
+            sessionId: id,
+            text: trimmed,
+            clientMessageId,
+            guestSecret,
+          });
         } else if (actionsUrl) {
-          await sendAnonymousMessage(actionsUrl, { sessionId: id, text: trimmed, guestSecret });
+          await sendAnonymousMessage(actionsUrl, {
+            sessionId: id,
+            text: trimmed,
+            clientMessageId,
+            guestSecret,
+          });
         } else {
           throw new Error("Anonymous message endpoint isn't configured");
         }
@@ -691,7 +722,9 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
           error instanceof AnonymousMessageError &&
           (error.code === "AUTH_REQUIRED" || error.code === "IP_RATE_LIMITED")
         ) {
-          setOptimistic((prev) => prev.filter((message) => message.key !== optimisticKey));
+          setOptimistic((prev) =>
+            prev.filter((message) => message.clientMessageId !== clientMessageId),
+          );
           requestAuthentication(trimmed);
           return;
         }
@@ -762,11 +795,11 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
     }
   }, [authLoading, createSession, guestSecret, initialMessage, initialTopic, send, sessionId]);
 
-  // Server truth replaces optimism as soon as it covers it: any optimistic
-  // user message whose text has landed server-side is dropped.
+  // Server truth replaces optimism by end-to-end client message id as soon as
+  // the durable row lands. Matching text is ambiguous in a shared room.
   const server = serverMessages ?? [];
   const visibleOptimistic = optimistic.filter(
-    (o) => !server.some((m) => m.role === o.role && m.content === o.content),
+    (o) => !server.some((m) => m.clientMessageId === o.clientMessageId),
   );
 
   // A full-screen narrow pane hides the conversation, but it should not hide
@@ -834,7 +867,16 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
     return () => clearTimeout(timeout);
   }, [paneAgentNotice?.id]);
 
-  const streaming = server.some((m) => m.streamState === "streaming");
+  // Stream state belongs to rows, but the blinking cursor belongs to the
+  // transcript: only the newest live assistant row should own it. Multiple
+  // rows can briefly remain marked streaming across commentary/final handoff.
+  let pendingAssistantId: (typeof server)[number]["id"] | undefined;
+  for (const message of server) {
+    if (message.role === "assistant" && message.streamState === "streaming") {
+      pendingAssistantId = message.id;
+    }
+  }
+  const streaming = pendingAssistantId !== undefined;
 
   // A poke (appPanePing) marks the session doc the moment its mutation
   // commits, so the thinking indicator starts as soon as the agent wake is
@@ -892,16 +934,22 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
       key: m.id,
       role: m.role,
       content: m.content,
+      actor: m.actor,
+      clientMessageId: m.clientMessageId,
+      isMine: m.role === "user" && viewerActorIds.includes(m.actor?.id ?? ""),
       activationId: m.activationId,
       widget: m.widget,
       card: m.card,
       updatedSurface: m.updatedSurface === true,
-      pending: m.streamState === "streaming",
+      pending: m.role === "assistant" && m.id === pendingAssistantId,
     })),
     ...visibleOptimistic.map((m) => ({
       key: m.key,
       role: m.role,
       content: m.content,
+      actor: undefined as MessageActor | undefined,
+      clientMessageId: m.clientMessageId,
+      isMine: true,
       activationId: undefined as string | undefined,
       widget: undefined as string | undefined,
       card: undefined as { title: string; source: string } | undefined,
@@ -912,7 +960,11 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
   let turnCount = 0;
   const items = rendered.map((m, i) => {
     const previous = rendered[i - 1];
-    const speakerStart = i === 0 || previous.role !== m.role;
+    const speakerId = m.role === "assistant" ? "projector" : m.actor?.id ?? m.clientMessageId;
+    const previousSpeakerId = previous?.role === "assistant"
+      ? "projector"
+      : previous?.actor?.id ?? previous?.clientMessageId;
+    const speakerStart = i === 0 || speakerId !== previousSpeakerId;
     // An autonomous activation has no visible user row to create a speaker
     // boundary. Its changed activation value arms a one-message latch: the
     // first assistant row starts a page, then later rows from that same run
@@ -928,9 +980,94 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
   });
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const threadRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLFormElement>(null);
+  const bottomSpacerRef = useRef<HTMLDivElement>(null);
+  const atBottomRef = useRef(true);
+  const followingBottomRef = useRef(false);
   const syncedOnce = useRef(false);
+
+  // Track actual bottom position, while treating wheel/touch/drag input as an
+  // explicit request to stop following a multi-message assistant turn.
   useEffect(() => {
+    const container = scrollRef.current;
+    if (!container) return;
+    const readBottom = () => {
+      const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= 2;
+      if (!followingBottomRef.current || atBottom) atBottomRef.current = atBottom;
+    };
+    const releaseFollow = () => {
+      followingBottomRef.current = false;
+      readBottom();
+    };
+    readBottom();
+    container.addEventListener("scroll", readBottom, { passive: true });
+    container.addEventListener("wheel", releaseFollow, { passive: true });
+    container.addEventListener("touchstart", releaseFollow, { passive: true });
+    container.addEventListener("pointerdown", releaseFollow, { passive: true });
+    return () => {
+      container.removeEventListener("scroll", readBottom);
+      container.removeEventListener("wheel", releaseFollow);
+      container.removeEventListener("touchstart", releaseFollow);
+      container.removeEventListener("pointerdown", releaseFollow);
+    };
+  }, []);
+
+  // The newest turn needs enough runway to page exactly to the top while it
+  // is short. As it grows, trade that runway for message content until only
+  // the composer's clearance remains. Measuring the rendered turn instead
+  // of guessing at an average response height keeps both ends exact.
+  useLayoutEffect(() => {
+    const container = scrollRef.current;
+    const thread = threadRef.current;
+    const composer = composerRef.current;
+    const spacer = bottomSpacerRef.current;
+    if (!container || !thread || !composer || !spacer) return;
+
+    let frame = 0;
+    const resize = () => {
+      frame = 0;
+      const starts = thread.querySelectorAll<HTMLElement>("[data-turn-start]");
+      const target = starts[starts.length - 1];
+      if (!target) {
+        spacer.style.height = "0px";
+        return;
+      }
+
+      const composerClearance = composer.getBoundingClientRect().height;
+      spacer.style.height = `${composerClearance}px`;
+
+      const activeRunHeight =
+        thread.getBoundingClientRect().bottom - target.getBoundingClientRect().top;
+      const missingRunway = Math.max(
+        0,
+        container.clientHeight - activeRunHeight - TURN_TOP_INSET,
+      );
+      spacer.style.height = `${composerClearance + missingRunway}px`;
+      if (followingBottomRef.current) {
+        container.scrollTop = container.scrollHeight;
+        atBottomRef.current = true;
+      }
+    };
+    const scheduleResize = () => {
+      if (frame) cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(resize);
+    };
+
+    resize();
+    const observer = new ResizeObserver(scheduleResize);
+    observer.observe(container);
+    observer.observe(composer);
+    thread.querySelectorAll<HTMLElement>(".msg").forEach((message) => observer.observe(message));
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [turnCount, items.length, items.map((item) => String(item.key)).join("\n")]);
+
+  useLayoutEffect(() => {
     if (turnCount === 0) return;
+    followingBottomRef.current = false;
     const container = scrollRef.current;
     if (!container) return;
     const starts = container.querySelectorAll<HTMLElement>("[data-turn-start]");
@@ -940,7 +1077,7 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
       target.getBoundingClientRect().top -
       container.getBoundingClientRect().top +
       container.scrollTop -
-      24; // breathing room above the page top
+      TURN_TOP_INSET;
     const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
     container.scrollTo({
       top: Math.max(0, top),
@@ -949,6 +1086,23 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
     });
     syncedOnce.current = true;
   }, [turnCount]);
+
+  const previousTranscriptRef = useRef({ initialized: false, itemCount: 0, turnCount: 0 });
+  useLayoutEffect(() => {
+    const previous = previousTranscriptRef.current;
+    const appendedWithinTurn =
+      previous.initialized && items.length > previous.itemCount && turnCount === previous.turnCount;
+    previousTranscriptRef.current = { initialized: true, itemCount: items.length, turnCount };
+    if (!appendedWithinTurn || !atBottomRef.current) return;
+
+    const container = scrollRef.current;
+    if (!container) return;
+    followingBottomRef.current = true;
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth",
+    });
+  }, [items.length, turnCount]);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -961,6 +1115,13 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
     setInput("");
     void send(draft);
   };
+
+  useLayoutEffect(() => {
+    const field = inputRef.current;
+    if (!field) return;
+    field.style.height = "0px";
+    field.style.height = `${field.scrollHeight}px`;
+  }, [input]);
 
   const revealPaneAgentNotice = useCallback(() => {
     const messageId = paneAgentNotice?.id;
@@ -1051,13 +1212,15 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
         )}
         <div className="app-chat">
           <div className="app-scroll" ref={scrollRef}>
-            <div className="app-thread">
+            <div className="app-thread" ref={threadRef}>
               {items.map((m) => (
                 <Message
                   key={m.key}
                   messageId={String(m.key)}
                   role={m.role}
                   content={m.content}
+                  actor={m.actor}
+                  isMine={m.isMine}
                   widget={m.widget}
                   card={m.card}
                   api={surfaceApi}
@@ -1074,9 +1237,15 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
                   <p className="msg-body">{sendError}</p>
                 </div>
               )}
+              <div className="app-thread-spacer" ref={bottomSpacerRef} aria-hidden="true" />
             </div>
           </div>
-          <form className="app-composer" onSubmit={submit} autoComplete="off">
+          <form
+            className="app-composer"
+            ref={composerRef}
+            onSubmit={submit}
+            autoComplete="off"
+          >
             {authPrompt && !isAuthenticated ? (
               <div className="auth-gate" role="dialog" aria-label="Continue with GitHub">
                 <div className="auth-gate-copy">
@@ -1096,11 +1265,17 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
               </div>
             ) : (
               <div className="talk-card">
-                <input
+                <textarea
                   ref={inputRef}
                   className="talk-input"
+                  rows={1}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
+                    e.preventDefault();
+                    e.currentTarget.form?.requestSubmit();
+                  }}
                   placeholder="ask projector…"
                   spellCheck={false}
                   enterKeyHint="send"
@@ -1218,10 +1393,12 @@ function AppPane({ width, onResizeStart, surface, api, onSurfaceError, onAsk }: 
   );
 }
 
-function Message({ messageId, role, content, widget, card, api, pending, turnStart, onAsk, onOpenAppPane }: {
+function Message({ messageId, role, content, actor, isMine, widget, card, api, pending, turnStart, onAsk, onOpenAppPane }: {
   messageId?: string;
   role: "user" | "assistant";
   content: string;
+  actor?: MessageActor;
+  isMine?: boolean;
   widget?: string;
   card?: { title: string; source: string };
   api?: ReturnType<typeof createSurfaceApi>;
@@ -1240,7 +1417,9 @@ function Message({ messageId, role, content, widget, card, api, pending, turnSta
       data-message-id={messageId}
       data-turn-start={turnStart ? "" : undefined}
     >
-      <span className="msg-role">{role === "user" ? "you" : "projector"}</span>
+      <span className="msg-role">
+        {role === "assistant" ? "projector" : isMine ? "you" : actor?.label ?? "anon"}
+      </span>
       {card && api
         ? <CardMessage card={card} api={api} />
         : Explainer && onAsk

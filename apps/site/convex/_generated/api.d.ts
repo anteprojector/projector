@@ -9,6 +9,7 @@
  */
 
 import type * as access from "../access.js";
+import type * as actors from "../actors.js";
 import type * as agent from "../agent.js";
 import type * as artifacts from "../artifacts.js";
 import type * as auth from "../auth.js";
@@ -27,6 +28,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   access: typeof access;
+  actors: typeof actors;
   agent: typeof agent;
   artifacts: typeof artifacts;
   auth: typeof auth;

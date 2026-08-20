@@ -39,11 +39,27 @@ export async function authorizeSessionWrite(
 ): Promise<"authenticated" | "guest"> {
   const userId = await getAuthUserId(ctx);
 
-  if (session.ownerUserId !== undefined) {
-    if (userId !== session.ownerUserId) {
-      throw new ConvexError(ACCESS_ERROR.forbidden);
+  // Public demo sessions are collaborative: authentication is sufficient to
+  // write, regardless of who created the session. Preserve ownerUserId only
+  // as creator metadata for a guest who later signs in.
+  if (userId) {
+    if (session.ownerUserId === undefined && guestSecret !== undefined) {
+      const guestMatches =
+        isValidGuestSecret(guestSecret) &&
+        session.guestSecretHash !== undefined &&
+        (await hashGuestSecret(guestSecret)) === session.guestSecretHash;
+      if (guestMatches) {
+        await ctx.db.patch(session._id, {
+          ownerUserId: userId,
+          guestSecretHash: undefined,
+        });
+      }
     }
     return "authenticated";
+  }
+
+  if (session.ownerUserId !== undefined) {
+    throw new ConvexError(ACCESS_ERROR.authRequired);
   }
 
   const guestMatches =
@@ -52,15 +68,7 @@ export async function authorizeSessionWrite(
     session.guestSecretHash !== undefined &&
     (await hashGuestSecret(guestSecret)) === session.guestSecretHash;
   if (!guestMatches) {
-    throw new ConvexError(userId ? ACCESS_ERROR.forbidden : ACCESS_ERROR.authRequired);
-  }
-
-  if (userId) {
-    await ctx.db.patch(session._id, {
-      ownerUserId: userId,
-      guestSecretHash: undefined,
-    });
-    return "authenticated";
+    throw new ConvexError(ACCESS_ERROR.authRequired);
   }
 
   return "guest";

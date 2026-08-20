@@ -2,8 +2,30 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { authTables } from "@convex-dev/auth/server";
 
+const messageActor = v.object({
+  id: v.string(),
+  kind: v.union(v.literal("anonymous"), v.literal("github")),
+  label: v.string(),
+});
+
 export default defineSchema({
   ...authTables,
+
+  // Convex Auth's standard user shape plus the public GitHub login used for
+  // attributed multiplayer messages. Optional keeps existing users valid;
+  // their next GitHub sign-in fills it.
+  users: defineTable({
+    name: v.optional(v.string()),
+    image: v.optional(v.string()),
+    email: v.optional(v.string()),
+    emailVerificationTime: v.optional(v.number()),
+    phone: v.optional(v.string()),
+    phoneVerificationTime: v.optional(v.number()),
+    isAnonymous: v.optional(v.boolean()),
+    githubHandle: v.optional(v.string()),
+  })
+    .index("email", ["email"])
+    .index("phone", ["phone"]),
 
   sessions: defineTable({
     contextEpoch: v.number(),
@@ -74,6 +96,8 @@ export default defineSchema({
     frameId: v.optional(v.id("frames")),
     role: v.union(v.literal("user"), v.literal("assistant")),
     content: v.string(),
+    actor: v.optional(messageActor),
+    clientMessageId: v.optional(v.string()),
     // Rich client rendering for this message: the id of a prebuilt explainer
     // widget. content stays the plain-text equivalent — it is what the LLM
     // sees as history and what renders if the widget id is unknown.
@@ -101,4 +125,13 @@ export default defineSchema({
     .index("by_session", ["sessionId"])
     .index("by_session_message", ["sessionId", "messageId"])
     .index("by_session_idempotency_key", ["sessionId", "idempotencyKey"]),
+
+  // Ephemeral, append-only chunks for live assistant output. The messages row
+  // is the stable UI identity and eventual durable value; these deltas exist
+  // only while that row is streaming and are removed when its frame settles.
+  messageStreamDeltas: defineTable({
+    messageId: v.id("messages"),
+    streamSeq: v.number(),
+    text: v.string(),
+  }).index("by_message_and_stream_seq", ["messageId", "streamSeq"]),
 });
