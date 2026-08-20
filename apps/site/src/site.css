@@ -1994,7 +1994,9 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   .app-pane,
   .app-inspector {
     position: absolute;
-    inset: 0;
+    /* Cover the nav's bottom hairline so the full-screen mobile layer meets
+       the nav without a one-pixel seam on device-pixel-rounded viewports. */
+    inset: -1px 0 0;
     z-index: 6;
     width: auto !important; /* inline width comes from desktop pane state */
     border-left: 0;
