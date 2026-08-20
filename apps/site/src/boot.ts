@@ -10,6 +10,7 @@ const talk = document.querySelector<HTMLFormElement>("#talk")!;
 const talkCard = talk.querySelector<HTMLElement>(".talk-card")!;
 const talkInput = talk.querySelector<HTMLInputElement>(".talk-input")!;
 const talkClear = talk.querySelector<HTMLButtonElement>(".talk-clear")!;
+const talkMic = talk.querySelector<HTMLButtonElement>(".talk-mic")!;
 
 let appPromise: Promise<AppModule> | null = null;
 
@@ -237,6 +238,7 @@ talkClear.addEventListener("click", () => {
   talkInput.focus({ preventScroll: true });
   talkInput.dispatchEvent(new Event("input", { bubbles: true }));
 });
+talkMic.addEventListener("click", () => window.alert("voice coming soon"));
 for (const hot of hotWords) {
   const ask = hot.dataset.ask ?? "";
   // Touch has no hover, so the first tap plays the hover role: activate the
