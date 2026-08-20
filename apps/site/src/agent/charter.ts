@@ -205,6 +205,7 @@ ${DESIGN_BRIEF}
 
 - api.machine() returns the projected client instance tree (states and commands); api.useMachine() is the subscribed hook form; api.run(commandName, input) executes a machine command. Bind UI to machine state — never hold app data in component state.
 - Child data binding: walk api.useMachine() for the child instance (by node key); its states entries carry { key, value, address }. Render from value; mutate with api.run("updateState", { address, op: "replace"|"patch"|"append", value }).
+- updateState applies optimistically by default: the projection reflects the write instantly and reconciles when the durable frame lands (or reverts if the server rejects it), so never add local loading/busy state to mask write latency. Opt out per call with api.run("updateState", input, { optimistic: false }) when instant last-write-wins prediction would mislead — state several actors contend on (a shared counter, turn-taking) or values the server arbitrates.
 - To have the agent respond to an interaction, call api.run("appPanePing", { message, data? }). Await any updateState call first so the agent sees the resulting state. Use this only when a conversational reaction adds value; routine controls should stay silent.
 - Keep it focused and under 32KB.
 

@@ -5,7 +5,17 @@
 // window on the world.
 
 import { useSyncExternalStore } from "react";
-import type { OptimisticEffigy } from "@projectors/core/client";
+import type { OptimisticEffigy, StateAddress, StateUpdate } from "@projectors/core/client";
+
+export type SurfaceRunOptions = {
+  /**
+   * updateState applies optimistically by default — the projection reflects
+   * the write instantly and reconciles when the durable frame lands (or the
+   * server rejects it). Pass false when last-write-wins prediction is wrong:
+   * shared/multiplayer state, server-arbitrated values.
+   */
+  optimistic?: boolean;
+};
 
 export type SurfaceApi = {
   /** Current projected client instance tree (states, commands, children). */
@@ -13,7 +23,7 @@ export type SurfaceApi = {
   /** Hook form: re-renders the surface when the projection changes. */
   useMachine(): unknown;
   /** Execute a machine command (external caller), e.g. api.run("setPanes", { app: false }). */
-  run(name: string, input?: unknown): Promise<unknown>;
+  run(name: string, input?: unknown, options?: SurfaceRunOptions): Promise<unknown>;
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -43,9 +53,59 @@ export function createSurfaceApi(effigy: OptimisticEffigy<any>): SurfaceApi {
       // Called from surface component render bodies; the hook comes from the
       // host's React, which is the only React in the page.
       useSyncExternalStore(subscribe, read),
-    run: async (name, input) => {
-      const command = effigy.getCommand(name as never);
+    run: async (name, input, options) => {
+      // updateState's input IS its effect, so the client can run the exact
+      // same fold the machine will — prediction and durable truth can't
+      // diverge for a valid write. Other commands hide their effect
+      // server-side and stay non-optimistic.
+      const update = name === "updateState" && options?.optimistic !== false
+        ? readStateUpdateInput(input)
+        : null;
+      const command = effigy.getCommand(name as never, update
+        ? { optimistic: (ctx) => ctx.updateAt(update.address, update.update) }
+        : undefined);
       return await command.run(input as never);
     },
   };
+}
+
+// Mirrors the charter's updateState action: {address, op, value, values, path}
+// → the machine StateUpdate its run() enqueues.
+function readStateUpdateInput(
+  input: unknown,
+): { address: StateAddress; update: StateUpdate } | null {
+  if (!input || typeof input !== "object") return null;
+  const record = input as {
+    address?: StateAddress;
+    op?: string;
+    value?: unknown;
+    values?: unknown[];
+    path?: Array<string | number>;
+  };
+  const address = record.address;
+  if (!address) return null;
+  if (record.op === "replace") {
+    return { address, update: { op: "replace", value: record.value } };
+  }
+  if (record.op === "patch") {
+    return {
+      address,
+      update: {
+        op: "patch",
+        value: (record.value ?? {}) as Record<string, unknown>,
+        ...(record.path ? { path: record.path } : {}),
+      },
+    };
+  }
+  if (record.op === "append") {
+    return {
+      address,
+      update: {
+        op: "append",
+        values: record.values ?? [record.value],
+        ...(record.path ? { path: record.path } : {}),
+      },
+    };
+  }
+  return null;
 }

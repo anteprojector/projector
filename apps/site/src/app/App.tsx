@@ -40,6 +40,7 @@ type Panes = {
 const DEFAULT_PANES: Panes = { app: false, inspector: false, appWidth: 22, inspectorWidth: 26 };
 const PANE_MIN_REM = 14;
 const PANE_MAX_REM = 44;
+const TURN_TOP_INSET = 12;
 
 type StateEntry = { value: unknown; address: unknown };
 
@@ -834,7 +835,16 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
     return () => clearTimeout(timeout);
   }, [paneAgentNotice?.id]);
 
-  const streaming = server.some((m) => m.streamState === "streaming");
+  // Stream state belongs to rows, but the blinking cursor belongs to the
+  // transcript: only the newest live assistant row should own it. Multiple
+  // rows can briefly remain marked streaming across commentary/final handoff.
+  let pendingAssistantId: (typeof server)[number]["id"] | undefined;
+  for (const message of server) {
+    if (message.role === "assistant" && message.streamState === "streaming") {
+      pendingAssistantId = message.id;
+    }
+  }
+  const streaming = pendingAssistantId !== undefined;
 
   // A poke (appPanePing) marks the session doc the moment its mutation
   // commits, so the thinking indicator starts as soon as the agent wake is
@@ -896,7 +906,7 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
       widget: m.widget,
       card: m.card,
       updatedSurface: m.updatedSurface === true,
-      pending: m.streamState === "streaming",
+      pending: m.role === "assistant" && m.id === pendingAssistantId,
     })),
     ...visibleOptimistic.map((m) => ({
       key: m.key,
@@ -928,9 +938,94 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
   });
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const threadRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLFormElement>(null);
+  const bottomSpacerRef = useRef<HTMLDivElement>(null);
+  const atBottomRef = useRef(true);
+  const followingBottomRef = useRef(false);
   const syncedOnce = useRef(false);
+
+  // Track actual bottom position, while treating wheel/touch/drag input as an
+  // explicit request to stop following a multi-message assistant turn.
   useEffect(() => {
+    const container = scrollRef.current;
+    if (!container) return;
+    const readBottom = () => {
+      const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= 2;
+      if (!followingBottomRef.current || atBottom) atBottomRef.current = atBottom;
+    };
+    const releaseFollow = () => {
+      followingBottomRef.current = false;
+      readBottom();
+    };
+    readBottom();
+    container.addEventListener("scroll", readBottom, { passive: true });
+    container.addEventListener("wheel", releaseFollow, { passive: true });
+    container.addEventListener("touchstart", releaseFollow, { passive: true });
+    container.addEventListener("pointerdown", releaseFollow, { passive: true });
+    return () => {
+      container.removeEventListener("scroll", readBottom);
+      container.removeEventListener("wheel", releaseFollow);
+      container.removeEventListener("touchstart", releaseFollow);
+      container.removeEventListener("pointerdown", releaseFollow);
+    };
+  }, []);
+
+  // The newest turn needs enough runway to page exactly to the top while it
+  // is short. As it grows, trade that runway for message content until only
+  // the composer's clearance remains. Measuring the rendered turn instead
+  // of guessing at an average response height keeps both ends exact.
+  useLayoutEffect(() => {
+    const container = scrollRef.current;
+    const thread = threadRef.current;
+    const composer = composerRef.current;
+    const spacer = bottomSpacerRef.current;
+    if (!container || !thread || !composer || !spacer) return;
+
+    let frame = 0;
+    const resize = () => {
+      frame = 0;
+      const starts = thread.querySelectorAll<HTMLElement>("[data-turn-start]");
+      const target = starts[starts.length - 1];
+      if (!target) {
+        spacer.style.height = "0px";
+        return;
+      }
+
+      const composerClearance = composer.getBoundingClientRect().height;
+      spacer.style.height = `${composerClearance}px`;
+
+      const activeRunHeight =
+        thread.getBoundingClientRect().bottom - target.getBoundingClientRect().top;
+      const missingRunway = Math.max(
+        0,
+        container.clientHeight - activeRunHeight - TURN_TOP_INSET,
+      );
+      spacer.style.height = `${composerClearance + missingRunway}px`;
+      if (followingBottomRef.current) {
+        container.scrollTop = container.scrollHeight;
+        atBottomRef.current = true;
+      }
+    };
+    const scheduleResize = () => {
+      if (frame) cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(resize);
+    };
+
+    resize();
+    const observer = new ResizeObserver(scheduleResize);
+    observer.observe(container);
+    observer.observe(composer);
+    thread.querySelectorAll<HTMLElement>(".msg").forEach((message) => observer.observe(message));
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [turnCount, items.length, items.map((item) => String(item.key)).join("\n")]);
+
+  useLayoutEffect(() => {
     if (turnCount === 0) return;
+    followingBottomRef.current = false;
     const container = scrollRef.current;
     if (!container) return;
     const starts = container.querySelectorAll<HTMLElement>("[data-turn-start]");
@@ -940,7 +1035,7 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
       target.getBoundingClientRect().top -
       container.getBoundingClientRect().top +
       container.scrollTop -
-      24; // breathing room above the page top
+      TURN_TOP_INSET;
     const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
     container.scrollTo({
       top: Math.max(0, top),
@@ -949,6 +1044,23 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
     });
     syncedOnce.current = true;
   }, [turnCount]);
+
+  const previousTranscriptRef = useRef({ initialized: false, itemCount: 0, turnCount: 0 });
+  useLayoutEffect(() => {
+    const previous = previousTranscriptRef.current;
+    const appendedWithinTurn =
+      previous.initialized && items.length > previous.itemCount && turnCount === previous.turnCount;
+    previousTranscriptRef.current = { initialized: true, itemCount: items.length, turnCount };
+    if (!appendedWithinTurn || !atBottomRef.current) return;
+
+    const container = scrollRef.current;
+    if (!container) return;
+    followingBottomRef.current = true;
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth",
+    });
+  }, [items.length, turnCount]);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1051,7 +1163,7 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
         )}
         <div className="app-chat">
           <div className="app-scroll" ref={scrollRef}>
-            <div className="app-thread">
+            <div className="app-thread" ref={threadRef}>
               {items.map((m) => (
                 <Message
                   key={m.key}
@@ -1074,9 +1186,15 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
                   <p className="msg-body">{sendError}</p>
                 </div>
               )}
+              <div className="app-thread-spacer" ref={bottomSpacerRef} aria-hidden="true" />
             </div>
           </div>
-          <form className="app-composer" onSubmit={submit} autoComplete="off">
+          <form
+            className="app-composer"
+            ref={composerRef}
+            onSubmit={submit}
+            autoComplete="off"
+          >
             {authPrompt && !isAuthenticated ? (
               <div className="auth-gate" role="dialog" aria-label="Continue with GitHub">
                 <div className="auth-gate-copy">
