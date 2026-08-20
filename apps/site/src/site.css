@@ -1204,12 +1204,15 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 .talk-input {
   flex: 1;
   min-width: 0;
+  max-height: 8rem;
   border: 0;
   background: none;
   color: var(--ink);
   font: 500 0.9375rem/1.4 var(--sans);
   padding: 0.5rem 0;
   outline: none;
+  overflow-y: auto;
+  resize: none;
 }
 .talk-input::placeholder { color: var(--faint); }
 .talk-mic, .talk-clear, .talk-go {

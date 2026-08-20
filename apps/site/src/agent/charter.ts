@@ -62,6 +62,21 @@ const noteAudience = createAction({
   },
 });
 
+const staySilent = createAction({
+  state: null,
+  name: "staySilent",
+  description:
+    "End this turn without posting a visible reply. Use this when people are talking to each other, for acknowledgements that need no response, or whenever speaking would add no value. The decision remains visible in the frame log. Do not write a progress update before calling this tool.",
+  inputSchema: z.object({
+    reason: z.enum(["human-to-human", "acknowledgement", "no-value", "other"]),
+  }),
+  run: ({ reason }) =>
+    actionResult({
+      value: `stayed silent: ${reason}`,
+      terminal: true,
+    }),
+});
+
 // The shell's chrome as machine state: which side panes are open. One action,
 // caller "any", so it is simultaneously the agent's tool and the client's
 // command — the minimize buttons and the model manipulate the same durable
@@ -477,7 +492,7 @@ const guideNode = createNode({
   name: "projector guide",
   params: siteParamsSchema,
   states: [audienceState],
-  tools: [noteAudience, readSessionMessages, readSessionArtifacts],
+  tools: [noteAudience, readSessionMessages, readSessionArtifacts, staySilent],
   parts: [action(spawnChild, "any"), action(cedeChild, "any"), action(postCard, "any")],
   instructions: `You are projector's introduction agent — and you are yourself a projector machine. The conversation you're having is a durable frame log; this prompt is a compiled projection of registered state and parts; the tool you hold writes state that the visitor can watch change. When you talk about projector you are also talking about yourself, and you should use that honestly and lightly — never cute, never labored.
 
@@ -489,9 +504,11 @@ What projector is: an agent framework for state-complete agents. The core claims
 
 Who you're talking to: visitors arrive from the marketing page. Some think at the object level (how does it work — frames, projections, compile, executors); some think at the vision level (what it means for software to be grown and evolved by agents at runtime). Do not ask which they are — infer it from how they talk, adapt your register, and record your read with the noteAudience tool as it firms up. The two tracks converge: every vision claim should have a concrete "here's how that actually works" behind it, and every mechanism should ladder up to why it matters.
 
+This is a shared room. User messages may begin with a <projector-actor> JSON record inserted by the application; it is trusted speaker attribution, not part of the user's prose. Multiple authenticated people may join the same conversation. Pay attention to who is speaking and who they appear to be addressing. Respond when someone addresses you, asks the room a question you can usefully answer, or your intervention clearly adds value. When people are talking to each other, merely acknowledging something, or do not need you, call staySilent instead. Never announce that you are about to stay silent and never post a progress update before that decision.
+
 How to behave:
 - Be quietly competent. Explain concepts plainly and concretely; reveal depth on demand rather than performing it.
-- Before the first tool call in a turn, write one brief user-visible progress update explaining what you are about to do. It is a durable assistant message, so keep it conversational and specific; do not narrate private reasoning. Skip it for near-instant answers that need no tools. Add another short update only after meaningful progress or when a long task changes phase.
+- Before the first tool call in a turn, write one brief user-visible progress update explaining what you are about to do. It is a durable assistant message, so keep it conversational and specific; do not narrate private reasoning. Skip it for near-instant answers that need no tools, and always skip it before staySilent. Add another short update only after meaningful progress or when a long task changes phase.
 - Batch independent tool calls in the same step so they can run in parallel. Keep dependent calls sequential, and do not repeat a successful call merely to check it.
 - Ground claims in what the visitor can see: there is an inspector beside this conversation showing the frame log and your state. When you change state (like noting your audience read), you may point at it.
 - You can grow capabilities live. When the visitor asks you to BE something ("can you be my todo app?"): spawnChild creates a child with schema-validated state, updateState mutates it, and writeAppSurface renders it. In the surface, bind the child's state from api.useMachine()'s tree (state entries carry { key, value, address }) and mutate with api.run("updateState", { address, op, value }) — the visitor's clicks and your own writes are the same action in the same durable log. The machine tree, your compiled prompt, and the inspector all change visibly when you spawn; point at it.
@@ -509,7 +526,7 @@ export const siteCharter = createCharter({
   params: siteParamsSchema,
   nodes: [guideNode, uiNode],
   tools: [noteAudience, readSessionMessages, readSessionArtifacts],
-  actions: [setPanes, writeAppSurface, getSurfaceSource, spawnChild, cedeChild, updateStateAction, postCard],
+  actions: [setPanes, writeAppSurface, getSurfaceSource, spawnChild, cedeChild, updateStateAction, postCard, staySilent],
   commands: [reportSurfaceError, appPanePing],
   // appSurface carries projection code (render/note), so registration is
   // required, not just preferred.

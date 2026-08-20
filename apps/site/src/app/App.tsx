@@ -323,9 +323,16 @@ function ThemeToggle() {
 
 type LocalMessage = {
   key: string;
+  clientMessageId: string;
   role: "user" | "assistant";
   content: string;
   pending?: boolean;
+};
+
+type MessageActor = {
+  id: string;
+  kind: "anonymous" | "github";
+  label: string;
 };
 
 type PaneAgentNotice = {
@@ -352,7 +359,7 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
   const [input, setInput] = useState("");
   const [authPrompt, setAuthPrompt] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const guestSecret = useMemo(getGuestSecret, []);
   const { isLoading: authLoading, isAuthenticated } = useConvexAuth();
   const { signIn } = useAuthActions();
@@ -634,10 +641,12 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
     return () => removeEventListener("keydown", onType);
   }, []);
 
-  const serverMessages = useQuery(
+  const serverMessageResult = useQuery(
     api.messages.list,
-    sessionId ? { sessionId } : "skip",
+    sessionId ? { sessionId, guestSecret } : "skip",
   );
+  const serverMessages = serverMessageResult?.messages;
+  const viewerActorIds = serverMessageResult?.viewerActorIds ?? [];
 
   const requestAuthentication = useCallback((draft: string) => {
     setInput(draft);
@@ -665,10 +674,15 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
         history.replaceState({ app: true }, "", `/s/${id}`);
       }
 
-      const optimisticKey = `opt-${Date.now()}-${crypto.randomUUID()}`;
+      const clientMessageId = crypto.randomUUID();
       setOptimistic((prev) => [
         ...prev,
-        { key: optimisticKey, role: "user", content: trimmed },
+        {
+          key: clientMessageId,
+          clientMessageId,
+          role: "user",
+          content: trimmed,
+        },
       ]);
       setFinalResponseStarted(false);
       setWaitingSince(Date.now());
@@ -677,11 +691,27 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
         // A topic turn is prebuilt server-side — a rich explainer lands as a
         // real frame with no model call, so the answer is effectively instant.
         if (topic) {
-          await openTopic({ sessionId: id, topic, ask: trimmed, guestSecret });
+          await openTopic({
+            sessionId: id,
+            topic,
+            ask: trimmed,
+            clientMessageId,
+            guestSecret,
+          });
         } else if (isAuthenticated) {
-          await sendMessage({ sessionId: id, text: trimmed, guestSecret });
+          await sendMessage({
+            sessionId: id,
+            text: trimmed,
+            clientMessageId,
+            guestSecret,
+          });
         } else if (actionsUrl) {
-          await sendAnonymousMessage(actionsUrl, { sessionId: id, text: trimmed, guestSecret });
+          await sendAnonymousMessage(actionsUrl, {
+            sessionId: id,
+            text: trimmed,
+            clientMessageId,
+            guestSecret,
+          });
         } else {
           throw new Error("Anonymous message endpoint isn't configured");
         }
@@ -692,7 +722,9 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
           error instanceof AnonymousMessageError &&
           (error.code === "AUTH_REQUIRED" || error.code === "IP_RATE_LIMITED")
         ) {
-          setOptimistic((prev) => prev.filter((message) => message.key !== optimisticKey));
+          setOptimistic((prev) =>
+            prev.filter((message) => message.clientMessageId !== clientMessageId),
+          );
           requestAuthentication(trimmed);
           return;
         }
@@ -763,11 +795,11 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
     }
   }, [authLoading, createSession, guestSecret, initialMessage, initialTopic, send, sessionId]);
 
-  // Server truth replaces optimism as soon as it covers it: any optimistic
-  // user message whose text has landed server-side is dropped.
+  // Server truth replaces optimism by end-to-end client message id as soon as
+  // the durable row lands. Matching text is ambiguous in a shared room.
   const server = serverMessages ?? [];
   const visibleOptimistic = optimistic.filter(
-    (o) => !server.some((m) => m.role === o.role && m.content === o.content),
+    (o) => !server.some((m) => m.clientMessageId === o.clientMessageId),
   );
 
   // A full-screen narrow pane hides the conversation, but it should not hide
@@ -902,6 +934,9 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
       key: m.id,
       role: m.role,
       content: m.content,
+      actor: m.actor,
+      clientMessageId: m.clientMessageId,
+      isMine: m.role === "user" && viewerActorIds.includes(m.actor?.id ?? ""),
       activationId: m.activationId,
       widget: m.widget,
       card: m.card,
@@ -912,6 +947,9 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
       key: m.key,
       role: m.role,
       content: m.content,
+      actor: undefined as MessageActor | undefined,
+      clientMessageId: m.clientMessageId,
+      isMine: true,
       activationId: undefined as string | undefined,
       widget: undefined as string | undefined,
       card: undefined as { title: string; source: string } | undefined,
@@ -922,7 +960,11 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
   let turnCount = 0;
   const items = rendered.map((m, i) => {
     const previous = rendered[i - 1];
-    const speakerStart = i === 0 || previous.role !== m.role;
+    const speakerId = m.role === "assistant" ? "projector" : m.actor?.id ?? m.clientMessageId;
+    const previousSpeakerId = previous?.role === "assistant"
+      ? "projector"
+      : previous?.actor?.id ?? previous?.clientMessageId;
+    const speakerStart = i === 0 || speakerId !== previousSpeakerId;
     // An autonomous activation has no visible user row to create a speaker
     // boundary. Its changed activation value arms a one-message latch: the
     // first assistant row starts a page, then later rows from that same run
@@ -1074,6 +1116,13 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
     void send(draft);
   };
 
+  useLayoutEffect(() => {
+    const field = inputRef.current;
+    if (!field) return;
+    field.style.height = "0px";
+    field.style.height = `${field.scrollHeight}px`;
+  }, [input]);
+
   const revealPaneAgentNotice = useCallback(() => {
     const messageId = paneAgentNotice?.id;
     setPaneAgentNotice(null);
@@ -1170,6 +1219,8 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
                   messageId={String(m.key)}
                   role={m.role}
                   content={m.content}
+                  actor={m.actor}
+                  isMine={m.isMine}
                   widget={m.widget}
                   card={m.card}
                   api={surfaceApi}
@@ -1214,11 +1265,17 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
               </div>
             ) : (
               <div className="talk-card">
-                <input
+                <textarea
                   ref={inputRef}
                   className="talk-input"
+                  rows={1}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
+                    e.preventDefault();
+                    e.currentTarget.form?.requestSubmit();
+                  }}
                   placeholder="ask projector…"
                   spellCheck={false}
                   enterKeyHint="send"
@@ -1336,10 +1393,12 @@ function AppPane({ width, onResizeStart, surface, api, onSurfaceError, onAsk }: 
   );
 }
 
-function Message({ messageId, role, content, widget, card, api, pending, turnStart, onAsk, onOpenAppPane }: {
+function Message({ messageId, role, content, actor, isMine, widget, card, api, pending, turnStart, onAsk, onOpenAppPane }: {
   messageId?: string;
   role: "user" | "assistant";
   content: string;
+  actor?: MessageActor;
+  isMine?: boolean;
   widget?: string;
   card?: { title: string; source: string };
   api?: ReturnType<typeof createSurfaceApi>;
@@ -1358,7 +1417,9 @@ function Message({ messageId, role, content, widget, card, api, pending, turnSta
       data-message-id={messageId}
       data-turn-start={turnStart ? "" : undefined}
     >
-      <span className="msg-role">{role === "user" ? "you" : "projector"}</span>
+      <span className="msg-role">
+        {role === "assistant" ? "projector" : isMine ? "you" : actor?.label ?? "anon"}
+      </span>
       {card && api
         ? <CardMessage card={card} api={api} />
         : Explainer && onAsk

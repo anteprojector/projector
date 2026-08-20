@@ -3,6 +3,7 @@ import {
   paginationOptsValidator,
   paginationResultValidator,
 } from "convex/server";
+import { getAuthUserId } from "@convex-dev/auth/server";
 import {
   internalMutation,
   internalQuery,
@@ -15,6 +16,12 @@ import {
   getFrameIndexForSession,
   getLatestSessionFrameDoc,
 } from "./frameHistory";
+import {
+  githubActor,
+  messageActorValidator,
+  type MessageActor,
+} from "./actors";
+import { hashGuestSecret, isValidGuestSecret } from "./access";
 
 type DbCtx = MutationCtx | QueryCtx;
 type MessageDoc = Doc<"messages">;
@@ -27,6 +34,7 @@ const agentMessageValidator = v.object({
   id: v.id("messages"),
   role: v.union(v.literal("user"), v.literal("assistant")),
   content: v.string(),
+  actor: v.optional(messageActorValidator),
   createdAt: v.number(),
 });
 
@@ -46,6 +54,8 @@ export type AddMessageArgs = {
   sessionId: Id<"sessions">;
   role: "user" | "assistant";
   content: string;
+  actor?: MessageActor;
+  clientMessageId?: string;
   frameId?: Id<"frames">;
   idempotencyKey?: string;
   streamState?: string;
@@ -60,6 +70,8 @@ export const add = internalMutation({
     sessionId: v.id("sessions"),
     role: v.union(v.literal("user"), v.literal("assistant")),
     content: v.string(),
+    actor: v.optional(messageActorValidator),
+    clientMessageId: v.optional(v.string()),
     frameId: v.optional(v.id("frames")),
     idempotencyKey: v.optional(v.string()),
     streamState: v.optional(v.string()),
@@ -192,6 +204,8 @@ export async function addMessageInternal(
         if (args.updatedSurface !== undefined) patch.updatedSurface = args.updatedSurface;
         if (args.widget !== undefined) patch.widget = args.widget;
         if (args.card !== undefined) patch.card = args.card;
+        if (args.actor !== undefined) patch.actor = args.actor;
+        if (args.clientMessageId !== undefined) patch.clientMessageId = args.clientMessageId;
         await ctx.db.patch(existing._id, patch);
         if (args.streamState === "complete") {
           const deltas = await ctx.db
@@ -209,6 +223,10 @@ export async function addMessageInternal(
       role: args.role,
       content: args.content,
       frameId,
+      ...(args.actor !== undefined ? { actor: args.actor } : {}),
+      ...(args.clientMessageId !== undefined
+        ? { clientMessageId: args.clientMessageId }
+        : {}),
       ...(args.widget !== undefined ? { widget: args.widget } : {}),
       ...(args.card !== undefined ? { card: args.card } : {}),
       ...(args.updatedSurface !== undefined ? { updatedSurface: args.updatedSurface } : {}),
@@ -240,22 +258,44 @@ async function setDefaultSessionTitle(
 }
 
 export const list = query({
-  args: { sessionId: v.id("sessions") },
-  returns: v.array(
-    v.object({
-      id: v.id("messages"),
-      role: v.union(v.literal("user"), v.literal("assistant")),
-      content: v.string(),
-      createdAt: v.number(),
-      activationId: v.optional(v.string()),
-      streamState: v.optional(v.string()),
-      widget: v.optional(v.string()),
-      card: v.optional(v.object({ title: v.string(), source: v.string() })),
-      updatedSurface: v.optional(v.boolean()),
-    }),
-  ),
-  handler: async (ctx, { sessionId }) => {
+  args: {
+    sessionId: v.id("sessions"),
+    guestSecret: v.optional(v.string()),
+  },
+  returns: v.object({
+    viewerActorIds: v.array(v.string()),
+    messages: v.array(
+      v.object({
+        id: v.id("messages"),
+        role: v.union(v.literal("user"), v.literal("assistant")),
+        content: v.string(),
+        actor: v.optional(messageActorValidator),
+        clientMessageId: v.optional(v.string()),
+        createdAt: v.number(),
+        activationId: v.optional(v.string()),
+        streamState: v.optional(v.string()),
+        widget: v.optional(v.string()),
+        card: v.optional(v.object({ title: v.string(), source: v.string() })),
+        updatedSurface: v.optional(v.boolean()),
+      }),
+    ),
+  }),
+  handler: async (ctx, { sessionId, guestSecret }) => {
     const messages = await listMessagesForSession(ctx, sessionId);
+    const session = await ctx.db.get(sessionId);
+    const userId = await getAuthUserId(ctx);
+    const user = userId ? await ctx.db.get(userId) : null;
+    const viewerActorIds = user ? [githubActor(user).id] : [];
+    const ownsAnonymousActor =
+      session !== null &&
+      ((userId !== null && session.ownerUserId === userId) ||
+        (guestSecret !== undefined &&
+          isValidGuestSecret(guestSecret) &&
+          session.guestSecretHash !== undefined &&
+          (await hashGuestSecret(guestSecret)) === session.guestSecretHash));
+    if (ownsAnonymousActor) {
+      viewerActorIds.push(`anonymous:${sessionId}`);
+    }
     const liveContent = new Map(
       await Promise.all(
         messages
@@ -284,22 +324,31 @@ export const list = query({
         .filter((frame) => frame !== null)
         .map((frame) => [frame._id, frame.activationId] as const),
     );
-    return messages.map((message) => {
-      const activationId = message.frameId
-        ? activationByFrameId.get(message.frameId)
-        : undefined;
-      return {
-        id: message._id,
-        role: message.role,
-        content: liveContent.get(message._id) ?? message.content,
-        createdAt: message.createdAt,
-        ...(activationId !== undefined ? { activationId } : {}),
-        ...(message.streamState !== undefined ? { streamState: message.streamState } : {}),
-        ...(message.widget !== undefined ? { widget: message.widget } : {}),
-        ...(message.card !== undefined ? { card: message.card } : {}),
-        ...(message.updatedSurface !== undefined ? { updatedSurface: message.updatedSurface } : {}),
-      };
-    });
+    return {
+      viewerActorIds,
+      messages: messages.map((message) => {
+        const activationId = message.frameId
+          ? activationByFrameId.get(message.frameId)
+          : undefined;
+        return {
+          id: message._id,
+          role: message.role,
+          content: liveContent.get(message._id) ?? message.content,
+          ...(message.actor !== undefined ? { actor: message.actor } : {}),
+          ...(message.clientMessageId !== undefined
+            ? { clientMessageId: message.clientMessageId }
+            : {}),
+          createdAt: message.createdAt,
+          ...(activationId !== undefined ? { activationId } : {}),
+          ...(message.streamState !== undefined ? { streamState: message.streamState } : {}),
+          ...(message.widget !== undefined ? { widget: message.widget } : {}),
+          ...(message.card !== undefined ? { card: message.card } : {}),
+          ...(message.updatedSurface !== undefined
+            ? { updatedSurface: message.updatedSurface }
+            : {}),
+        };
+      }),
+    };
   },
 });
 
@@ -329,6 +378,7 @@ export const pageForAgent = internalQuery({
         id: message._id,
         role: message.role,
         content: message.content,
+        ...(message.actor !== undefined ? { actor: message.actor } : {}),
         createdAt: message.createdAt,
       }));
 
@@ -353,7 +403,8 @@ export async function listMessagesForSession(
     .order("desc")
     .take(MAX_SESSION_MESSAGES);
   const messages = await Promise.all(rows.map((row) => ctx.db.get(row.messageId)));
-  return messages
-    .filter((message): message is MessageDoc => message !== null)
-    .sort((a, b) => a.createdAt - b.createdAt || a._id.localeCompare(b._id));
+  // The index query provides the authoritative insertion order. Reverse the
+  // newest-first bounded page instead of re-sorting by millisecond timestamps,
+  // which can collide when multiple clients send together.
+  return messages.reverse().filter((message): message is MessageDoc => message !== null);
 }

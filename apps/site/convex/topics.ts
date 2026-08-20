@@ -9,6 +9,8 @@ import { v } from "convex/values";
 import { mutation } from "./_generated/server";
 import { appendMachineFrameInternal } from "./sessions";
 import { authorizeSessionWrite } from "./access";
+import { getAuthUserId } from "@convex-dev/auth/server";
+import { anonymousActor, githubActor } from "./actors";
 
 const TOPICS: Record<string, { ask: string; reply: string }> = {
   subagents: {
@@ -28,15 +30,23 @@ export const open = mutation({
     // The question as the visitor's card showed it; falls back to the
     // topic's canonical ask so the log always has a coherent user turn.
     ask: v.optional(v.string()),
+    clientMessageId: v.string(),
     guestSecret: v.optional(v.string()),
   },
   returns: v.null(),
-  handler: async (ctx, { sessionId, topic, ask, guestSecret }) => {
+  handler: async (ctx, { sessionId, topic, ask, clientMessageId, guestSecret }) => {
     const entry = TOPICS[topic];
     if (!entry) throw new Error(`Unknown topic "${topic}"`);
     const session = await ctx.db.get(sessionId);
     if (!session) throw new Error("Session not found");
-    await authorizeSessionWrite(ctx, session, guestSecret);
+    const access = await authorizeSessionWrite(ctx, session, guestSecret);
+    const userId = access === "authenticated" ? await getAuthUserId(ctx) : null;
+    const user = userId ? await ctx.db.get(userId) : null;
+    const actor = user ? githubActor(user) : anonymousActor(sessionId);
+    const normalizedClientMessageId = clientMessageId.trim();
+    if (!normalizedClientMessageId || normalizedClientMessageId.length > 100) {
+      throw new Error("Invalid client message id");
+    }
 
     const userText = ask?.trim() || entry.ask;
     const frameId = await appendMachineFrameInternal(ctx, {
@@ -45,7 +55,12 @@ export const open = mutation({
       frame: {
         metadata: { type: "topic", topic },
         messages: [
-          { type: "user", text: userText },
+          {
+            type: "user",
+            text: userText,
+            actor,
+            clientMessageId: normalizedClientMessageId,
+          },
           // Assistant messages default to audience "self", which is scoped to
           // the frame's generator — and an app-authored frame has none, so the
           // reply would be invisible to the model. This one was said to the
@@ -67,14 +82,21 @@ export const open = mutation({
         role,
         content,
         frameId,
+        ...(role === "user" ? { actor, clientMessageId: normalizedClientMessageId } : {}),
         ...(widget !== undefined ? { widget } : {}),
         createdAt: at++,
-        idempotencyKey: `topic:${frameId}:${role}`,
+        idempotencyKey:
+          role === "user"
+            ? `topic:${actor.id}:${normalizedClientMessageId}`
+            : `topic:${frameId}:${role}`,
       });
       await ctx.db.insert("messageIndex", {
         sessionId,
         messageId,
-        idempotencyKey: `topic:${frameId}:${role}`,
+        idempotencyKey:
+          role === "user"
+            ? `topic:${actor.id}:${normalizedClientMessageId}`
+            : `topic:${frameId}:${role}`,
       });
     };
     await insert("user", userText);

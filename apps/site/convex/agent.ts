@@ -25,6 +25,7 @@ import {
   readCardData,
   siteCharter,
 } from "../src/agent/charter";
+import { anonymousActor, type MessageActor } from "./actors";
 import { escapeConvexJson, restoreConvexJson } from "./convexJson";
 
 const MODEL_ID = process.env.OPENAI_MODEL ?? "gpt-5.6-sol";
@@ -34,16 +35,22 @@ export const sendMessage = action({
   args: {
     sessionId: v.id("sessions"),
     text: v.string(),
+    clientMessageId: v.string(),
     guestSecret: v.optional(v.string()),
   },
   returns: v.object({ success: v.literal(true) }),
-  handler: async (ctx, { sessionId, text, guestSecret }): Promise<{ success: true }> => {
+  handler: async (
+    ctx,
+    { sessionId, text, clientMessageId, guestSecret },
+  ): Promise<{ success: true }> => {
     if (!(await getAuthUserId(ctx))) throw new Error("AUTH_REQUIRED");
     await ctx.runMutation(internal.sessions.authorizeAuthenticatedTurn, {
       sessionId,
       guestSecret,
     });
-    await runUserMessage(ctx, sessionId, text);
+    const actor = await ctx.runQuery(internal.actors.current, {});
+    if (!actor) throw new Error("AUTH_REQUIRED");
+    await runUserMessage(ctx, sessionId, text, clientMessageId, actor);
     return { success: true };
   },
 });
@@ -52,10 +59,14 @@ export const sendAnonymousMessage = internalAction({
   args: {
     sessionId: v.id("sessions"),
     text: v.string(),
+    clientMessageId: v.string(),
   },
   returns: v.object({ success: v.literal(true) }),
-  handler: async (ctx, { sessionId, text }): Promise<{ success: true }> => {
-    await runUserMessage(ctx, sessionId, text);
+  handler: async (
+    ctx,
+    { sessionId, text, clientMessageId },
+  ): Promise<{ success: true }> => {
+    await runUserMessage(ctx, sessionId, text, clientMessageId, anonymousActor(sessionId));
     return { success: true };
   },
 });
@@ -64,9 +75,12 @@ async function runUserMessage(
   ctx: ActionCtx,
   sessionId: Id<"sessions">,
   text: string,
+  clientMessageId: string,
+  actor: MessageActor,
 ): Promise<void> {
   const trimmed = text.trim();
   if (!trimmed) throw new Error("Message requires text");
+  const normalizedClientMessageId = requireClientMessageId(clientMessageId);
 
   const { machine, referenceFrameId, streamWriter } = await loadAgentMachine(ctx, sessionId);
 
@@ -74,16 +88,26 @@ async function runUserMessage(
   // assistant's streaming rows (createdAt is the thread order). The frame
   // persistence pass later finds it by the same idempotency key — derived
   // from this messageId — and patches on the real frameId.
-  const userMessageId = crypto.randomUUID();
+  const userMessageId = `${actor.id}:${normalizedClientMessageId}`;
   await ctx.runMutation(internal.messages.add, {
     sessionId,
     role: "user",
     content: trimmed,
+    actor,
+    clientMessageId: normalizedClientMessageId,
     idempotencyKey: `user:${userMessageId}`,
   });
 
   machine.enqueueFrame({
-    messages: [{ type: "user", text: trimmed, messageId: userMessageId }],
+    messages: [
+      {
+        type: "user",
+        text: trimmed,
+        actor,
+        clientMessageId: normalizedClientMessageId,
+        messageId: userMessageId,
+      },
+    ],
   });
 
   await runAndPersistAgent(ctx, {
@@ -216,6 +240,20 @@ function createExecutor(
     maxOutputTokens: 4096,
     stream: true,
     providerOptions: { openai: { parallelToolCalls: true } },
+    messageToModelMessage: (message) => {
+      if (message.type !== "user" || !message.actor || message.text === undefined) {
+        return undefined;
+      }
+      const attribution = JSON.stringify({
+        id: message.actor.id,
+        label: message.actor.label,
+        kind: message.actor.kind,
+      });
+      return {
+        role: "user",
+        content: `<projector-actor>${attribution}</projector-actor>\n${message.text}`,
+      };
+    },
     runAction: async ({ action, input, context }) => {
       // The surface's TSX lives in the artifacts table, not machine state, so
       // retrieval is an executor concern: read the latest artifact here.
@@ -399,11 +437,15 @@ async function persistFrameMessages(
   for (const [messageIndex, message] of frame.messages.entries()) {
     const text = typeof message.text === "string" ? message.text : "";
     if (message.type === "user" && text.trim()) {
+      const actor = readMessageActor(message);
+      const clientMessageId = readStringField(message, "clientMessageId");
       await ctx.runMutation(internal.messages.add, {
         sessionId,
         role: "user",
         content: text,
         frameId,
+        ...(actor ? { actor } : {}),
+        ...(clientMessageId ? { clientMessageId } : {}),
         idempotencyKey: frameMessageKey("user", frame, message, messageIndex),
       });
     }
@@ -467,4 +509,24 @@ function readNumberField(value: unknown, key: string): number | undefined {
   if (!value || typeof value !== "object") return undefined;
   const field = (value as Record<string, unknown>)[key];
   return typeof field === "number" && Number.isFinite(field) ? field : undefined;
+}
+
+function requireClientMessageId(value: string): string {
+  const id = value.trim();
+  if (!id || id.length > 100) throw new Error("Invalid client message id");
+  return id;
+}
+
+function readMessageActor(message: FrameMessage): MessageActor | undefined {
+  const actor = message.actor;
+  if (!actor || typeof actor !== "object") return undefined;
+  const { id, kind, label } = actor as Record<string, unknown>;
+  if (
+    typeof id !== "string" ||
+    (kind !== "anonymous" && kind !== "github") ||
+    typeof label !== "string"
+  ) {
+    return undefined;
+  }
+  return { id, kind, label };
 }
