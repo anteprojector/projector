@@ -309,6 +309,15 @@
     const SELECTION = {};
     const CENTER = {};
     const contentTargetSelector = ".features .feature, .why > p:not(.label), .box, .docs li, .talk-card";
+    const modalTargetSelector = "dialog[open], [role='dialog'][aria-modal='true']";
+    const directTargetFor = (target) => {
+      if (!(target instanceof Element)) return null;
+      // A modal is one reading surface. Controls inside it should not make the
+      // ray hop around within the panel; illuminate the full modal instead.
+      return target.closest(modalTargetSelector) ||
+        target.closest(contentTargetSelector) ||
+        target.closest("a, button");
+    };
     let hoverEl = null;
     let lastDirect = null;
     let releasedByFade = null;
@@ -336,7 +345,7 @@
     }, { passive: true });
     document.addEventListener("pointermove", (e) => {
       if (e.pointerType && e.pointerType !== "mouse") return;
-      hoverEl = e.target.closest(contentTargetSelector) || e.target.closest("a, button");
+      hoverEl = directTargetFor(e.target);
       releasedByFade = null;
       schedule();
     }, { passive: true });
@@ -348,11 +357,11 @@
     });
     document.addEventListener("focusin", (e) => {
       if (!(e.target instanceof Element)) return;
-      // The composer input claims the ray for its card; other interactive
-      // targets claim themselves.
-      const claim = e.target.matches(".talk-input")
+      // A modal claims the ray as one surface. Outside a modal, the composer
+      // input claims its card and other interactive targets claim themselves.
+      const claim = e.target.closest(modalTargetSelector) || (e.target.matches(".talk-input")
         ? e.target.closest(".talk-card")
-        : e.target.matches("a, button") ? e.target : null;
+        : e.target.matches("a, button") ? e.target : null);
       if (claim) {
         hoverEl = null;
         releasedByFade = null;
