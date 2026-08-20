@@ -148,9 +148,10 @@ body {
 }
 
 /* The wash. A full-height spectrum pinned to the viewport's right side, faded
-   to nothing by mid-page so the left stays plain paper. Slightly rotated so the
-   bands read as thrown light, not printed stripes. The mask does the fading —
-   the gradient itself stays fully saturated so the hues don't muddy.
+   out after reaching roughly 75% of the way back through the centred content
+   column. Slightly rotated so the bands read as thrown light, not printed
+   stripes. The mask does the fading — the gradient itself stays fully
+   saturated so the hues don't muddy.
 
    Two nested elements, not one pseudo-element: .wash carries the load-in
    sweep and .wash i carries the shaping masks. Stacking all of it on one
@@ -175,8 +176,8 @@ body {
     var(--spec-g) 58%,
     var(--spec-b) 76%,
     var(--spec-v) 96%);
-  -webkit-mask: linear-gradient(103deg, transparent 46%, #000 97%);
-          mask: linear-gradient(103deg, transparent 46%, #000 97%);
+  -webkit-mask: linear-gradient(103deg, transparent 32%, #000 97%);
+          mask: linear-gradient(103deg, transparent 32%, #000 97%);
 }
 
 /* The ray. A wedge of white light: wide at the middle of the left edge,
@@ -427,11 +428,11 @@ body {
   .wash { opacity: 1; --wash-wipe: 135vw; animation: none; }
 }
 
-/* f1 — the wash exactly where it always was (fading in across the page at
-   103deg), just clipped to the wedge so it reads as coming off the target. */
+/* f1 — the base 103deg diagonal fade, clipped to the wedge so it reads as
+   coming off the target. */
 :root[data-variant="f"] .wash i {
-  -webkit-mask-image: linear-gradient(103deg, transparent 46%, #000 97%), var(--wedge), var(--apex);
-          mask-image: linear-gradient(103deg, transparent 46%, #000 97%), var(--wedge), var(--apex);
+  -webkit-mask-image: linear-gradient(103deg, transparent 32%, #000 97%), var(--wedge), var(--apex);
+          mask-image: linear-gradient(103deg, transparent 32%, #000 97%), var(--wedge), var(--apex);
   mask-composite: intersect;
 }
 

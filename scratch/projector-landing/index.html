@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>projector — a shared world for your agents</title>
+<title>projector — the framework for evolutionary agents</title>
 <meta name="description" content="An agent framework for state-complete agents. One shared model of the world, backed by a durable frame log, rendered through projections — every actor sees the slice meant for them.">
 <link rel="stylesheet" href="./style.css">
 <meta name="color-scheme" content="light dark">
@@ -179,7 +179,7 @@
     </svg>
   </span>
 
-  <h1 aria-label="a shared world (not a chat log) for your agents">a shared world<span class="insert"><svg class="caret" viewBox="0 0 52 32" aria-hidden="true"><path class="s1" pathLength="1" d="M2 29.2 8.6 24.8 15 20.2 21.6 15.9 28 11.2 34.2 7.1 37.8 4.2 40.1 8.5 42.3 14.1 44.7 19.3 46.7 24.7 48.3 29.6"/><path class="s2" pathLength="1" d="M7 29.4 14.2 25.2 21.4 20.8 28.4 16.2 34 11.4 36.8 7.8"/><path class="s3" pathLength="1" d="M35.4 6.2 42 0.8"/></svg><span class="note" aria-hidden="true"><i>n</i><i>o</i><i>t</i> <i>a</i> <i>c</i><i>h</i><i>a</i><i>t</i> <i>l</i><i>o</i><i>g</i></span></span> for your agents</h1>
+  <h1>the framework for evolutionary agents</h1>
 
   <!-- The hero diagram: where sidecar drew nesting (a tree), projector draws
        projection — one source, a fan of beams, one view per actor. -->
@@ -344,6 +344,10 @@
     const targets = [
       lensEl,
       ...document.querySelectorAll(".steps .step"),
+      ...document.querySelectorAll(".features .feature"),
+      ...document.querySelectorAll(".why > p:not(.label)"),
+      document.querySelector(".box"),
+      ...document.querySelectorAll(".docs li"),
     ].filter(Boolean);
     const mainEl = document.querySelector("main");
     // Where the text column actually starts. Cached: it only changes with the
@@ -364,16 +368,23 @@
     // scroll-targeted.
     const SELECTION = {};   // lock identity for text selections (no element to point at)
     const CENTER = {};      // lock identity for the no-target resting spot
+    const contentTargetSelector = ".features .feature, .why > p:not(.label), .box, .docs li";
     let hoverEl = null;
     // An interaction target outlives the interaction: falling off a hover or
     // blurring a control leaves the beam where it was. Only scrolling hands
     // control back to reading order.
     let sticky = null;
     addEventListener("scroll", () => { sticky = null; }, { passive: true });
-    document.addEventListener("pointerover", (e) => {
+    document.addEventListener("pointermove", (e) => {
       if (e.pointerType && e.pointerType !== "mouse") return;
-      hoverEl = e.target.closest("a, button");
-    });
+      // The whole centre diagram represents the projection, but the physical
+      // thing receiving the page's light is its prism/lens aperture.
+      if (e.target.closest(".fan")) hoverEl = lensEl;
+      // Resolve content blocks before their interactive descendants. In the
+      // docs this makes the full padded row the light target, even while the
+      // pointer is directly over the text link inside it.
+      else hoverEl = e.target.closest(contentTargetSelector) || e.target.closest("a, button");
+    }, { passive: true });
     document.addEventListener("pointerout", (e) => {
       if (!e.relatedTarget) hoverEl = null;   // pointer left the window
     });
@@ -491,7 +502,12 @@
         const tx = Math.max(48, best.left - 6);
         const ty = scrollY + best.top + best.height / 2;
         const th = exact ? best.height / 2 : Math.max(12, best.height / 2);
-        const tx2 = (best.right ?? best.left) + 16;   // spotlight's far plane
+        // Let the white pool enter ordinary targets only halfway, leaving the
+        // far half to the spectrum wash instead of stacking both effects over
+        // the full block. The diagram lens remains a true aperture and is lit
+        // through its far edge.
+        const far = best.right ?? best.left;
+        const tx2 = exact ? far + 16 : best.left + (far - best.left) * 0.5;
         // First frame: collapse at the left edge, already at the target's
         // height and depth, so the only motion is the reach outward.
         if (cur.x < 0) {
