@@ -101,4 +101,13 @@ export default defineSchema({
     .index("by_session", ["sessionId"])
     .index("by_session_message", ["sessionId", "messageId"])
     .index("by_session_idempotency_key", ["sessionId", "idempotencyKey"]),
+
+  // Ephemeral, append-only chunks for live assistant output. The messages row
+  // is the stable UI identity and eventual durable value; these deltas exist
+  // only while that row is streaming and are removed when its frame settles.
+  messageStreamDeltas: defineTable({
+    messageId: v.id("messages"),
+    streamSeq: v.number(),
+    text: v.string(),
+  }).index("by_message_and_stream_seq", ["messageId", "streamSeq"]),
 });

@@ -20,6 +20,8 @@ type DbCtx = MutationCtx | QueryCtx;
 type MessageDoc = Doc<"messages">;
 
 const MAX_SESSION_MESSAGES = 2000;
+// At the 250ms writer cadence this covers the full ten-minute action limit.
+const MAX_STREAM_DELTAS = 4096;
 
 const agentMessageValidator = v.object({
   id: v.id("messages"),
@@ -70,6 +72,85 @@ export const add = internalMutation({
   handler: (ctx, args) => addMessageInternal(ctx, args),
 });
 
+export const appendStreamDelta = internalMutation({
+  args: {
+    sessionId: v.id("sessions"),
+    messageKey: v.string(),
+    text: v.string(),
+    streamSeq: v.number(),
+  },
+  returns: v.id("messages"),
+  handler: async (ctx, { sessionId, messageKey, text, streamSeq }) => {
+    const existingIndex = await ctx.db
+      .query("messageIndex")
+      .withIndex("by_session_idempotency_key", (q) =>
+        q.eq("sessionId", sessionId).eq("idempotencyKey", messageKey),
+      )
+      .first();
+    const existing = existingIndex ? await ctx.db.get(existingIndex.messageId) : null;
+    if (existing && existing.streamState !== "streaming") return existing._id;
+    const messageId = existing
+      ? existing._id
+      : await addMessageInternal(ctx, {
+          sessionId,
+          role: "assistant",
+          content: "",
+          idempotencyKey: messageKey,
+          streamState: "streaming",
+          // The durable message's sequence guard only needs the initial value;
+          // delta ordering is guarded by the append-only delta index below.
+          streamSeq: 0,
+        });
+    if (!text) return messageId;
+
+    const latest = await ctx.db
+      .query("messageStreamDeltas")
+      .withIndex("by_message_and_stream_seq", (q) => q.eq("messageId", messageId))
+      .order("desc")
+      .first();
+    if (latest && latest.streamSeq >= streamSeq) return messageId;
+
+    await ctx.db.insert("messageStreamDeltas", {
+      messageId,
+      streamSeq,
+      text,
+    });
+    return messageId;
+  },
+});
+
+export const markStreamFailed = internalMutation({
+  args: {
+    sessionId: v.id("sessions"),
+    messageKey: v.string(),
+    state: v.union(v.literal("cancelled"), v.literal("error")),
+  },
+  returns: v.null(),
+  handler: async (ctx, { sessionId, messageKey, state }) => {
+    const index = await ctx.db
+      .query("messageIndex")
+      .withIndex("by_session_idempotency_key", (q) =>
+        q.eq("sessionId", sessionId).eq("idempotencyKey", messageKey),
+      )
+      .first();
+    if (!index) return null;
+    const message = await ctx.db.get(index.messageId);
+    if (message?.streamState === "streaming") {
+      const deltas = await ctx.db
+        .query("messageStreamDeltas")
+        .withIndex("by_message_and_stream_seq", (q) => q.eq("messageId", message._id))
+        .order("asc")
+        .take(MAX_STREAM_DELTAS);
+      await ctx.db.patch(message._id, {
+        content: message.content + deltas.map((delta) => delta.text).join(""),
+        streamState: state,
+      });
+      await Promise.all(deltas.map((delta) => ctx.db.delete(delta._id)));
+    }
+    return null;
+  },
+});
+
 // Shared by the agent action (via the mutation) and sendCommand (directly):
 // idempotent, stream-seq-guarded message upsert.
 export async function addMessageInternal(
@@ -109,7 +190,16 @@ export async function addMessageInternal(
         if (args.streamState !== undefined) patch.streamState = args.streamState;
         if (args.streamSeq !== undefined) patch.streamSeq = args.streamSeq;
         if (args.updatedSurface !== undefined) patch.updatedSurface = args.updatedSurface;
+        if (args.widget !== undefined) patch.widget = args.widget;
+        if (args.card !== undefined) patch.card = args.card;
         await ctx.db.patch(existing._id, patch);
+        if (args.streamState === "complete") {
+          const deltas = await ctx.db
+            .query("messageStreamDeltas")
+            .withIndex("by_message_and_stream_seq", (q) => q.eq("messageId", existing._id))
+            .take(MAX_STREAM_DELTAS);
+          await Promise.all(deltas.map((delta) => ctx.db.delete(delta._id)));
+        }
         await setDefaultSessionTitle(ctx, session, args.role, args.content);
         return existing._id;
       }
@@ -166,6 +256,23 @@ export const list = query({
   ),
   handler: async (ctx, { sessionId }) => {
     const messages = await listMessagesForSession(ctx, sessionId);
+    const liveContent = new Map(
+      await Promise.all(
+        messages
+          .filter((message) => message.streamState === "streaming")
+          .map(async (message) => {
+            const deltas = await ctx.db
+              .query("messageStreamDeltas")
+              .withIndex("by_message_and_stream_seq", (q) => q.eq("messageId", message._id))
+              .order("asc")
+              .take(MAX_STREAM_DELTAS);
+            return [
+              message._id,
+              message.content + deltas.map((delta) => delta.text).join(""),
+            ] as const;
+          }),
+      ),
+    );
     const frameIds = [
       ...new Set(
         messages.flatMap((message) => (message.frameId ? [message.frameId] : [])),
@@ -184,7 +291,7 @@ export const list = query({
       return {
         id: message._id,
         role: message.role,
-        content: message.content,
+        content: liveContent.get(message._id) ?? message.content,
         createdAt: message.createdAt,
         ...(activationId !== undefined ? { activationId } : {}),
         ...(message.streamState !== undefined ? { streamState: message.streamState } : {}),
