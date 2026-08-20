@@ -21,6 +21,7 @@ import {
 } from "../guest-access";
 import { EXPLAINERS } from "./explainers";
 import { Inspector, PaneIcon } from "./Inspector";
+import { DevPanel } from "./dev/DevPanel";
 import { createSurfaceApi } from "./surface/api";
 import { SurfaceHost } from "./surface/Surface";
 
@@ -231,7 +232,15 @@ export function App({ client, actionsUrl, initialMessage, initialTopic, sessionI
 // The marketing header, continued: same brand, same two CTA steps centered,
 // same Why/Docs/theme cluster on the right — the page folded into an app, so
 // the chrome shouldn't change vocabulary.
-function AppNav({ sessionId }: { sessionId?: string }) {
+function AppNav({
+  sessionId,
+  isAdmin = false,
+  onOpenDev,
+}: {
+  sessionId?: string;
+  isAdmin?: boolean;
+  onOpenDev?: () => void;
+}) {
   const exit = (e: React.MouseEvent) => {
     e.preventDefault();
     if (history.state?.app) history.back();
@@ -254,6 +263,11 @@ function AppNav({ sessionId }: { sessionId?: string }) {
         </div>
       </div>
       <nav className="nav-links app-nav-links">
+        {isAdmin && (
+          <button className="dev-panel-trigger" type="button" onClick={onOpenDev}>
+            dev
+          </button>
+        )}
         <a href="/#why">Why</a>
         <a href="/#docs">Docs</a>
         <ThemeToggle />
@@ -363,6 +377,13 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
   const guestSecret = useMemo(getGuestSecret, []);
   const { isLoading: authLoading, isAuthenticated } = useConvexAuth();
   const { signIn } = useAuthActions();
+  const admin = useQuery(api.dev.access.current, isAuthenticated ? {} : "skip");
+  const isAdmin = admin?.isAdmin === true;
+  const [devPanelOpen, setDevPanelOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isAdmin) setDevPanelOpen(false);
+  }, [isAdmin]);
 
   const createSession = useMutation(api.sessions.create);
   const sendMessage = useAction(api.agent.sendMessage);
@@ -1148,7 +1169,18 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
 
   return (
     <div className="app">
-      <AppNav sessionId={sessionId ?? undefined} />
+      <AppNav
+        sessionId={sessionId ?? undefined}
+        isAdmin={isAdmin}
+        onOpenDev={() => setDevPanelOpen(true)}
+      />
+      {isAdmin && (
+        <DevPanel
+          open={devPanelOpen}
+          sessionId={sessionId}
+          onClose={() => setDevPanelOpen(false)}
+        />
+      )}
       <div className="app-body" data-layer-closing={closingLayer ?? undefined}>
         {/* The same contextual chips control panes at every size. On a phone
             they dock over the nav rule; desktop keeps them just below it. */}

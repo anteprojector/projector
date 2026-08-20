@@ -27,8 +27,8 @@ import {
 import { anonymousActor } from "./actors";
 import type { MessageActor } from "./messageActor";
 import { escapeConvexJson, restoreConvexJson } from "./convexJson";
+import { SITE_MODEL_ID, sitePromptExecutorConfig } from "./executorConfig";
 
-const MODEL_ID = process.env.OPENAI_MODEL ?? "gpt-5.6-sol";
 const STREAM_WRITE_INTERVAL_MS = 250;
 
 export const sendMessage = action({
@@ -235,24 +235,8 @@ function createExecutor(
   streamWriter: StreamWriter,
 ) {
   return new AiSdkExecutor({
-    model: openai(MODEL_ID),
-    maxOutputTokens: 4096,
+    ...sitePromptExecutorConfig(openai(SITE_MODEL_ID)),
     stream: true,
-    providerOptions: { openai: { parallelToolCalls: true } },
-    messageToModelMessage: (message) => {
-      if (message.type !== "user" || !message.actor || message.text === undefined) {
-        return undefined;
-      }
-      const attribution = JSON.stringify({
-        id: message.actor.id,
-        label: message.actor.label,
-        kind: message.actor.kind,
-      });
-      return {
-        role: "user",
-        content: `<projector-actor>${attribution}</projector-actor>\n${message.text}`,
-      };
-    },
     runAction: async ({ action, input, context }) => {
       // The surface's TSX lives in the artifacts table, not machine state, so
       // retrieval is an executor concern: read the latest artifact here.
