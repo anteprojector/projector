@@ -1941,6 +1941,12 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   color: var(--faint);
 }
 .msg-user .msg-role { color: var(--accent); }
+.msg-role-github {
+  align-self: flex-start;
+  text-transform: none;
+  text-decoration: none;
+}
+.msg-role-github:hover { text-decoration: underline; }
 .msg-body {
   margin: 0;
   font-size: 0.9375rem;

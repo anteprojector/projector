@@ -15,7 +15,7 @@ import {
   getFrameIndexForSession,
   getLatestSessionFrameDoc,
 } from "./frameHistory";
-import { anonymousActor, authenticatedUser } from "./actors";
+import { anonymousActor, authenticatedUser, githubActor } from "./actors";
 import { messageActorValidator, type MessageActor } from "./messageActor";
 import { hashGuestSecret, isValidGuestSecret } from "./access";
 
@@ -278,6 +278,7 @@ export const list = query({
   }),
   handler: async (ctx, { sessionId, guestSecret }) => {
     const messages = await listMessagesForSession(ctx, sessionId);
+    const canonicalActors = await canonicalGithubActors(ctx, messages);
     const session = await ctx.db.get(sessionId);
     const user = await authenticatedUser(ctx);
     const viewerActorIds = user ? [user.actor.id] : [];
@@ -329,7 +330,9 @@ export const list = query({
           id: message._id,
           role: message.role,
           content: liveContent.get(message._id) ?? message.content,
-          ...(message.actor !== undefined ? { actor: message.actor } : {}),
+          ...(message.actor !== undefined
+            ? { actor: canonicalActors.get(message.actor.id) ?? message.actor }
+            : {}),
           ...(message.clientMessageId !== undefined
             ? { clientMessageId: message.clientMessageId }
             : {}),
@@ -367,13 +370,16 @@ export const pageForAgent = internalQuery({
     const messageDocs = await Promise.all(
       indexPage.page.map((row) => ctx.db.get(row.messageId)),
     );
-    const page = messageDocs
-      .filter((message): message is MessageDoc => message !== null)
+    const pageDocs = messageDocs.filter((message): message is MessageDoc => message !== null);
+    const canonicalActors = await canonicalGithubActors(ctx, pageDocs);
+    const page = pageDocs
       .map((message) => ({
         id: message._id,
         role: message.role,
         content: message.content,
-        ...(message.actor !== undefined ? { actor: message.actor } : {}),
+        ...(message.actor !== undefined
+          ? { actor: canonicalActors.get(message.actor.id) ?? message.actor }
+          : {}),
         createdAt: message.createdAt,
       }));
 
@@ -387,6 +393,28 @@ export const pageForAgent = internalQuery({
     };
   },
 });
+
+async function canonicalGithubActors(
+  ctx: DbCtx,
+  messages: readonly MessageDoc[],
+): Promise<Map<string, MessageActor>> {
+  const actorUserIds = new Map<string, Id<"users">>();
+  for (const message of messages) {
+    const actor = message.actor;
+    if (actor?.kind !== "github" || actorUserIds.has(actor.id)) continue;
+    const userId = ctx.db.normalizeId("users", actor.id.slice("github:".length));
+    if (userId) actorUserIds.set(actor.id, userId);
+  }
+
+  const canonicalActors = new Map<string, MessageActor>();
+  await Promise.all(
+    [...actorUserIds].map(async ([actorId, userId]) => {
+      const user = await ctx.db.get(userId);
+      if (user) canonicalActors.set(actorId, githubActor(user));
+    }),
+  );
+  return canonicalActors;
+}
 
 export async function listMessagesForSession(
   ctx: DbCtx,

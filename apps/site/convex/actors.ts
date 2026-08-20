@@ -12,11 +12,14 @@ export function anonymousActor(sessionId: Id<"sessions">): MessageActor {
 }
 
 export function githubActor(user: Doc<"users">): MessageActor {
-  const handle = user.name?.trim() || "user";
+  // auth.ts deliberately stores GitHub's login in `name`; never use the
+  // provider's human-facing display name for shared-room attribution.
+  const handle = (user.name?.trim() || "user").toLowerCase();
   return {
     id: `github:${user._id}`,
     kind: "github",
     label: `@github/${handle}`,
+    profileUrl: `https://github.com/${encodeURIComponent(handle)}`,
   };
 }
 

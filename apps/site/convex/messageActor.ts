@@ -4,6 +4,7 @@ export const messageActorValidator = v.object({
   id: v.string(),
   kind: v.union(v.literal("anonymous"), v.literal("github")),
   label: v.string(),
+  profileUrl: v.optional(v.string()),
 });
 
 export type MessageActor = Infer<typeof messageActorValidator>;

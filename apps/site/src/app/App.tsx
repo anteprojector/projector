@@ -367,6 +367,7 @@ type MessageActor = {
   id: string;
   kind: "anonymous" | "github";
   label: string;
+  profileUrl?: string;
 };
 
 type PaneAgentNotice = {
@@ -1013,7 +1014,7 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
   // bottom. When the speaker changes, the new turn scrolls to the top of the
   // screen and everything before it becomes history above the fold;
   // consecutive messages from the same speaker accumulate below the current
-  // page top without re-paging. turnCount only moves on a speaker switch, so
+  // page top without re-paging. The turn key only moves on a speaker switch, so
   // optimistic→server row swaps and streaming growth never re-trigger the
   // sync. The thinking placeholder is not a turn — the page flips when the
   // agent actually starts saying something.
@@ -1045,7 +1046,7 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
       pending: false,
     })),
   ];
-  let turnCount = 0;
+  let latestTurnKey: string | null = null;
   const items = rendered.map((m, i) => {
     const previous = rendered[i - 1];
     const speakerId = m.role === "assistant" ? "projector" : m.actor?.id ?? m.clientMessageId;
@@ -1063,7 +1064,12 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
       m.activationId !== undefined &&
       m.activationId !== previous.activationId;
     const turnStart = speakerStart || activationStart;
-    if (turnStart) turnCount += 1;
+    if (turnStart) {
+      const boundaryId = m.role === "assistant"
+        ? m.activationId ?? String(m.key)
+        : m.clientMessageId ?? String(m.key);
+      latestTurnKey = `${speakerId}:${boundaryId}`;
+    }
     return { ...m, turnStart };
   });
 
@@ -1101,16 +1107,42 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
     };
   }, []);
 
-  // The newest turn needs enough runway to page exactly to the top while it
-  // is short. As it grows, trade that runway for message content until only
-  // the composer's clearance remains. Measuring the rendered turn instead
-  // of guessing at an average response height keeps both ends exact.
+  const previousTranscriptRef = useRef<{
+    initialized: boolean;
+    sessionId: string | null;
+    turnKey: string | null;
+    itemCount: number;
+  }>({ initialized: false, sessionId: null, turnKey: null, itemCount: 0 });
+
+  // One ordered scroll controller owns spacer sizing, author-boundary paging,
+  // and same-author bottom following. In particular, a new turn disarms follow
+  // before the spacer is measured, so the previous turn cannot pull this one
+  // to the bottom before its page sync runs.
   useLayoutEffect(() => {
     const container = scrollRef.current;
     const thread = threadRef.current;
     const composer = composerRef.current;
     const spacer = bottomSpacerRef.current;
     if (!container || !thread || !composer || !spacer) return;
+
+    const previous = previousTranscriptRef.current;
+    const sessionChanged = previous.initialized && previous.sessionId !== (sessionId ?? null);
+    const turnChanged =
+      !previous.initialized || sessionChanged || previous.turnKey !== latestTurnKey;
+    const appendedWithinTurn =
+      previous.initialized &&
+      !turnChanged &&
+      items.length > previous.itemCount;
+    const wasAtBottom = atBottomRef.current;
+    previousTranscriptRef.current = {
+      initialized: true,
+      sessionId: sessionId ?? null,
+      turnKey: latestTurnKey,
+      itemCount: items.length,
+    };
+
+    if (turnChanged) followingBottomRef.current = false;
+    if (sessionChanged) syncedOnce.current = false;
 
     let frame = 0;
     const resize = () => {
@@ -1123,26 +1155,52 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
       }
 
       const composerClearance = composer.getBoundingClientRect().height;
-      spacer.style.height = `${composerClearance}px`;
-
-      const activeRunHeight =
-        thread.getBoundingClientRect().bottom - target.getBoundingClientRect().top;
-      const missingRunway = Math.max(
-        0,
-        container.clientHeight - activeRunHeight - TURN_TOP_INSET,
+      const messages = thread.querySelectorAll<HTMLElement>(".msg");
+      const lastMessage = messages[messages.length - 1];
+      const messageRunHeight = lastMessage
+        ? lastMessage.getBoundingClientRect().bottom - target.getBoundingClientRect().top
+        : 0;
+      const threadGap = Number.parseFloat(getComputedStyle(thread).rowGap) || 0;
+      const spacerHeight = Math.max(
+        composerClearance,
+        container.clientHeight - TURN_TOP_INSET - messageRunHeight - threadGap,
       );
-      spacer.style.height = `${composerClearance + missingRunway}px`;
+      // Write the measured height once. Temporarily collapsing the spacer to
+      // measure it can clamp scrollTop at the old document height; expanding
+      // it afterward then strands the viewport back in transcript history.
+      spacer.style.height = `${spacerHeight}px`;
       if (followingBottomRef.current) {
         container.scrollTop = container.scrollHeight;
         atBottomRef.current = true;
       }
+      return target;
     };
     const scheduleResize = () => {
       if (frame) cancelAnimationFrame(frame);
       frame = requestAnimationFrame(resize);
     };
 
-    resize();
+    const target = resize();
+    if (turnChanged && target) {
+      const top =
+        target.getBoundingClientRect().top -
+        container.getBoundingClientRect().top +
+        container.scrollTop -
+        TURN_TOP_INSET;
+      const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+      container.scrollTo({
+        top: Math.max(0, top),
+        behavior: syncedOnce.current && !still ? "smooth" : "instant",
+      });
+      syncedOnce.current = true;
+    } else if (appendedWithinTurn && wasAtBottom) {
+      followingBottomRef.current = true;
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth",
+      });
+    }
+
     const observer = new ResizeObserver(scheduleResize);
     observer.observe(container);
     observer.observe(composer);
@@ -1151,46 +1209,7 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
       if (frame) cancelAnimationFrame(frame);
       observer.disconnect();
     };
-  }, [turnCount, items.length, items.map((item) => String(item.key)).join("\n")]);
-
-  useLayoutEffect(() => {
-    if (turnCount === 0) return;
-    followingBottomRef.current = false;
-    const container = scrollRef.current;
-    if (!container) return;
-    const starts = container.querySelectorAll<HTMLElement>("[data-turn-start]");
-    const target = starts[starts.length - 1];
-    if (!target) return;
-    const top =
-      target.getBoundingClientRect().top -
-      container.getBoundingClientRect().top +
-      container.scrollTop -
-      TURN_TOP_INSET;
-    const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
-    container.scrollTo({
-      top: Math.max(0, top),
-      // The first sync (loading an existing session) is a cut, not a scroll.
-      behavior: syncedOnce.current && !still ? "smooth" : "instant",
-    });
-    syncedOnce.current = true;
-  }, [turnCount]);
-
-  const previousTranscriptRef = useRef({ initialized: false, itemCount: 0, turnCount: 0 });
-  useLayoutEffect(() => {
-    const previous = previousTranscriptRef.current;
-    const appendedWithinTurn =
-      previous.initialized && items.length > previous.itemCount && turnCount === previous.turnCount;
-    previousTranscriptRef.current = { initialized: true, itemCount: items.length, turnCount };
-    if (!appendedWithinTurn || !atBottomRef.current) return;
-
-    const container = scrollRef.current;
-    if (!container) return;
-    followingBottomRef.current = true;
-    container.scrollTo({
-      top: container.scrollHeight,
-      behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth",
-    });
-  }, [items.length, turnCount]);
+  }, [sessionId, latestTurnKey, items.length, items.map((item) => String(item.key)).join("\n")]);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1682,9 +1701,20 @@ function Message({ messageId, role, content, actor, isMine, widget, card, api, p
       data-message-id={messageId}
       data-turn-start={turnStart ? "" : undefined}
     >
-      <span className="msg-role">
-        {role === "assistant" ? "projector" : isMine ? "you" : actor?.label ?? "anon"}
-      </span>
+      {role === "user" && !isMine && actor?.kind === "github" && actor.profileUrl ? (
+        <a
+          className="msg-role msg-role-github"
+          href={actor.profileUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {actor.label}
+        </a>
+      ) : (
+        <span className="msg-role">
+          {role === "assistant" ? "projector" : isMine ? "you" : actor?.label ?? "anon"}
+        </span>
+      )}
       {card && api
         ? <CardMessage card={card} api={api} />
         : Explainer && onAsk

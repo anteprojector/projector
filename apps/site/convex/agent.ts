@@ -503,7 +503,7 @@ function requireClientMessageId(value: string): string {
 function readMessageActor(message: FrameMessage): MessageActor | undefined {
   const actor = message.actor;
   if (!actor || typeof actor !== "object") return undefined;
-  const { id, kind, label } = actor as Record<string, unknown>;
+  const { id, kind, label, profileUrl } = actor as Record<string, unknown>;
   if (
     typeof id !== "string" ||
     (kind !== "anonymous" && kind !== "github") ||
@@ -511,5 +511,10 @@ function readMessageActor(message: FrameMessage): MessageActor | undefined {
   ) {
     return undefined;
   }
-  return { id, kind, label };
+  return {
+    id,
+    kind,
+    label,
+    ...(typeof profileUrl === "string" ? { profileUrl } : {}),
+  };
 }
