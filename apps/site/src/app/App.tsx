@@ -2,7 +2,8 @@
 // marketing page — the visitor should feel like the page folded into an app,
 // not like they navigated somewhere else.
 
-import { ConvexProvider, ConvexReactClient, useAction, useMutation, useQuery } from "convex/react";
+import { ConvexAuthProvider, useAuthActions, useConvexAuth } from "@convex-dev/auth/react";
+import { ConvexReactClient, useAction, useMutation, useQuery } from "convex/react";
 import { TextAlignStart } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../convex/_generated/api";
@@ -13,6 +14,11 @@ import {
   type OptimisticEffigy,
 } from "@projectors/core/client";
 import { recordStoredSession } from "../sessions-store";
+import {
+  AnonymousMessageError,
+  getGuestSecret,
+  sendAnonymousMessage,
+} from "../guest-access";
 import { EXPLAINERS } from "./explainers";
 import { Inspector, PaneIcon } from "./Inspector";
 import { createSurfaceApi } from "./surface/api";
@@ -99,12 +105,13 @@ function findSurface(
 
 type AppProps = {
   client: ConvexReactClient | null;
+  actionsUrl?: string;
   initialMessage?: string;
   initialTopic?: string;
   sessionId?: string;
 };
 
-export function App({ client, initialMessage, initialTopic, sessionId }: AppProps) {
+export function App({ client, actionsUrl, initialMessage, initialTopic, sessionId }: AppProps) {
   if (!client) {
     return (
       <div className="app">
@@ -129,13 +136,14 @@ export function App({ client, initialMessage, initialTopic, sessionId }: AppProp
     );
   }
   return (
-    <ConvexProvider client={client}>
+    <ConvexAuthProvider client={client}>
       <Conversation
+        actionsUrl={actionsUrl}
         initialMessage={initialMessage}
         initialTopic={initialTopic}
         sessionId={sessionId}
       />
-    </ConvexProvider>
+    </ConvexAuthProvider>
   );
 }
 
@@ -245,7 +253,10 @@ type PaneAgentNotice = {
   pending?: boolean;
 };
 
-function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }: {
+const pendingMessageKey = (sessionId: string) => `projector:pending-message:${sessionId}`;
+
+function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: sessionIdProp }: {
+  actionsUrl?: string;
   initialMessage?: string;
   initialTopic?: string;
   sessionId?: string;
@@ -258,7 +269,12 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
   const [finalResponseStarted, setFinalResponseStarted] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [input, setInput] = useState("");
+  const [authPrompt, setAuthPrompt] = useState(false);
+  const [signingIn, setSigningIn] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const guestSecret = useMemo(getGuestSecret, []);
+  const { isLoading: authLoading, isAuthenticated } = useConvexAuth();
+  const { signIn } = useAuthActions();
 
   const createSession = useMutation(api.sessions.create);
   const sendMessage = useAction(api.agent.sendMessage);
@@ -285,7 +301,7 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
       createMachineEffigy<any>(async (message) => {
         const id = sessionIdRef.current;
         if (!id) throw new Error("No active session");
-        const result = await sendCommandRef.current({ sessionId: id, message });
+        const result = await sendCommandRef.current({ sessionId: id, message, guestSecret });
         if (message.name === "appPanePing") {
           beginPaneAgentNoticeRef.current(message.callId);
         }
@@ -542,29 +558,63 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
     sessionId ? { sessionId } : "skip",
   );
 
+  const requestAuthentication = useCallback((draft: string) => {
+    setInput(draft);
+    setAuthPrompt(true);
+    setWaitingSince(null);
+  }, []);
+
   const send = useCallback(
     async (text: string, topic?: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
-      setOptimistic((prev) => [
-        ...prev,
-        { key: `opt-${Date.now()}-${prev.length}`, role: "user", content: trimmed },
-      ]);
-      setFinalResponseStarted(false);
-      setWaitingSince(Date.now());
+      if (authLoading) {
+        setInput(trimmed);
+        return;
+      }
+      if (!topic && !isAuthenticated && session?.anonymousTurnUsed) {
+        requestAuthentication(trimmed);
+        return;
+      }
+
       let id = sessionId;
       if (!id) {
-        id = await createSession({});
+        id = await createSession({ guestSecret });
         setSessionId(id);
         history.replaceState({ app: true }, "", `/s/${id}`);
       }
+
+      const optimisticKey = `opt-${Date.now()}-${crypto.randomUUID()}`;
+      setOptimistic((prev) => [
+        ...prev,
+        { key: optimisticKey, role: "user", content: trimmed },
+      ]);
+      setFinalResponseStarted(false);
+      setWaitingSince(Date.now());
       try {
         setSendError(null);
         // A topic turn is prebuilt server-side — a rich explainer lands as a
         // real frame with no model call, so the answer is effectively instant.
-        if (topic) await openTopic({ sessionId: id, topic, ask: trimmed });
-        else await sendMessage({ sessionId: id, text: trimmed });
-      } catch {
+        if (topic) {
+          await openTopic({ sessionId: id, topic, ask: trimmed, guestSecret });
+        } else if (isAuthenticated) {
+          await sendMessage({ sessionId: id, text: trimmed, guestSecret });
+        } else if (actionsUrl) {
+          await sendAnonymousMessage(actionsUrl, { sessionId: id, text: trimmed, guestSecret });
+        } else {
+          throw new Error("Anonymous message endpoint isn't configured");
+        }
+        setInput("");
+        setAuthPrompt(false);
+      } catch (error) {
+        if (
+          error instanceof AnonymousMessageError &&
+          (error.code === "AUTH_REQUIRED" || error.code === "IP_RATE_LIMITED")
+        ) {
+          setOptimistic((prev) => prev.filter((message) => message.key !== optimisticKey));
+          requestAuthentication(trimmed);
+          return;
+        }
         // The turn died server-side (model error, action crash). Anything the
         // machine durably did before the failure is already in the log; say
         // so instead of sitting silent.
@@ -575,23 +625,62 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
         setWaitingSince(null);
       }
     },
-    [sessionId, createSession, sendMessage, openTopic],
+    [
+      actionsUrl,
+      authLoading,
+      createSession,
+      guestSecret,
+      isAuthenticated,
+      openTopic,
+      requestAuthentication,
+      sendMessage,
+      session?.anonymousTurnUsed,
+      sessionId,
+    ],
   );
+
+  const beginGithubSignIn = useCallback(async () => {
+    if (!sessionId || signingIn) return;
+    const draft = input.trim();
+    if (draft) sessionStorage.setItem(pendingMessageKey(sessionId), draft);
+    setSigningIn(true);
+    setSendError(null);
+    try {
+      await signIn("github", { redirectTo: location.href });
+    } catch {
+      setSigningIn(false);
+      setSendError("GitHub sign-in couldn't start — please try again");
+    }
+  }, [input, sessionId, signIn, signingIn]);
+
+  const resumedSendRef = useRef(false);
+  useEffect(() => {
+    if (authLoading || !isAuthenticated || !sessionId || resumedSendRef.current) return;
+    const key = pendingMessageKey(sessionId);
+    const draft = sessionStorage.getItem(key)?.trim();
+    if (!draft) return;
+    resumedSendRef.current = true;
+    sessionStorage.removeItem(key);
+    setAuthPrompt(false);
+    setInput("");
+    void send(draft);
+  }, [authLoading, isAuthenticated, send, sessionId]);
 
   // The message typed on the marketing page is the first turn. StrictMode
   // double-invokes effects in dev; the ref makes the send once-only.
   const bootRef = useRef(false);
   useEffect(() => {
+    if (authLoading) return;
     if (bootRef.current) return;
     bootRef.current = true;
     if (initialMessage) void send(initialMessage, initialTopic);
     else if (!sessionId) {
-      void createSession({}).then((id) => {
+      void createSession({ guestSecret }).then((id) => {
         setSessionId(id);
         history.replaceState({ app: true }, "", `/s/${id}`);
       });
     }
-  }, [initialMessage, initialTopic, sessionId, send, createSession]);
+  }, [authLoading, createSession, guestSecret, initialMessage, initialTopic, send, sessionId]);
 
   // Server truth replaces optimism as soon as it covers it: any optimistic
   // user message whose text has landed server-side is dropped.
@@ -783,8 +872,14 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    void send(input);
+    const draft = input.trim();
+    if (!draft) return;
+    if (!isAuthenticated && session?.anonymousTurnUsed) {
+      requestAuthentication(draft);
+      return;
+    }
     setInput("");
+    void send(draft);
   };
 
   const revealPaneAgentNotice = useCallback(() => {
@@ -902,30 +997,50 @@ function Conversation({ initialMessage, initialTopic, sessionId: sessionIdProp }
             </div>
           </div>
           <form className="app-composer" onSubmit={submit} autoComplete="off">
-            <div className="talk-card">
-              <input
-                ref={inputRef}
-                className="talk-input"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="ask projector…"
-                spellCheck={false}
-                enterKeyHint="send"
-                aria-label="Message projector"
-                autoFocus
-              />
-              <button className="talk-mic" type="button" disabled title="voice — coming soon" aria-label="Voice input, coming soon">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
-              </button>
-              <button className="talk-go" type="submit" aria-label="Send">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15M13 6l6 6-6 6"/></svg>
-              </button>
-            </div>
+            {authPrompt && !isAuthenticated ? (
+              <div className="auth-gate" role="dialog" aria-label="Continue with GitHub">
+                <div className="auth-gate-copy">
+                  <strong>Continue with GitHub</strong>
+                  <span>Sign in to send your next message.</span>
+                </div>
+                <button
+                  className="auth-gate-github"
+                  type="button"
+                  disabled={signingIn}
+                  onClick={() => void beginGithubSignIn()}
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.27-.01-1.17-.02-2.12-3.2.7-3.88-1.36-3.88-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.76 2.69 1.25 3.35.96.1-.75.4-1.25.72-1.54-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18.92-.26 1.91-.39 2.9-.39.98 0 1.97.13 2.9.39 2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.12 3.05.74.81 1.18 1.83 1.18 3.09 0 4.42-2.69 5.39-5.25 5.67.41.36.78 1.06.78 2.14 0 1.55-.01 2.79-.01 3.17 0 .31.21.67.8.56A11.52 11.52 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z"/></svg>
+                  {signingIn ? "opening GitHub…" : "Sign in with GitHub"}
+                </button>
+                <p className="auth-gate-public">Conversations are public. Don’t share secrets or personal information.</p>
+              </div>
+            ) : (
+              <div className="talk-card">
+                <input
+                  ref={inputRef}
+                  className="talk-input"
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  placeholder="ask projector…"
+                  spellCheck={false}
+                  enterKeyHint="send"
+                  aria-label="Message projector"
+                  autoFocus
+                />
+                <button className="talk-mic" type="button" disabled title="voice — coming soon" aria-label="Voice input, coming soon">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+                </button>
+                <button className="talk-go" type="submit" aria-label="Send">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15M13 6l6 6-6 6"/></svg>
+                </button>
+              </div>
+            )}
           </form>
         </div>
         {showInspector && (
           <Inspector
             sessionId={sessionId}
+            guestSecret={guestSecret}
             fallbackTitle={firstUserText}
             width={panes.inspectorWidth}
             onResizeStart={startResize("inspector")}

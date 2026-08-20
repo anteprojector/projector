@@ -6,6 +6,10 @@
 // therefore never lose a surface, and an LLM-led migration only has to walk
 // this table.
 
+import {
+  paginationOptsValidator,
+  paginationResultValidator,
+} from "convex/server";
 import { v } from "convex/values";
 import {
   internalMutation,
@@ -25,6 +29,29 @@ const surfaceValidator = v.object({
   version: v.number(),
   title: v.string(),
   source: v.string(),
+});
+
+const agentArtifactValidator = v.object({
+  id: v.id("artifacts"),
+  kind: v.literal("surface"),
+  version: v.number(),
+  title: v.string(),
+  source: v.string(),
+  frameId: v.optional(v.id("frames")),
+  charterVersion: v.optional(v.string()),
+  createdAt: v.number(),
+});
+
+const agentArtifactPageValidator = v.object({
+  session: v.union(
+    v.null(),
+    v.object({
+      id: v.id("sessions"),
+      title: v.optional(v.string()),
+      createdAt: v.number(),
+    }),
+  ),
+  artifacts: v.union(v.null(), paginationResultValidator(agentArtifactValidator)),
 });
 
 export async function getLatestSurfaceArtifact(
@@ -48,6 +75,48 @@ export const latestSurfaceSource = internalQuery({
     return artifact
       ? { version: artifact.version, title: artifact.title, source: artifact.source }
       : null;
+  },
+});
+
+// Agent-only reader for artifacts belonging to a known public session. Newest
+// versions come first; callers can continue with the returned opaque cursor.
+export const pageForAgent = internalQuery({
+  args: {
+    sessionId: v.id("sessions"),
+    paginationOpts: paginationOptsValidator,
+  },
+  returns: agentArtifactPageValidator,
+  handler: async (ctx, { sessionId, paginationOpts }) => {
+    const session = await ctx.db.get(sessionId);
+    if (!session) return { session: null, artifacts: null };
+
+    const artifactPage = await ctx.db
+      .query("artifacts")
+      .withIndex("by_session_kind_version", (q) => q.eq("sessionId", sessionId))
+      .order("desc")
+      .paginate(paginationOpts);
+    return {
+      session: {
+        id: session._id,
+        ...(session.title !== undefined ? { title: session.title } : {}),
+        createdAt: session._creationTime,
+      },
+      artifacts: {
+        ...artifactPage,
+        page: artifactPage.page.map((artifact) => ({
+          id: artifact._id,
+          kind: artifact.kind,
+          version: artifact.version,
+          title: artifact.title,
+          source: artifact.source,
+          ...(artifact.frameId !== undefined ? { frameId: artifact.frameId } : {}),
+          ...(artifact.charterVersion !== undefined
+            ? { charterVersion: artifact.charterVersion }
+            : {}),
+          createdAt: artifact.createdAt,
+        })),
+      },
+    };
   },
 });
 

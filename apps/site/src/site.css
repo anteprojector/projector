@@ -33,6 +33,16 @@
   --spec-g: #5f9c68;
   --spec-b: #4f7fbb;
   --spec-v: #7b5fb5;
+  /* A reusable, quiet version of the projected-light wash. Generated app
+     surfaces inherit this along with the individual spectrum hues. */
+  --spectrum-wash: linear-gradient(
+    171deg,
+    color-mix(in srgb, var(--spec-r) 18%, var(--bg)) 4%,
+    color-mix(in srgb, var(--spec-o) 18%, var(--bg)) 25%,
+    color-mix(in srgb, var(--spec-y) 17%, var(--bg)) 46%,
+    color-mix(in srgb, var(--spec-g) 18%, var(--bg)) 69%,
+    color-mix(in srgb, var(--spec-b) 18%, var(--bg)) 96%
+  );
   --spec-a: 0.32;    /* even, luminous wash without overpowering the page */
   /* On paper the beam is warm light throughout: a pale yellow body with a
      slightly warmer soft glow, never a dark outline. Dark mode overrides
@@ -1773,6 +1783,51 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 /* The landing composer card, landed. */
 .app-composer .talk-card { view-transition-name: composer; }
 .app-composer .talk-card::before { display: none; }
+.auth-gate {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  width: 100%;
+  padding: 0.75rem 0.875rem;
+  border: 1.5px solid var(--ink);
+  border-radius: 0.625rem;
+  background: var(--bg);
+  box-shadow: 0.1875rem 0.1875rem 0 var(--shadow);
+}
+.auth-gate-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.auth-gate-copy strong { font: 600 0.8125rem/1.35 var(--sans); }
+.auth-gate-copy span,
+.auth-gate-public { font: 400 0.65rem/1.4 var(--sans); }
+.auth-gate-copy span,
+.auth-gate-public { color: var(--muted); }
+.auth-gate-github {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-height: 2.25rem;
+  padding: 0.45rem 0.75rem;
+  border: 0;
+  border-radius: 0.5rem;
+  background: var(--ink);
+  color: var(--bg);
+  font: 600 0.7rem/1 var(--sans);
+  cursor: pointer;
+}
+.auth-gate-github svg { width: 1rem; height: 1rem; fill: currentColor; }
+.auth-gate-github:hover { transform: translateX(0.0625rem); }
+.auth-gate-github:disabled { opacity: 0.6; cursor: wait; }
+.auth-gate-public { margin: 0; }
+.auth-gate-github:focus-visible { outline: 2px solid var(--ink); outline-offset: 0.1875rem; }
+@media (max-width: 560px) {
+  .auth-gate { grid-template-columns: 1fr; }
+  .auth-gate-github { width: 100%; }
+}
 
 /* Pane chrome: the t3-style panel glyphs that toggle the side panes from the
    nav and minimize them from their own headers. aria-pressed marks the open
@@ -1873,7 +1928,8 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 .app-pane-body {
   flex: 1;
   overflow-y: auto;
-  padding: 0.75rem;
+  padding: 0.75rem 0.75rem max(7rem, calc(5rem + env(safe-area-inset-bottom)));
+  scroll-padding-bottom: max(7rem, calc(5rem + env(safe-area-inset-bottom)));
   font-family: var(--mono);
   font-size: 0.75rem;
   line-height: 1.7;
@@ -1943,14 +1999,6 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 /* A persistent way home when a mobile pane is quiet. An arriving Projector
    notice replaces it, so the two chat affordances never compete. */
 .pane-chat-return {
-  --chat-bubble-bg: linear-gradient(
-    171deg,
-    color-mix(in srgb, var(--spec-r) 18%, var(--bg)) 4%,
-    color-mix(in srgb, var(--spec-o) 18%, var(--bg)) 25%,
-    color-mix(in srgb, var(--spec-y) 17%, var(--bg)) 46%,
-    color-mix(in srgb, var(--spec-g) 18%, var(--bg)) 69%,
-    color-mix(in srgb, var(--spec-b) 18%, var(--bg)) 96%
-  );
   position: absolute;
   right: 1.25rem;
   bottom: max(1.25rem, env(safe-area-inset-bottom));
@@ -1961,7 +2009,7 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   height: 2.625rem;
   border: 1.5px solid var(--ink);
   border-radius: 0.75rem 0.75rem 0.1875rem 0.75rem;
-  background: var(--chat-bubble-bg);
+  background: var(--spectrum-wash);
   color: var(--ink);
   filter: drop-shadow(0.125rem 0.125rem 0 var(--shadow));
   transition: border-color 0.12s, color 0.12s;
@@ -2003,14 +2051,7 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   /* The landing's angled projected-light bands, lifted a little closer to the
      surface here but still mixed through the paper. Stops at blue: no violet
      or purple accent enters this notification. */
-  background: linear-gradient(
-    171deg,
-    color-mix(in srgb, var(--spec-r) 18%, var(--bg)) 4%,
-    color-mix(in srgb, var(--spec-o) 18%, var(--bg)) 25%,
-    color-mix(in srgb, var(--spec-y) 17%, var(--bg)) 46%,
-    color-mix(in srgb, var(--spec-g) 18%, var(--bg)) 69%,
-    color-mix(in srgb, var(--spec-b) 18%, var(--bg)) 96%
-  );
+  background: var(--spectrum-wash);
   box-shadow: 0.1875rem 0.1875rem 0 var(--shadow);
   color: var(--ink);
   font: inherit;
@@ -2087,7 +2128,8 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 .app-inspector-body {
   flex: 1;
   overflow-y: auto;
-  padding: 0.75rem;
+  padding: 0.75rem 0.75rem max(7rem, calc(5rem + env(safe-area-inset-bottom)));
+  scroll-padding-bottom: max(7rem, calc(5rem + env(safe-area-inset-bottom)));
   font-family: var(--mono);
   font-size: 0.75rem;
   line-height: 1.7;

@@ -1,6 +1,7 @@
 "use node";
 
 import { openai } from "@ai-sdk/openai";
+import { getAuthUserId } from "@convex-dev/auth/server";
 import { AiSdkExecutor, type AiSdkStreamUpdate } from "@projectors/aisdk-executor";
 import {
   ROOT_GENERATOR_ID,
@@ -13,12 +14,14 @@ import {
   type SerializedInstance,
 } from "@projectors/core";
 import { v } from "convex/values";
-import { api, internal } from "./_generated/api";
+import { internal } from "./_generated/api";
 import { action, internalAction, type ActionCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import {
   COMMENTARY_ACTION_NAME,
   GET_SURFACE_SOURCE_ACTION_NAME,
+  READ_SESSION_ARTIFACTS_ACTION_NAME,
+  READ_SESSION_MESSAGES_ACTION_NAME,
   hydrateSiteInstance,
   readCardData,
   siteCharter,
@@ -31,42 +34,65 @@ export const sendMessage = action({
   args: {
     sessionId: v.id("sessions"),
     text: v.string(),
+    guestSecret: v.optional(v.string()),
   },
   returns: v.object({ success: v.literal(true) }),
-  handler: async (ctx, { sessionId, text }): Promise<{ success: true }> => {
-    const trimmed = text.trim();
-    if (!trimmed) {
-      throw new Error("Message requires text");
-    }
-
-    const { machine, referenceFrameId, streamWrites } = await loadAgentMachine(ctx, sessionId);
-
-    // The user row is written before the run so it sorts ahead of the
-    // assistant's streaming rows (createdAt is the thread order). The frame
-    // persistence pass later finds it by the same idempotency key — derived
-    // from this messageId — and patches on the real frameId.
-    const userMessageId = crypto.randomUUID();
-    await ctx.runMutation(api.messages.add, {
+  handler: async (ctx, { sessionId, text, guestSecret }): Promise<{ success: true }> => {
+    if (!(await getAuthUserId(ctx))) throw new Error("AUTH_REQUIRED");
+    await ctx.runMutation(internal.sessions.authorizeAuthenticatedTurn, {
       sessionId,
-      role: "user",
-      content: trimmed,
-      idempotencyKey: `user:${userMessageId}`,
+      guestSecret,
     });
-
-    machine.enqueueFrame({
-      messages: [{ type: "user", text: trimmed, messageId: userMessageId }],
-    });
-
-    await runAndPersistAgent(ctx, {
-      sessionId,
-      machine,
-      referenceFrameId,
-      streamWrites,
-    });
-
+    await runUserMessage(ctx, sessionId, text);
     return { success: true };
   },
 });
+
+export const sendAnonymousMessage = internalAction({
+  args: {
+    sessionId: v.id("sessions"),
+    text: v.string(),
+  },
+  returns: v.object({ success: v.literal(true) }),
+  handler: async (ctx, { sessionId, text }): Promise<{ success: true }> => {
+    await runUserMessage(ctx, sessionId, text);
+    return { success: true };
+  },
+});
+
+async function runUserMessage(
+  ctx: ActionCtx,
+  sessionId: Id<"sessions">,
+  text: string,
+): Promise<void> {
+  const trimmed = text.trim();
+  if (!trimmed) throw new Error("Message requires text");
+
+  const { machine, referenceFrameId, streamWrites } = await loadAgentMachine(ctx, sessionId);
+
+  // The user row is written before the run so it sorts ahead of the
+  // assistant's streaming rows (createdAt is the thread order). The frame
+  // persistence pass later finds it by the same idempotency key — derived
+  // from this messageId — and patches on the real frameId.
+  const userMessageId = crypto.randomUUID();
+  await ctx.runMutation(internal.messages.add, {
+    sessionId,
+    role: "user",
+    content: trimmed,
+    idempotencyKey: `user:${userMessageId}`,
+  });
+
+  machine.enqueueFrame({
+    messages: [{ type: "user", text: trimmed, messageId: userMessageId }],
+  });
+
+  await runAndPersistAgent(ctx, {
+    sessionId,
+    machine,
+    referenceFrameId,
+    streamWrites,
+  });
+}
 
 // appPanePing's command frame is committed transactionally first. That frame
 // already contains the durable actor stimulus and scheduler activation; this
@@ -143,7 +169,7 @@ async function runAndPersistAgent(
 
   if (producedFrames.length === 0) return;
 
-  const frameIds = await ctx.runMutation(api.sessions.appendMachineFrameSequence, {
+  const frameIds = await ctx.runMutation(internal.sessions.appendMachineFrameSequence, {
     sessionId,
     referenceFrameId,
     frames: escapeConvexJson(producedFrames),
@@ -194,7 +220,7 @@ function createExecutor(
         const message = readStringField(input, "message")?.trim();
         if (!message) throw new Error("sendCommentary requires a message");
         const toolCallId = readStringField(aiSdkContext, "toolCallId") ?? crypto.randomUUID();
-        await ctx.runMutation(api.messages.add, {
+        await ctx.runMutation(internal.messages.add, {
           sessionId,
           role: "assistant",
           content: message,
@@ -223,6 +249,28 @@ function createExecutor(
             : "no app surface has been written yet",
         });
       }
+      if (action.name === READ_SESSION_MESSAGES_ACTION_NAME) {
+        const targetSessionId = requireSessionId(input);
+        const result = await ctx.runQuery(internal.messages.pageForAgent, {
+          sessionId: targetSessionId,
+          paginationOpts: {
+            numItems: 10,
+            cursor: readStringField(input, "cursor") ?? null,
+          },
+        });
+        return actionResult({ value: JSON.stringify(result) });
+      }
+      if (action.name === READ_SESSION_ARTIFACTS_ACTION_NAME) {
+        const targetSessionId = requireSessionId(input);
+        const result = await ctx.runQuery(internal.artifacts.pageForAgent, {
+          sessionId: targetSessionId,
+          paginationOpts: {
+            numItems: 10,
+            cursor: readStringField(input, "cursor") ?? null,
+          },
+        });
+        return actionResult({ value: JSON.stringify(result) });
+      }
       return await action.run?.(input as never, context as never);
     },
     onStreamUpdate: (update) => {
@@ -235,6 +283,12 @@ function createExecutor(
   });
 }
 
+function requireSessionId(input: unknown): Id<"sessions"> {
+  const sessionId = readStringField(input, "sessionId")?.trim();
+  if (!sessionId) throw new Error("sessionId is required");
+  return sessionId as Id<"sessions">;
+}
+
 async function persistStreamUpdate(
   ctx: ActionCtx,
   sessionId: Id<"sessions">,
@@ -244,7 +298,7 @@ async function persistStreamUpdate(
   // final-response row yet: commentary tools may run first, and message
   // creation time is the transcript order.
   if (update.streamState !== "streaming" || update.text.length === 0) return;
-  await ctx.runMutation(api.messages.add, {
+  await ctx.runMutation(internal.messages.add, {
     sessionId,
     role: "assistant",
     content: update.text,
@@ -286,7 +340,7 @@ async function persistFrameMessages(
   for (const [messageIndex, message] of frame.messages.entries()) {
     const text = typeof message.text === "string" ? message.text : "";
     if (message.type === "user" && text.trim()) {
-      await ctx.runMutation(api.messages.add, {
+      await ctx.runMutation(internal.messages.add, {
         sessionId,
         role: "user",
         content: text,
@@ -305,7 +359,7 @@ async function persistFrameMessages(
       // onto the message row so the transcript renders the card (content
       // stays the prose equivalent, same doctrine as explainer widgets).
       const card = readCardData(message);
-      await ctx.runMutation(api.messages.add, {
+      await ctx.runMutation(internal.messages.add, {
         sessionId,
         role: "assistant",
         content: text,

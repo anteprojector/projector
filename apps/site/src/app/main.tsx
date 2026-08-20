@@ -9,11 +9,15 @@ import { createRoot, type Root } from "react-dom/client";
 import { App } from "./App";
 
 let client: ConvexReactClient | null = null;
+let actionsUrl: string | undefined;
 let root: Root | null = null;
 
 export function warm(): void {
   const url = import.meta.env.VITE_CONVEX_URL as string | undefined;
   if (!client && url) client = new ConvexReactClient(url);
+  actionsUrl =
+    (import.meta.env.VITE_CONVEX_SITE_URL as string | undefined) ??
+    url?.replace(".convex.cloud", ".convex.site");
 }
 
 export function launch(opts: {
@@ -31,6 +35,7 @@ export function launch(opts: {
       <StrictMode>
         <App
           client={client}
+          actionsUrl={actionsUrl}
           initialMessage={opts.initialMessage}
           initialTopic={opts.initialTopic}
           sessionId={opts.sessionId}

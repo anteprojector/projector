@@ -8,6 +8,7 @@
 import { v } from "convex/values";
 import { mutation } from "./_generated/server";
 import { appendMachineFrameInternal } from "./sessions";
+import { authorizeSessionWrite } from "./access";
 
 const TOPICS: Record<string, { ask: string; reply: string }> = {
   subagents: {
@@ -27,13 +28,15 @@ export const open = mutation({
     // The question as the visitor's card showed it; falls back to the
     // topic's canonical ask so the log always has a coherent user turn.
     ask: v.optional(v.string()),
+    guestSecret: v.optional(v.string()),
   },
   returns: v.null(),
-  handler: async (ctx, { sessionId, topic, ask }) => {
+  handler: async (ctx, { sessionId, topic, ask, guestSecret }) => {
     const entry = TOPICS[topic];
     if (!entry) throw new Error(`Unknown topic "${topic}"`);
     const session = await ctx.db.get(sessionId);
     if (!session) throw new Error("Session not found");
+    await authorizeSessionWrite(ctx, session, guestSecret);
 
     const userText = ask?.trim() || entry.ask;
     const frameId = await appendMachineFrameInternal(ctx, {

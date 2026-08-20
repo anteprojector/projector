@@ -1,5 +1,15 @@
 import { v } from "convex/values";
-import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import {
+  paginationOptsValidator,
+  paginationResultValidator,
+} from "convex/server";
+import {
+  internalMutation,
+  internalQuery,
+  query,
+  type MutationCtx,
+  type QueryCtx,
+} from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   getFrameIndexForSession,
@@ -10,6 +20,25 @@ type DbCtx = MutationCtx | QueryCtx;
 type MessageDoc = Doc<"messages">;
 
 const MAX_SESSION_MESSAGES = 2000;
+
+const agentMessageValidator = v.object({
+  id: v.id("messages"),
+  role: v.union(v.literal("user"), v.literal("assistant")),
+  content: v.string(),
+  createdAt: v.number(),
+});
+
+const agentMessagePageValidator = v.object({
+  session: v.union(
+    v.null(),
+    v.object({
+      id: v.id("sessions"),
+      title: v.optional(v.string()),
+      createdAt: v.number(),
+    }),
+  ),
+  messages: v.union(v.null(), paginationResultValidator(agentMessageValidator)),
+});
 
 export type AddMessageArgs = {
   sessionId: Id<"sessions">;
@@ -24,7 +53,7 @@ export type AddMessageArgs = {
   updatedSurface?: boolean;
 };
 
-export const add = mutation({
+export const add = internalMutation({
   args: {
     sessionId: v.id("sessions"),
     role: v.union(v.literal("user"), v.literal("assistant")),
@@ -164,6 +193,46 @@ export const list = query({
         ...(message.updatedSurface !== undefined ? { updatedSurface: message.updatedSurface } : {}),
       };
     });
+  },
+});
+
+// Agent-only reader for a public transcript. Deliberately requires a known
+// session id: there is no session discovery or text-search surface here.
+export const pageForAgent = internalQuery({
+  args: {
+    sessionId: v.id("sessions"),
+    paginationOpts: paginationOptsValidator,
+  },
+  returns: agentMessagePageValidator,
+  handler: async (ctx, { sessionId, paginationOpts }) => {
+    const session = await ctx.db.get(sessionId);
+    if (!session) return { session: null, messages: null };
+
+    const indexPage = await ctx.db
+      .query("messageIndex")
+      .withIndex("by_session", (q) => q.eq("sessionId", sessionId))
+      .order("asc")
+      .paginate(paginationOpts);
+    const messageDocs = await Promise.all(
+      indexPage.page.map((row) => ctx.db.get(row.messageId)),
+    );
+    const page = messageDocs
+      .filter((message): message is MessageDoc => message !== null)
+      .map((message) => ({
+        id: message._id,
+        role: message.role,
+        content: message.content,
+        createdAt: message.createdAt,
+      }));
+
+    return {
+      session: {
+        id: session._id,
+        ...(session.title !== undefined ? { title: session.title } : {}),
+        createdAt: session._creationTime,
+      },
+      messages: { ...indexPage, page },
+    };
   },
 });
 

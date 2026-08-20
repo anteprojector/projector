@@ -156,17 +156,43 @@ const getSurfaceSource = createAction({
   run: () => "surface source is only retrievable during an agent turn",
 });
 
-// The design brief both UI-authoring tools carry. The failure mode without
-// it is consistent: big bordered boxes, oversized type, decoration — so the
-// brief is mostly prohibitions with one positive direction (quiet, dense,
-// modern) up front.
+export const READ_SESSION_MESSAGES_ACTION_NAME = "readSessionMessages";
+const readSessionMessages = createAction({
+  state: null,
+  name: READ_SESSION_MESSAGES_ACTION_NAME,
+  description:
+    "Read one chronological page of 10 public messages from a known session id. Pass the continueCursor returned by the previous call to read the next page. Omit cursor for the first page. This does not discover or search sessions.",
+  inputSchema: z.object({
+    sessionId: z.string().trim().min(1),
+    cursor: z.string().optional(),
+  }),
+  run: () => "session messages are only retrievable during an agent turn",
+});
+
+export const READ_SESSION_ARTIFACTS_ACTION_NAME = "readSessionArtifacts";
+const readSessionArtifacts = createAction({
+  state: null,
+  name: READ_SESSION_ARTIFACTS_ACTION_NAME,
+  description:
+    "Read one newest-first page of 10 public artifacts, including their source, from a known session id. Pass the continueCursor returned by the previous call to read the next page. Omit cursor for the first page. This does not discover or search sessions.",
+  inputSchema: z.object({
+    sessionId: z.string().trim().min(1),
+    cursor: z.string().optional(),
+  }),
+  run: () => "session artifacts are only retrievable during an agent turn",
+});
+
+// The design brief both UI-authoring tools carry. It establishes defaults,
+// not a house style that overrides what the visitor actually asks for.
 const DESIGN_BRIEF = `Design brief — quiet, minimal, modern; a tool, not a poster:
+- Match the ceremony to the request. Start with the smallest complete working interface, then add only what helps the visitor use it. A request for "a counter button" means one compact button that includes the current count, unless the visitor asks for more — not a dashboard about a counter.
+- Keep implementation details in the implementation. Do not turn framework mechanics, state durability, component names, or the prompt into visible labels or explanatory copy unless the visitor asks to see them.
 - Prefer the design system components. Write custom CSS only for layout a component can't express, never to restyle what a component already does.
 - The pane is narrow. Rows and hairline Dividers over boxes; at most one Card per view and never a Card inside a Card. Whitespace is the default grouping device.
 - Type: body is 0.8125rem and nothing renders larger than Stat's value. Label is the only heading. Don't bold whole sentences.
-- Color: ink on paper. --muted for secondary text, --accent for at most one focal element per view. Theme tokens only — any hardcoded color breaks dark mode.
+- Color: ink on paper. If an accent helps and the visitor did not specify one, choose a fitting hue from --spec-r, --spec-o, --spec-y, --spec-g, --spec-b, or --spec-v and set it with e.g. \`:host { --accent: var(--spec-g); }\`; do not habitually default to violet. Use --muted for secondary text and accent at most one focal element per view. A subtle --spectrum-wash may mark one meaningful focal region when the full spectrum suits the subject; otherwise one hue is enough. Explicit visitor color requests always win. Theme tokens only — any hardcoded color breaks dark mode.
 - Space on the 0.25rem grid (0.25 / 0.5 / 0.75 / 1). Buttons stay small: one primary per view, everything else ghost.
-- No gradients, no shadows (Card raised is the one sanctioned exception, at most once), no emoji as decoration, no borders around everything. When unsure, remove.`;
+- No gradients except the provided --spectrum-wash, no shadows (Card raised is the one sanctioned exception, at most once), no emoji as decoration, no borders around everything. When unsure, remove.`;
 
 const writeAppSurface = createAction({
   state: appSurfaceState,
@@ -177,15 +203,15 @@ The source is a single TSX module. Contract:
 - Default-export a React function component: \`export default function Surface({ api }) { ... }\`.
 - Imports allowed: "react" and "projector/ds" ONLY. No other packages, no relative imports.
 - Design system (import { ... } from "projector/ds"):
-  Card({ title?, raised?, children }) (raised = the landing's chunky paper card; at most one),
   Stack({ gap?: "s"|"m"|"l", children }), Inline({ justify?: "start"|"between"|"end", children }),
   Divider(), Empty({ children }) (faint centered empty-state note),
   Label({ children }) (mono eyebrow),
   Button({ children, onClick?, kind?: "primary"|"ghost", disabled? }),
   Input({ value, onChange: (text) => void, placeholder?, onSubmit? }),
   Checkbox({ checked, onChange: (checked) => void, label? }),
-  Row({ children, onClick?, active? }), Stat({ label, value }).
-- Custom styling: render a <style> element in your JSX. Styles are scoped to your surface (shadow DOM). Use the site's theme tokens so light and dark both work: --ink, --bg, --muted, --faint, --rule, --accent, --shadow; font stacks var(--mono) and var(--sans).
+  Row({ children, onClick?, active? }), Stat({ label, value }),
+  Card({ title?, raised?, children }) (only when content benefits from a bounded group; raised is the landing's chunky paper card, at most one).
+- Custom styling: render a <style> element in your JSX. Styles are scoped to your surface (shadow DOM). Use the site's theme tokens so light and dark both work: --ink, --bg, --muted, --faint, --rule, --accent, --shadow; spectrum hues --spec-r, --spec-o, --spec-y, --spec-g, --spec-b, --spec-v; the subtle full-spectrum background --spectrum-wash; font stacks var(--mono) and var(--sans).
 
 ${DESIGN_BRIEF}
 
@@ -462,7 +488,7 @@ const guideNode = createNode({
   name: "projector guide",
   params: siteParamsSchema,
   states: [audienceState],
-  tools: [noteAudience, sendCommentary],
+  tools: [noteAudience, sendCommentary, readSessionMessages, readSessionArtifacts],
   parts: [action(spawnChild, "any"), action(cedeChild, "any"), action(postCard, "any")],
   instructions: `You are projector's introduction agent — and you are yourself a projector machine. The conversation you're having is a durable frame log; this prompt is a compiled projection of registered state and parts; the tool you hold writes state that the visitor can watch change. When you talk about projector you are also talking about yourself, and you should use that honestly and lightly — never cute, never labored.
 
@@ -482,6 +508,7 @@ How to behave:
 - Surfaces may wake you after a meaningful interaction with api.run("appPanePing", { message, data? }). Wire this only when a response is useful (a request for judgment, a completed flow, a consequential choice); ordinary toggles and edits should update state without making you speak. If an interaction both changes state and pings, await updateState first.
 - Author UI when it genuinely helps, and pick the right kind: postCard for a transient illustration pinned to this moment of the conversation (frame content — immutable, scrolls into history), writeAppSurface for anything the visitor should keep using (state — one live surface, replaceable, survives refresh). The distinction is projector's own storage model and worth narrating once when it comes up. Don't force UI into conversations that are going fine as prose.
 - Some conversations open with a prebuilt rich explainer (a diagram card) persisted into the frame log as an assistant turn of yours. Treat it as something you genuinely said and build on it — don't re-explain what it already covered.
+- Public sessions can be read when the visitor gives you a session id. Use readSessionMessages for 10-message chronological pages and readSessionArtifacts for 10-artifact newest-first pages. Follow returned cursors when you need more; these tools do not discover or search sessions.
 - Voice is coming soon; the mic button is a stub.
 - Keep responses tight. Short paragraphs, no headers unless genuinely structural, no bullet-point avalanches.`,
 });
@@ -491,7 +518,7 @@ export const siteCharter = createCharter({
   version: "0.0.1",
   params: siteParamsSchema,
   nodes: [guideNode, uiNode],
-  tools: [noteAudience, sendCommentary],
+  tools: [noteAudience, sendCommentary, readSessionMessages, readSessionArtifacts],
   actions: [setPanes, writeAppSurface, getSurfaceSource, spawnChild, cedeChild, updateStateAction, postCard],
   commands: [reportSurfaceError, appPanePing],
   // appSurface carries projection code (render/note), so registration is

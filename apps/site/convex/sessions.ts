@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { getAuthUserId } from "@convex-dev/auth/server";
 import {
   internalMutation,
   internalQuery,
@@ -40,6 +41,13 @@ import {
   readLegacySurface,
   recordSurfaceArtifacts,
 } from "./artifacts";
+import {
+  ACCESS_ERROR,
+  authorizeSessionWrite,
+  hashGuestSecret,
+  isValidGuestSecret,
+  reserveAnonymousTurn as reserveAnonymousTurnForSession,
+} from "./access";
 import { escapeConvexJson, restoreConvexJson, stripClientSchemas } from "./convexJson";
 import {
   getFrameIndexForSession,
@@ -55,15 +63,22 @@ type SessionDoc = Doc<"sessions">;
 const MAX_INSTANCE_LOGS = 2000;
 
 export const create = mutation({
-  args: {},
+  args: { guestSecret: v.optional(v.string()) },
   returns: v.id("sessions"),
-  handler: async (ctx) => {
+  handler: async (ctx, { guestSecret }) => {
     const now = Date.now();
     const instance = createInitialSerializedInstance();
     const syncState = createEmptySyncState();
+    const userId = await getAuthUserId(ctx);
+    if (!userId && (!guestSecret || !isValidGuestSecret(guestSecret))) {
+      throw new Error("Guest session requires a browser secret");
+    }
     const sessionId = await ctx.db.insert("sessions", {
       contextEpoch: 0,
       syncState: escapeConvexJson(syncState),
+      ...(userId
+        ? { ownerUserId: userId }
+        : { guestSecretHash: await hashGuestSecret(guestSecret!) }),
     });
 
     const frameId = await ctx.db.insert("frames", {
@@ -94,11 +109,13 @@ export const rename = mutation({
   args: {
     sessionId: v.id("sessions"),
     title: v.string(),
+    guestSecret: v.optional(v.string()),
   },
   returns: v.null(),
-  handler: async (ctx, { sessionId, title }) => {
+  handler: async (ctx, { sessionId, title, guestSecret }) => {
     const session = await ctx.db.get(sessionId);
     if (!session) throw new Error("Session not found");
+    await authorizeSessionWrite(ctx, session, guestSecret);
     const nextTitle = title.trim().slice(0, 80);
     if (!nextTitle) throw new Error("Title cannot be empty");
     await ctx.db.patch(sessionId, { title: nextTitle });
@@ -118,6 +135,7 @@ export const get = query({
       v.null(),
       v.object({ version: v.number(), title: v.string(), source: v.string() }),
     ),
+    anonymousTurnUsed: v.boolean(),
     workStartedAt: v.optional(v.number()),
   }),
   handler: async (ctx, { sessionId }) => {
@@ -150,6 +168,7 @@ export const get = query({
       clientSnapshot,
       syncState,
       surface,
+      anonymousTurnUsed: session.anonymousTurnUsedAt !== undefined,
       ...(session.workStartedAt !== undefined ? { workStartedAt: session.workStartedAt } : {}),
     };
   },
@@ -225,7 +244,7 @@ export const listFrames = query({
   },
 });
 
-export const appendMachineFrameSequence = mutation({
+export const appendMachineFrameSequence = internalMutation({
   args: {
     sessionId: v.id("sessions"),
     referenceFrameId: v.optional(v.id("frames")),
@@ -259,10 +278,12 @@ export const sendCommand = mutation({
   args: {
     sessionId: v.id("sessions"),
     message: v.any(),
+    guestSecret: v.optional(v.string()),
   },
   returns: v.null(),
-  handler: async (ctx, { sessionId, message }) => {
+  handler: async (ctx, { sessionId, message, guestSecret }) => {
     const session = await getSessionOrThrow(ctx, sessionId);
+    const access = await authorizeSessionWrite(ctx, session, guestSecret);
     const latestFrame = await getLatestSessionFrameDoc(ctx, sessionId);
     if (!latestFrame) throw new Error("Session has no frames");
     const serialized = await getLatestSerializedSource(ctx, sessionId);
@@ -279,6 +300,9 @@ export const sendCommand = mutation({
     const produced: Frame[] = [];
     for await (const frame of runMachine(machine, { scheduleWork: false })) {
       produced.push(frame);
+    }
+    if (access === "guest" && containsWorkActivation(produced)) {
+      throw new Error(ACCESS_ERROR.authRequired);
     }
     if (produced.length > 0) {
       const frameIds = await appendMachineFrameSequenceInternal(ctx, {
@@ -320,6 +344,34 @@ export const sendCommand = mutation({
         });
       }
     }
+    return null;
+  },
+});
+
+export const reserveAnonymousTurn = internalMutation({
+  args: {
+    sessionId: v.id("sessions"),
+    guestSecret: v.string(),
+    ipHash: v.string(),
+  },
+  returns: v.null(),
+  handler: async (ctx, { sessionId, guestSecret, ipHash }) => {
+    const session = await getSessionOrThrow(ctx, sessionId);
+    await reserveAnonymousTurnForSession(ctx, session, guestSecret, ipHash);
+    return null;
+  },
+});
+
+export const authorizeAuthenticatedTurn = internalMutation({
+  args: {
+    sessionId: v.id("sessions"),
+    guestSecret: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, { sessionId, guestSecret }) => {
+    const session = await getSessionOrThrow(ctx, sessionId);
+    const access = await authorizeSessionWrite(ctx, session, guestSecret);
+    if (access !== "authenticated") throw new Error(ACCESS_ERROR.authRequired);
     return null;
   },
 });

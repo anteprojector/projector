@@ -21,8 +21,9 @@ export function PaneIcon({ side }: { side: "left" | "right" }) {
   );
 }
 
-export function Inspector({ sessionId, fallbackTitle, width, onResizeStart }: {
+export function Inspector({ sessionId, guestSecret, fallbackTitle, width, onResizeStart }: {
   sessionId: Id<"sessions"> | null;
+  guestSecret: string;
   fallbackTitle?: string;
   width?: number;
   onResizeStart?: (e: React.PointerEvent) => void;
@@ -52,7 +53,7 @@ export function Inspector({ sessionId, fallbackTitle, width, onResizeStart }: {
       </div>
       <div className="app-inspector-body">
         {tab === "overview" ? (
-          <Overview sessionId={sessionId} title={title} />
+          <Overview sessionId={sessionId} guestSecret={guestSecret} title={title} />
         ) : tab === "frames" ? (
           <FrameLog frames={frames} />
         ) : (
@@ -63,8 +64,9 @@ export function Inspector({ sessionId, fallbackTitle, width, onResizeStart }: {
   );
 }
 
-function Overview({ sessionId, title }: {
+function Overview({ sessionId, guestSecret, title }: {
   sessionId: Id<"sessions"> | null;
+  guestSecret: string;
   title: string;
 }) {
   const renameSession = useMutation(api.sessions.rename);
@@ -84,7 +86,7 @@ function Overview({ sessionId, title }: {
     setSaving(true);
     setStatus(null);
     try {
-      await renameSession({ sessionId, title: trimmed });
+      await renameSession({ sessionId, title: trimmed, guestSecret });
       setStatus("saved");
     } catch {
       setStatus("couldn’t rename thread");

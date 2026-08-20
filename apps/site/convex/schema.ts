@@ -1,11 +1,19 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { authTables } from "@convex-dev/auth/server";
 
 export default defineSchema({
+  ...authTables,
+
   sessions: defineTable({
     contextEpoch: v.number(),
     title: v.optional(v.string()),
     syncState: v.optional(v.any()),
+    // Reads are public. Writes belong to either the anonymous browser secret
+    // or the GitHub identity that claims that secret after OAuth.
+    guestSecretHash: v.optional(v.string()),
+    ownerUserId: v.optional(v.id("users")),
+    anonymousTurnUsedAt: v.optional(v.number()),
     // Set when a client command schedules an agent wake (appPanePing), cleared
     // when the run's frames persist. Presence bookkeeping, deliberately NOT
     // machine state: the client shows the thinking indicator from it, and a
