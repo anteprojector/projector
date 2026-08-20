@@ -118,7 +118,7 @@ function PromptView({ prompts }: { prompts: CurrentPrompts }) {
   return (
     <div className="dev-prompt-view">
       <p className="dev-prompt-note">
-        current · would send now · read-only
+        current · read-only
       </p>
       {prompts.runtimes.map((runtime, index) => (
         <PromptRuntimeView

@@ -4,8 +4,17 @@
 
 import { ConvexAuthProvider, useAuthActions, useConvexAuth } from "@convex-dev/auth/react";
 import { ConvexReactClient, useAction, useMutation, useQuery } from "convex/react";
-import { TextAlignStart } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { CodeXml, TextAlignStart } from "lucide-react";
+import {
+  Component,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import {
@@ -22,6 +31,7 @@ import {
 import { EXPLAINERS } from "./explainers";
 import { Inspector, PaneIcon } from "./Inspector";
 import { DevPanel } from "./dev/DevPanel";
+import { formatStateUpdateRejection } from "./state-update-notice";
 import { createSurfaceApi } from "./surface/api";
 import { SurfaceHost } from "./surface/Surface";
 
@@ -88,9 +98,9 @@ function findPanesEntry(value: unknown): PanesEntry | undefined {
 type SurfaceMeta = { version: number; title: string; lastError: string | null };
 type SurfaceArtifact = { version: number; title: string; source: string };
 
-// The surface's TSX is a server-side artifact (sessions.get joins the latest
-// artifacts row); machine state carries only the small meta — lastError is
-// the piece the pane still reads from it.
+// The surface's TSX is a server-side artifact (sessions.get joins the selected
+// artifact row); machine state carries only the small meta — lastError is the
+// piece the pane still reads from it.
 function findSurface(
   instances: unknown,
   artifact: SurfaceArtifact | null | undefined,
@@ -250,7 +260,22 @@ function AppNav({
     <header className="app-nav">
       <div className="app-nav-left">
         <a className="nav-brand" href="/" onClick={exit}>projector</a>
-        {sessionId && <span className="app-nav-session">s/{sessionId.slice(0, 12)}</span>}
+        {(sessionId || isAdmin) && (
+          <div className="app-nav-context">
+            {sessionId && <span className="app-nav-session">s/{sessionId.slice(0, 12)}</span>}
+            {isAdmin && (
+              <button
+                className="dev-panel-trigger"
+                type="button"
+                onClick={onOpenDev}
+                aria-label="Open developer panel"
+                title="Developer panel"
+              >
+                <CodeXml aria-hidden="true" />
+              </button>
+            )}
+          </div>
+        )}
       </div>
       <div className="start" aria-label="Project actions">
         <div className="steps">
@@ -263,11 +288,6 @@ function AppNav({
         </div>
       </div>
       <nav className="nav-links app-nav-links">
-        {isAdmin && (
-          <button className="dev-panel-trigger" type="button" onClick={onOpenDev}>
-            dev
-          </button>
-        )}
         <a href="/#why">Why</a>
         <a href="/#docs">Docs</a>
         <ThemeToggle />
@@ -355,6 +375,11 @@ type PaneAgentNotice = {
   pending?: boolean;
 };
 
+type StateUpdateNotice = {
+  id: string;
+  content: string;
+};
+
 const pendingMessageKey = (sessionId: string) => `projector:pending-message:${sessionId}`;
 
 function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: sessionIdProp }: {
@@ -400,6 +425,9 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
   const sendCommandRef = useRef(sendCommand);
   sendCommandRef.current = sendCommand;
   const beginPaneAgentNoticeRef = useRef<(callId: string) => void>(() => {});
+  const stateUpdateRejectedRef = useRef<
+    (event: { error: unknown; input: unknown }) => void
+  >(() => {});
   // TInstances is `any`: the site has no generated client-instance types yet,
   // and the command surface is discovered from the snapshot at runtime.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -438,7 +466,13 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
 
   // The surface api is the effigy itself, thinly wrapped — agent-authored UI
   // reads the same projection and runs the same commands as the shell.
-  const surfaceApi = useMemo(() => createSurfaceApi(effigy), [effigy]);
+  const surfaceApi = useMemo(
+    () =>
+      createSurfaceApi(effigy, {
+        onStateUpdateRejected: (event) => stateUpdateRejectedRef.current(event),
+      }),
+    [effigy],
+  );
   const surfaceArtifact = (session as { surface?: SurfaceArtifact | null } | undefined)?.surface;
   const surface = findSurface(effigy.getInstances(), surfaceArtifact);
   const reportSurfaceError = useCallback(
@@ -828,6 +862,39 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
   // only assistant rows first observed after that can become a notice. Stream
   // patches update the same notice without restarting its lifetime.
   const [paneAgentNotice, setPaneAgentNotice] = useState<PaneAgentNotice | null>(null);
+  const [stateUpdateNotices, setStateUpdateNotices] = useState<StateUpdateNotice[]>([]);
+  const stateUpdateNoticeSequenceRef = useRef(0);
+  const stateUpdateNoticeTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const dismissStateUpdateNotice = useCallback((noticeId: string) => {
+    const timer = stateUpdateNoticeTimersRef.current.get(noticeId);
+    if (timer) clearTimeout(timer);
+    stateUpdateNoticeTimersRef.current.delete(noticeId);
+    setStateUpdateNotices((current) => current.filter((notice) => notice.id !== noticeId));
+  }, []);
+  stateUpdateRejectedRef.current = ({ error, input }) => {
+    const id = `state:${Date.now()}:${stateUpdateNoticeSequenceRef.current++}`;
+    setStateUpdateNotices((current) => [
+      ...current,
+      { id, content: formatStateUpdateRejection(error, input) },
+    ]);
+    const timer = setTimeout(() => {
+      stateUpdateNoticeTimersRef.current.delete(id);
+      setStateUpdateNotices((current) => current.filter((notice) => notice.id !== id));
+    }, 12_000);
+    stateUpdateNoticeTimersRef.current.set(id, timer);
+  };
+  useEffect(() => {
+    setStateUpdateNotices([]);
+    for (const timer of stateUpdateNoticeTimersRef.current.values()) clearTimeout(timer);
+    stateUpdateNoticeTimersRef.current.clear();
+  }, [sessionId]);
+  useEffect(
+    () => () => {
+      for (const timer of stateUpdateNoticeTimersRef.current.values()) clearTimeout(timer);
+      stateUpdateNoticeTimersRef.current.clear();
+    },
+    [],
+  );
   const seenPaneAgentMessagesRef = useRef<{
     sessionId: string | null;
     ids: Set<string>;
@@ -1166,6 +1233,8 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
   const showInspector = isNarrow
     ? layer === "inspector" || closingLayer === "inspector"
     : panes.inspector;
+  const visiblePaneAgentNotice = isNarrow && layer ? paneAgentNotice : null;
+  const hasPaneNotices = stateUpdateNotices.length > 0 || visiblePaneAgentNotice !== null;
 
   return (
     <div className="app">
@@ -1234,6 +1303,8 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
         </button>
         {showApp && (
           <AppPane
+            sessionId={sessionId}
+            showLabs={isAdmin}
             width={panes.appWidth}
             onResizeStart={startResize("app")}
             surface={surface}
@@ -1335,7 +1406,7 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
             onResizeStart={startResize("inspector")}
           />
         )}
-        {isNarrow && layer && !paneAgentNotice && (
+        {isNarrow && layer && !hasPaneNotices && (
           <button
             className="pane-chat-return"
             type="button"
@@ -1347,37 +1418,76 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
             </span>
           </button>
         )}
-        {isNarrow && layer && paneAgentNotice && (
-          <button
-            className="pane-agent-notice"
-            type="button"
-            onClick={revealPaneAgentNotice}
-            data-pending={paneAgentNotice.pending ? "" : undefined}
-            aria-label={
-              paneAgentNotice.pending
-                ? "Projector is responding"
-                : "Open the conversation to read projector's new message"
-            }
-          >
-            {paneAgentNotice.pending ? (
-              <span className="pane-agent-notice-cursor" aria-hidden="true" />
-            ) : (
-              <>
-                <span className="pane-agent-notice-role">projector</span>
-                <span className="pane-agent-notice-copy">{paneAgentNotice.content}</span>
-              </>
-            )}
-          </button>
+        {hasPaneNotices && (
+          <PaneNoticeStack
+            agent={visiblePaneAgentNotice}
+            stateUpdates={stateUpdateNotices}
+            onRevealAgent={revealPaneAgentNotice}
+            onDismissStateUpdate={dismissStateUpdateNotice}
+          />
         )}
       </div>
     </div>
   );
 }
 
-// The left pane: the app surface. Renders whatever writeAppSurface last
-// wrote — the source is an immutable server-side artifact (every version is
-// kept), with the small meta (version/title/lastError) in machine state.
-function AppPane({ width, onResizeStart, surface, api, onSurfaceError, onAsk }: {
+function PaneNoticeStack({
+  agent,
+  stateUpdates,
+  onRevealAgent,
+  onDismissStateUpdate,
+}: {
+  agent: PaneAgentNotice | null;
+  stateUpdates: StateUpdateNotice[];
+  onRevealAgent: () => void;
+  onDismissStateUpdate: (noticeId: string) => void;
+}) {
+  return (
+    <div className="pane-notice-stack" aria-label="Application notices">
+      {stateUpdates.map((notice) => (
+        <div className="pane-state-notice" role="alert" key={notice.id}>
+          <span className="pane-agent-notice-role">state update rejected</span>
+          <span className="pane-agent-notice-copy">{notice.content}</span>
+          <button
+            type="button"
+            onClick={() => onDismissStateUpdate(notice.id)}
+            aria-label="Dismiss state update error"
+          >
+            ×
+          </button>
+        </div>
+      ))}
+      {agent && (
+        <button
+          className="pane-agent-notice"
+          type="button"
+          onClick={onRevealAgent}
+          data-pending={agent.pending ? "" : undefined}
+          aria-label={
+            agent.pending
+              ? "Projector is responding"
+              : "Open the conversation to read projector's new message"
+          }
+        >
+          {agent.pending ? (
+            <span className="pane-agent-notice-cursor" aria-hidden="true" />
+          ) : (
+            <>
+              <span className="pane-agent-notice-role">projector</span>
+              <span className="pane-agent-notice-copy">{agent.content}</span>
+            </>
+          )}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// The left pane: the app surface. Renders the selected immutable server-side
+// artifact; the small meta and active-version pointer live in machine state.
+function AppPane({ sessionId, showLabs, width, onResizeStart, surface, api, onSurfaceError, onAsk }: {
+  sessionId: Id<"sessions"> | null;
+  showLabs: boolean;
   width: number;
   onResizeStart: (e: React.PointerEvent) => void;
   surface: ReturnType<typeof findSurface>;
@@ -1390,6 +1500,11 @@ function AppPane({ width, onResizeStart, surface, api, onSurfaceError, onAsk }: 
       <div className="app-pane-head">
         <span className="app-pane-title">{surface?.title ? surface.title : "app"}</span>
         {surface && <span className="app-pane-version">v{surface.version}</span>}
+        {showLabs && sessionId && (
+          <LabsErrorBoundary>
+            <ArtifactHistoryLab sessionId={sessionId} />
+          </LabsErrorBoundary>
+        )}
       </div>
       <div className="app-pane-body">
         {surface ? (
@@ -1422,6 +1537,124 @@ function AppPane({ width, onResizeStart, surface, api, onSurfaceError, onAsk }: 
       </div>
       <div className="pane-resize pane-resize-app" onPointerDown={onResizeStart} />
     </aside>
+  );
+}
+
+class LabsErrorBoundary extends Component<
+  { children: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error("Labs panel failed", error);
+  }
+
+  render() {
+    if (this.state.failed) {
+      return <span className="labs-dot labs-dot-failed" title="Labs unavailable" />;
+    }
+    return this.props.children;
+  }
+}
+
+function ArtifactHistoryLab({ sessionId }: { sessionId: Id<"sessions"> }) {
+  const [open, setOpen] = useState(false);
+  const history = useQuery(api.dev.artifacts.history, open ? { sessionId } : "skip");
+  const activate = useMutation(api.dev.artifacts.activate);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [pendingVersion, setPendingVersion] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    if (!open && dialog.open) dialog.close();
+  }, [open]);
+
+  const choose = async (version: number) => {
+    setPendingVersion(version);
+    setError(null);
+    try {
+      await activate({ sessionId, version });
+      setOpen(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setPendingVersion(null);
+    }
+  };
+
+  return (
+    <div className="labs-history">
+      <button
+        className="labs-trigger"
+        type="button"
+        aria-label="Labs: app artifact history"
+        title="Labs"
+        onClick={() => setOpen(true)}
+      >
+        <span className="labs-dot" aria-hidden="true" />
+      </button>
+      <dialog
+        ref={dialogRef}
+        className="labs-modal"
+        aria-label="Labs: app artifact history"
+        onCancel={(event) => {
+          event.preventDefault();
+          setOpen(false);
+        }}
+        onClose={() => setOpen(false)}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) setOpen(false);
+        }}
+      >
+        <div className="labs-modal-shell">
+          <header className="labs-modal-head">
+            <div>
+              <span className="labs-history-eyebrow">labs</span>
+              <h2>app history</h2>
+            </div>
+            <button type="button" onClick={() => setOpen(false)} aria-label="Close app history">
+              close
+            </button>
+          </header>
+          <div className="labs-modal-body">
+            <p>Select an earlier artifact from this session.</p>
+            <div className="labs-history-list">
+              {history === undefined ? (
+                <span className="labs-history-empty">loading…</span>
+              ) : !history || history.artifacts.length === 0 ? (
+                <span className="labs-history-empty">no artifacts yet</span>
+              ) : (
+                history.artifacts.map((artifact) => {
+                  const current = artifact.version === history.activeVersion;
+                  return (
+                    <button
+                      type="button"
+                      key={artifact.version}
+                      disabled={current || pendingVersion !== null}
+                      data-current={current ? "" : undefined}
+                      onClick={() => void choose(artifact.version)}
+                    >
+                      <span>v{artifact.version}</span>
+                      <span>{artifact.title}</span>
+                      {current && <small>current</small>}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+            {error && <p className="labs-history-error">{error}</p>}
+          </div>
+        </div>
+      </dialog>
+    </div>
   );
 }
 

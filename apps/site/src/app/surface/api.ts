@@ -26,8 +26,15 @@ export type SurfaceApi = {
   run(name: string, input?: unknown, options?: SurfaceRunOptions): Promise<unknown>;
 };
 
+export type SurfaceApiEvents = {
+  onStateUpdateRejected?: (event: { error: unknown; input: unknown }) => void;
+};
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function createSurfaceApi(effigy: OptimisticEffigy<any>): SurfaceApi {
+export function createSurfaceApi(
+  effigy: OptimisticEffigy<any>,
+  events: SurfaceApiEvents = {},
+): SurfaceApi {
   // Snapshot cache, invalidated on effigy notifications. The optimistic
   // effigy materializes a fresh overlay object on every getInstances() call;
   // useSyncExternalStore requires a stable snapshot between store events or
@@ -54,19 +61,35 @@ export function createSurfaceApi(effigy: OptimisticEffigy<any>): SurfaceApi {
       // host's React, which is the only React in the page.
       useSyncExternalStore(subscribe, read),
     run: async (name, input, options) => {
-      // updateState's input IS its effect, so the client can run the exact
-      // same fold the machine will — prediction and durable truth can't
-      // diverge for a valid write. Other commands hide their effect
-      // server-side and stay non-optimistic.
-      const update = name === "updateState" && options?.optimistic !== false
-        ? readStateUpdateInput(input)
-        : null;
-      const command = effigy.getCommand(name as never, update
-        ? { optimistic: (ctx) => ctx.updateAt(update.address, update.update) }
-        : undefined);
-      return await command.run(input as never);
+      try {
+        // updateState's input IS its effect, so the client can run the exact
+        // same fold the machine will — prediction and durable truth can't
+        // diverge for a valid write. Other commands hide their effect
+        // server-side and stay non-optimistic.
+        const update = name === "updateState" && options?.optimistic !== false
+          ? readStateUpdateInput(input)
+          : null;
+        const command = effigy.getCommand(name as never, update
+          ? { optimistic: (ctx) => ctx.updateAt(update.address, update.update) }
+          : undefined);
+        const result = await command.run(input as never);
+        const failure = readCommandFailure(result);
+        if (failure) throw new Error(failure);
+        return result;
+      } catch (error) {
+        if (name === "updateState") events.onStateUpdateRejected?.({ error, input });
+        throw error;
+      }
     },
   };
+}
+
+function readCommandFailure(result: unknown): string | undefined {
+  if (!result || typeof result !== "object") return undefined;
+  const candidate = result as { success?: unknown; error?: unknown };
+  return candidate.success === false && typeof candidate.error === "string"
+    ? candidate.error
+    : undefined;
 }
 
 // Mirrors the charter's updateState action: {address, op, value, values, path}

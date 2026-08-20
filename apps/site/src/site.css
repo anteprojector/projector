@@ -1208,12 +1208,17 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   border: 0;
   background: none;
   color: var(--ink);
-  font: 500 0.9375rem/1.4 var(--sans);
+  /* An explicit 1.3rem resolves to 26px at the app's 20px root size. The
+     previous unitless line-height resolved to 26.25px, which textarea layout
+     rounded into a stray one-pixel scroll range on a single line. */
+  font: 500 0.9375rem/1.3rem var(--sans);
   padding: 0.5rem 0;
   outline: none;
   overflow-y: auto;
   resize: none;
+  scrollbar-width: none;
 }
+.talk-input::-webkit-scrollbar { display: none; }
 .talk-input::placeholder { color: var(--faint); }
 .talk-mic, .talk-clear, .talk-go {
   display: grid;
@@ -1544,17 +1549,37 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   gap: 1rem;
   min-width: 0;
 }
+.app-nav-context {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+}
 .app-nav-links { justify-self: end; }
 .dev-panel-trigger {
+  display: inline-grid;
+  width: 1.5rem;
+  height: 1.5rem;
+  place-items: center;
   border: 0;
+  border-radius: 0.25rem;
   background: none;
   padding: 0;
   color: var(--muted);
-  font: inherit;
   cursor: pointer;
 }
 .dev-panel-trigger:hover { color: var(--ink); }
 .dev-panel-trigger:focus-visible { outline: 2px solid var(--ink); outline-offset: 0.1875rem; }
+.dev-panel-trigger svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+.dev-panel-trigger path:nth-child(1) { stroke: var(--spec-b); }
+.dev-panel-trigger path:nth-child(2) { stroke: var(--spec-o); }
+.dev-panel-trigger path:nth-child(3) { stroke: var(--spec-g); }
 .app-nav-session {
   font-family: var(--mono);
   font-size: 0.71875rem;
@@ -2304,19 +2329,29 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   .pane-chat-return:hover { color: var(--ink); border-color: var(--ink); }
 }
 
-/* A new agent message remains visible while a narrow pane covers the chat.
-   The bubble is intentionally compact: tapping it closes the layer and lets
-   the full conversation carry the message from there. */
-.pane-agent-notice {
+/* Surface command errors and narrow-pane agent messages share one stack, so
+   neither can displace the other. Agent notices navigate back to the full
+   conversation; errors remain local, independently dismissible feedback. */
+.pane-notice-stack {
   position: absolute;
   z-index: 8;
   right: auto;
   bottom: max(1rem, var(--app-safe-bottom));
   left: 1rem;
-  display: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  width: min(calc(100% - 2rem), 32rem);
+  pointer-events: none;
+}
+.pane-agent-notice,
+.pane-state-notice {
+  position: relative;
+  display: flex;
   flex-direction: column;
   gap: 0.25rem;
-  width: min(calc(100% - 2rem), 32rem);
+  width: 100%;
   margin: 0;
   padding: 0.75rem 0.875rem;
   border: 1.5px solid var(--ink);
@@ -2329,8 +2364,11 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   color: var(--ink);
   font: inherit;
   text-align: left;
-  cursor: pointer;
+  pointer-events: auto;
   animation: pane-agent-notice-in 0.18s ease-out;
+}
+.pane-agent-notice {
+  cursor: pointer;
 }
 .pane-agent-notice[data-pending] {
   align-items: center;
@@ -2360,11 +2398,35 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
 }
+.pane-state-notice {
+  padding-right: 2.5rem;
+  border-color: var(--spec-r);
+  background: color-mix(in srgb, var(--spec-r) 9%, var(--bg));
+}
+.pane-state-notice .pane-agent-notice-role { color: var(--spec-r); }
+.pane-state-notice > button {
+  position: absolute;
+  top: 0.375rem;
+  right: 0.375rem;
+  display: grid;
+  width: 1.75rem;
+  height: 1.75rem;
+  place-items: center;
+  border: 0;
+  border-radius: 0.25rem;
+  background: none;
+  padding: 0;
+  color: var(--muted);
+  font: 1rem/1 var(--sans);
+  cursor: pointer;
+}
+.pane-state-notice > button:hover { background: var(--wash); color: var(--ink); }
+.pane-state-notice > button:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: -2px;
+}
 .pane-agent-notice:hover { border-color: var(--ink); }
 .pane-agent-notice:focus-visible { outline: 2px solid var(--ink); outline-offset: 0.1875rem; }
-@media (max-width: 900px) {
-  .pane-agent-notice { display: flex; }
-}
 @keyframes pane-agent-notice-in {
   from { opacity: 0; transform: translateY(0.75rem); }
 }
@@ -2374,7 +2436,7 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 @keyframes layer-out-left { to { transform: translateX(-2rem); opacity: 0; } }
 @keyframes layer-out-right { to { transform: translateX(2rem); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
-  .app-pane, .app-inspector, .pane-agent-notice, .pane-agent-notice-cursor { animation: none; }
+  .app-pane, .app-inspector, .pane-agent-notice, .pane-state-notice, .pane-agent-notice-cursor { animation: none; }
   .app-body[data-layer-closing="app"] .app-pane,
   .app-body[data-layer-closing="inspector"] .app-inspector { opacity: 0; }
 }
@@ -2583,6 +2645,154 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   font-size: 0.625rem;
   color: var(--faint);
   margin-left: 0.5rem;
+}
+.labs-history {
+  margin-left: auto;
+}
+.labs-trigger {
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+}
+.labs-trigger:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.labs-trigger:focus-visible {
+  outline: 1.5px solid var(--ink);
+  outline-offset: 0.125rem;
+}
+.labs-dot {
+  display: inline-block;
+  width: 0.375rem;
+  height: 0.375rem;
+  border: 1px solid color-mix(in srgb, var(--ink) 16%, transparent);
+  border-radius: 50%;
+  background: linear-gradient(
+    135deg,
+    var(--spec-b) 0 33.333%,
+    var(--spec-o) 33.333% 66.666%,
+    var(--spec-g) 66.666% 100%
+  );
+  box-shadow:
+    -0.125rem 0 0.375rem color-mix(in srgb, var(--spec-b) 52%, transparent),
+    0 0 0.3125rem color-mix(in srgb, var(--spec-o) 38%, transparent),
+    0.125rem 0 0.375rem color-mix(in srgb, var(--spec-g) 48%, transparent);
+}
+.labs-dot-failed {
+  margin-left: auto;
+  opacity: 0.35;
+}
+.labs-modal {
+  width: min(28rem, calc(100vw - 2rem));
+  max-width: none;
+  max-height: min(36rem, calc(100dvh - 2rem));
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1.5px solid var(--ink);
+  border-radius: 0.75rem;
+  background: var(--bg);
+  color: var(--ink);
+  box-shadow: 0.375rem 0.375rem 0 var(--shadow);
+  font: 400 0.6875rem/1.45 var(--sans);
+}
+.labs-modal::backdrop { background: rgb(0 0 0 / 0.48); }
+.labs-modal-shell {
+  display: flex;
+  flex-direction: column;
+  max-height: min(36rem, calc(100dvh - 2rem));
+}
+.labs-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.875rem 1rem;
+  border-bottom: 1px solid var(--rule);
+}
+.labs-history-eyebrow {
+  display: block;
+  color: var(--spec-b);
+  font: 600 0.5625rem/1.4 var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.labs-modal-head h2 {
+  margin-top: 0.125rem;
+  margin-bottom: 0;
+  color: var(--ink);
+  font: 600 0.75rem/1.4 var(--mono);
+  text-transform: uppercase;
+}
+.labs-modal-head > button {
+  border: 1px solid var(--rule);
+  border-radius: 0.25rem;
+  background: none;
+  padding: 0.3rem 0.55rem;
+  color: var(--muted);
+  font: 500 0.6875rem/1 var(--mono);
+  cursor: pointer;
+}
+.labs-modal-head > button:hover { border-color: var(--ink); color: var(--ink); }
+.labs-modal-head > button:focus-visible,
+.labs-history-list button:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: -2px;
+}
+.labs-modal-body {
+  overflow: auto;
+  padding: 1rem;
+}
+.labs-modal-body > p {
+  margin: 0 0 0.75rem;
+  color: var(--muted);
+}
+.labs-history-list { border-top: 1px solid var(--rule); }
+.labs-history-list button {
+  display: grid;
+  grid-template-columns: 2.25rem minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  align-items: center;
+  width: 100%;
+  padding: 0.5rem 0.25rem;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.labs-history-list button:not(:disabled):hover {
+  background: color-mix(in srgb, var(--spec-b) 8%, transparent);
+}
+.labs-history-list button:disabled { cursor: default; }
+.labs-history-list button > span:first-child {
+  color: var(--spec-b);
+  font-family: var(--mono);
+}
+.labs-history-list button > span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.labs-history-list small {
+  color: var(--spec-g);
+  font: 600 0.5625rem/1 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.labs-history-empty {
+  display: block;
+  padding: 0.75rem 0.25rem;
+  color: var(--faint);
+}
+.labs-modal-body > .labs-history-error {
+  margin-bottom: 0;
+  color: var(--t-bad);
 }
 .surface-host { min-height: 100%; }
 .surface-failure {

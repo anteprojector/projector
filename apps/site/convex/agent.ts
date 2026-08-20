@@ -242,7 +242,7 @@ function createExecutor(
       // retrieval is an executor concern: read the latest artifact here.
       if (action.name === GET_SURFACE_SOURCE_ACTION_NAME) {
         const surface: { version: number; title: string; source: string } | null =
-          await ctx.runQuery(internal.artifacts.latestSurfaceSource, { sessionId });
+          await ctx.runQuery(internal.artifacts.activeSurfaceSource, { sessionId });
         return actionResult({
           value: surface
             ? `app surface v${surface.version} "${surface.title}":\n\n${surface.source}`

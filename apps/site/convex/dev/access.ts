@@ -1,7 +1,9 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { ConvexError, v } from "convex/values";
 import type { Doc } from "../_generated/dataModel";
-import { env, query, type QueryCtx } from "../_generated/server";
+import { env, query, type MutationCtx, type QueryCtx } from "../_generated/server";
+
+type DbCtx = MutationCtx | QueryCtx;
 
 const ADMIN_REQUIRED = "ADMIN_REQUIRED";
 const AUTH_REQUIRED = "AUTH_REQUIRED";
@@ -17,7 +19,7 @@ function configuredAdminGithubIds(): Set<string> {
 }
 
 async function currentGithubAccount(
-  ctx: QueryCtx,
+  ctx: DbCtx,
 ): Promise<{ user: Doc<"users">; providerAccountId: string } | null> {
   const userId = await getAuthUserId(ctx);
   if (!userId) return null;
@@ -50,7 +52,7 @@ export const current = query({
   },
 });
 
-export async function requireAdmin(ctx: QueryCtx): Promise<Doc<"users">> {
+export async function requireAdmin(ctx: DbCtx): Promise<Doc<"users">> {
   const account = await currentGithubAccount(ctx);
   if (!account || !configuredAdminGithubIds().has(account.providerAccountId)) {
     throw new ConvexError(ADMIN_REQUIRED);

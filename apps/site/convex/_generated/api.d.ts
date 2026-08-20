@@ -15,6 +15,7 @@ import type * as artifacts from "../artifacts.js";
 import type * as auth from "../auth.js";
 import type * as convexJson from "../convexJson.js";
 import type * as dev_access from "../dev/access.js";
+import type * as dev_artifacts from "../dev/artifacts.js";
 import type * as dev_prompts from "../dev/prompts.js";
 import type * as dev_sessions from "../dev/sessions.js";
 import type * as executorConfig from "../executorConfig.js";
@@ -39,6 +40,7 @@ declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   convexJson: typeof convexJson;
   "dev/access": typeof dev_access;
+  "dev/artifacts": typeof dev_artifacts;
   "dev/prompts": typeof dev_prompts;
   "dev/sessions": typeof dev_sessions;
   executorConfig: typeof executorConfig;
