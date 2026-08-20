@@ -377,6 +377,7 @@
     const INTRO_DELAY = 200;
     const WASH_AT = 0.65;
     let introStart = null, introMs = 900, washed = false;
+    let washDoneTimer = 0;
     let washX = null, washY = null, washH = null, washDocY = null;
     let locked = null;
     let settling = true;
@@ -385,7 +386,10 @@
       rafId = 0;
       // The conversation is up: the marketing page is hidden, so the beam has
       // nothing to light. App-state observation wakes us for the return trip.
-      if (document.documentElement.dataset.app) {
+      if (
+        document.documentElement.dataset.app ||
+        document.documentElement.classList.contains("light-reset")
+      ) {
         return;
       }
       if (effectsHidden) {
@@ -484,7 +488,7 @@
             root.style.setProperty("--wash-from", Math.round(cur.x) + "px");
             root.style.setProperty("--wash-ms", ms + "ms");
             root.classList.add("wash-in");
-            setTimeout(() => root.classList.add("wash-done"), ms + 400);
+            washDoneTimer = setTimeout(() => root.classList.add("wash-done"), ms + 400);
           }
           if (p >= 1) { introStart = null; settling = false; }
         } else if (settling && !still.matches) {
@@ -588,6 +592,47 @@
     new MutationObserver(schedule).observe(document.documentElement, {
       attributes: true,
       attributeFilter: ["data-app", "data-theme"],
+    });
+    document.documentElement.addEventListener("projector:replay-light", () => {
+      const root = document.documentElement;
+      clearTimeout(washDoneTimer);
+      washDoneTimer = 0;
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = 0;
+
+      root.classList.remove("wash-in", "wash-done");
+      root.style.removeProperty("--wash-from");
+      root.style.removeProperty("--wash-ms");
+      cur.x = -1;
+      cur.x2 = 0;
+      cur.y = scrollY + innerHeight * 0.5;
+      cur.h = 12;
+      introStart = null;
+      introMs = 900;
+      washed = false;
+      washX = null;
+      washY = null;
+      washH = null;
+      washDocY = null;
+      locked = null;
+      settling = true;
+      drawn = null;
+      hoverEl = null;
+      lastDirect = null;
+      releasedByFade = null;
+      sticky = composer;
+      effectsHidden = scrollY > 50;
+      root.classList.toggle("ray-hidden", effectsHidden);
+      glow.setAttribute("points", "0,0 0,0 0,0");
+      core.setAttribute("points", "0,0 0,0 0,0");
+
+      // Geometry and class removal happen in one animation frame, so no old
+      // full-length polygon can flash between the transition and the replay.
+      rafId = requestAnimationFrame((t) => {
+        rafId = 0;
+        root.classList.remove("light-reset");
+        frame(t);
+      });
     });
     schedule();
   }

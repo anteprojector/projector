@@ -51,11 +51,16 @@ const enterApp = (
 
 const exitApp = async () => {
   const mod = await loadApp();
+  // Keep the expensive decorative layers out of the transition's new-page
+  // snapshot. Once the morph is finished, the landing's own tracker resets
+  // and replays its original beam → wash intro.
+  root.classList.add("light-reset");
   await withTransition(() => {
     delete root.dataset.app;
     page.inert = false;
     mod.unmount();
   });
+  root.dispatchEvent(new Event("projector:replay-light"));
 };
 
 // Already home: the brand is a no-op instead of a same-page reload.

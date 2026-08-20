@@ -1492,6 +1492,11 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 :root[data-app] .page,
 :root[data-app] .wash,
 :root[data-app] .light { display: none; }
+/* On the return trip, exclude the compositing-heavy light layers from the
+   view-transition snapshot. The tracker removes this after it has reset its
+   original first-load animation to a zero-length beam. */
+:root.light-reset .wash,
+:root.light-reset .light { display: none; }
 :root[data-app],
 :root[data-app] body {
   overflow: hidden;
