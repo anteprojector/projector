@@ -1,7 +1,6 @@
 "use node";
 
 import { openai } from "@ai-sdk/openai";
-import { getAuthUserId } from "@convex-dev/auth/server";
 import { AiSdkExecutor, type AiSdkStreamUpdate } from "@projectors/aisdk-executor";
 import {
   ROOT_GENERATOR_ID,
@@ -25,7 +24,8 @@ import {
   readCardData,
   siteCharter,
 } from "../src/agent/charter";
-import { anonymousActor, type MessageActor } from "./actors";
+import { anonymousActor } from "./actors";
+import type { MessageActor } from "./messageActor";
 import { escapeConvexJson, restoreConvexJson } from "./convexJson";
 
 const MODEL_ID = process.env.OPENAI_MODEL ?? "gpt-5.6-sol";
@@ -43,13 +43,10 @@ export const sendMessage = action({
     ctx,
     { sessionId, text, clientMessageId, guestSecret },
   ): Promise<{ success: true }> => {
-    if (!(await getAuthUserId(ctx))) throw new Error("AUTH_REQUIRED");
-    await ctx.runMutation(internal.sessions.authorizeAuthenticatedTurn, {
+    const actor = await ctx.runMutation(internal.sessions.authorizeAuthenticatedTurn, {
       sessionId,
       guestSecret,
     });
-    const actor = await ctx.runQuery(internal.actors.current, {});
-    if (!actor) throw new Error("AUTH_REQUIRED");
     await runUserMessage(ctx, sessionId, text, clientMessageId, actor);
     return { success: true };
   },
@@ -88,7 +85,9 @@ async function runUserMessage(
   // assistant's streaming rows (createdAt is the thread order). The frame
   // persistence pass later finds it by the same idempotency key — derived
   // from this messageId — and patches on the real frameId.
-  const userMessageId = `${actor.id}:${normalizedClientMessageId}`;
+  // The client id only reconciles the optimistic UI row. Persistence gets a
+  // fresh server identity, so retrying a request is plainly a second turn.
+  const userMessageId = crypto.randomUUID();
   await ctx.runMutation(internal.messages.add, {
     sessionId,
     role: "user",

@@ -16,6 +16,7 @@ import type * as auth from "../auth.js";
 import type * as convexJson from "../convexJson.js";
 import type * as frameHistory from "../frameHistory.js";
 import type * as http from "../http.js";
+import type * as messageActor from "../messageActor.js";
 import type * as messages from "../messages.js";
 import type * as sessions from "../sessions.js";
 import type * as topics from "../topics.js";
@@ -35,6 +36,7 @@ declare const fullApi: ApiFromModules<{
   convexJson: typeof convexJson;
   frameHistory: typeof frameHistory;
   http: typeof http;
+  messageActor: typeof messageActor;
   messages: typeof messages;
   sessions: typeof sessions;
   topics: typeof topics;

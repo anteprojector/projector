@@ -3,7 +3,6 @@ import {
   paginationOptsValidator,
   paginationResultValidator,
 } from "convex/server";
-import { getAuthUserId } from "@convex-dev/auth/server";
 import {
   internalMutation,
   internalQuery,
@@ -16,11 +15,8 @@ import {
   getFrameIndexForSession,
   getLatestSessionFrameDoc,
 } from "./frameHistory";
-import {
-  githubActor,
-  messageActorValidator,
-  type MessageActor,
-} from "./actors";
+import { anonymousActor, authenticatedUser } from "./actors";
+import { messageActorValidator, type MessageActor } from "./messageActor";
 import { hashGuestSecret, isValidGuestSecret } from "./access";
 
 type DbCtx = MutationCtx | QueryCtx;
@@ -283,18 +279,17 @@ export const list = query({
   handler: async (ctx, { sessionId, guestSecret }) => {
     const messages = await listMessagesForSession(ctx, sessionId);
     const session = await ctx.db.get(sessionId);
-    const userId = await getAuthUserId(ctx);
-    const user = userId ? await ctx.db.get(userId) : null;
-    const viewerActorIds = user ? [githubActor(user).id] : [];
+    const user = await authenticatedUser(ctx);
+    const viewerActorIds = user ? [user.actor.id] : [];
     const ownsAnonymousActor =
       session !== null &&
-      ((userId !== null && session.ownerUserId === userId) ||
+      ((user !== null && session.ownerUserId === user.userId) ||
         (guestSecret !== undefined &&
           isValidGuestSecret(guestSecret) &&
           session.guestSecretHash !== undefined &&
           (await hashGuestSecret(guestSecret)) === session.guestSecretHash));
     if (ownsAnonymousActor) {
-      viewerActorIds.push(`anonymous:${sessionId}`);
+      viewerActorIds.push(anonymousActor(sessionId).id);
     }
     const liveContent = new Map(
       await Promise.all(

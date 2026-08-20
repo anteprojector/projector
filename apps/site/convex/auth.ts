@@ -7,10 +7,10 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
       profile(profile) {
         return {
           id: profile.id.toString(),
-          name: profile.name ?? profile.login,
+          // The only public identity this demo needs is the GitHub handle.
+          name: profile.login,
           email: profile.email ?? undefined,
           image: profile.avatar_url,
-          githubHandle: profile.login,
         };
       },
     }),

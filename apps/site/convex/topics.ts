@@ -8,9 +8,8 @@
 import { v } from "convex/values";
 import { mutation } from "./_generated/server";
 import { appendMachineFrameInternal } from "./sessions";
-import { authorizeSessionWrite } from "./access";
-import { getAuthUserId } from "@convex-dev/auth/server";
-import { anonymousActor, githubActor } from "./actors";
+import { authorizeSessionWrite, consumeAnonymousTurn } from "./access";
+import { addMessageInternal } from "./messages";
 
 const TOPICS: Record<string, { ask: string; reply: string }> = {
   subagents: {
@@ -39,10 +38,8 @@ export const open = mutation({
     if (!entry) throw new Error(`Unknown topic "${topic}"`);
     const session = await ctx.db.get(sessionId);
     if (!session) throw new Error("Session not found");
-    const access = await authorizeSessionWrite(ctx, session, guestSecret);
-    const userId = access === "authenticated" ? await getAuthUserId(ctx) : null;
-    const user = userId ? await ctx.db.get(userId) : null;
-    const actor = user ? githubActor(user) : anonymousActor(sessionId);
+    const actor = await authorizeSessionWrite(ctx, session, guestSecret);
+    if (actor.kind === "anonymous") await consumeAnonymousTurn(ctx, session);
     const normalizedClientMessageId = clientMessageId.trim();
     if (!normalizedClientMessageId || normalizedClientMessageId.length > 100) {
       throw new Error("Invalid client message id");
@@ -70,37 +67,23 @@ export const open = mutation({
       },
     });
 
-    // createdAt is the sort key and _id is a random tiebreak, so the two rows
-    // must not share a timestamp or the reply can sort above the question.
-    let at = Date.now();
-    const insert = async (
-      role: "user" | "assistant",
-      content: string,
-      widget?: string,
-    ) => {
-      const messageId = await ctx.db.insert("messages", {
-        role,
-        content,
-        frameId,
-        ...(role === "user" ? { actor, clientMessageId: normalizedClientMessageId } : {}),
-        ...(widget !== undefined ? { widget } : {}),
-        createdAt: at++,
-        idempotencyKey:
-          role === "user"
-            ? `topic:${actor.id}:${normalizedClientMessageId}`
-            : `topic:${frameId}:${role}`,
-      });
-      await ctx.db.insert("messageIndex", {
-        sessionId,
-        messageId,
-        idempotencyKey:
-          role === "user"
-            ? `topic:${actor.id}:${normalizedClientMessageId}`
-            : `topic:${frameId}:${role}`,
-      });
-    };
-    await insert("user", userText);
-    await insert("assistant", entry.reply, topic);
+    await addMessageInternal(ctx, {
+      sessionId,
+      role: "user",
+      content: userText,
+      actor,
+      clientMessageId: normalizedClientMessageId,
+      frameId,
+      idempotencyKey: `topic:${frameId}:user`,
+    });
+    await addMessageInternal(ctx, {
+      sessionId,
+      role: "assistant",
+      content: entry.reply,
+      widget: topic,
+      frameId,
+      idempotencyKey: `topic:${frameId}:assistant`,
+    });
 
     return null;
   },

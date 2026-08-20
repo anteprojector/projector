@@ -1,31 +1,10 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { authTables } from "@convex-dev/auth/server";
-
-const messageActor = v.object({
-  id: v.string(),
-  kind: v.union(v.literal("anonymous"), v.literal("github")),
-  label: v.string(),
-});
+import { messageActorValidator } from "./messageActor";
 
 export default defineSchema({
   ...authTables,
-
-  // Convex Auth's standard user shape plus the public GitHub login used for
-  // attributed multiplayer messages. Optional keeps existing users valid;
-  // their next GitHub sign-in fills it.
-  users: defineTable({
-    name: v.optional(v.string()),
-    image: v.optional(v.string()),
-    email: v.optional(v.string()),
-    emailVerificationTime: v.optional(v.number()),
-    phone: v.optional(v.string()),
-    phoneVerificationTime: v.optional(v.number()),
-    isAnonymous: v.optional(v.boolean()),
-    githubHandle: v.optional(v.string()),
-  })
-    .index("email", ["email"])
-    .index("phone", ["phone"]),
 
   sessions: defineTable({
     contextEpoch: v.number(),
@@ -96,7 +75,7 @@ export default defineSchema({
     frameId: v.optional(v.id("frames")),
     role: v.union(v.literal("user"), v.literal("assistant")),
     content: v.string(),
-    actor: v.optional(messageActor),
+    actor: v.optional(messageActorValidator),
     clientMessageId: v.optional(v.string()),
     // Rich client rendering for this message: the id of a prebuilt explainer
     // widget. content stays the plain-text equivalent — it is what the LLM

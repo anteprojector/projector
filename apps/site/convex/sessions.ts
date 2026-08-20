@@ -48,6 +48,7 @@ import {
   isValidGuestSecret,
   reserveAnonymousTurn as reserveAnonymousTurnForSession,
 } from "./access";
+import { messageActorValidator } from "./messageActor";
 import { escapeConvexJson, restoreConvexJson, stripClientSchemas } from "./convexJson";
 import {
   getFrameIndexForSession,
@@ -283,7 +284,7 @@ export const sendCommand = mutation({
   returns: v.null(),
   handler: async (ctx, { sessionId, message, guestSecret }) => {
     const session = await getSessionOrThrow(ctx, sessionId);
-    const access = await authorizeSessionWrite(ctx, session, guestSecret);
+    const actor = await authorizeSessionWrite(ctx, session, guestSecret);
     const latestFrame = await getLatestSessionFrameDoc(ctx, sessionId);
     if (!latestFrame) throw new Error("Session has no frames");
     const serialized = await getLatestSerializedSource(ctx, sessionId);
@@ -299,9 +300,14 @@ export const sendCommand = mutation({
 
     const produced: Frame[] = [];
     for await (const frame of runMachine(machine, { scheduleWork: false })) {
+      for (const producedMessage of frame.messages) {
+        if (producedMessage.type === "user" && !producedMessage.actor) {
+          producedMessage.actor = actor;
+        }
+      }
       produced.push(frame);
     }
-    if (access === "guest" && containsWorkActivation(produced)) {
+    if (actor.kind === "anonymous" && containsWorkActivation(produced)) {
       throw new Error(ACCESS_ERROR.authRequired);
     }
     if (produced.length > 0) {
@@ -367,12 +373,12 @@ export const authorizeAuthenticatedTurn = internalMutation({
     sessionId: v.id("sessions"),
     guestSecret: v.optional(v.string()),
   },
-  returns: v.null(),
+  returns: messageActorValidator,
   handler: async (ctx, { sessionId, guestSecret }) => {
     const session = await getSessionOrThrow(ctx, sessionId);
-    const access = await authorizeSessionWrite(ctx, session, guestSecret);
-    if (access !== "authenticated") throw new Error(ACCESS_ERROR.authRequired);
-    return null;
+    const actor = await authorizeSessionWrite(ctx, session, guestSecret);
+    if (actor.kind !== "github") throw new Error(ACCESS_ERROR.authRequired);
+    return actor;
   },
 });
 

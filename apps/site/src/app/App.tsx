@@ -662,7 +662,7 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
         setInput(trimmed);
         return;
       }
-      if (!topic && !isAuthenticated && session?.anonymousTurnUsed) {
+      if (!isAuthenticated && session?.anonymousTurnUsed) {
         requestAuthentication(trimmed);
         return;
       }
