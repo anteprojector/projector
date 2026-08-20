@@ -382,7 +382,12 @@ describe("AiSdkExecutor", () => {
     const frames: FrameDraft[] = [];
     const streamUpdates: any[] = [];
     const generate = vi.fn(async () => result({ text: "unused" }));
-    const stream = vi.fn(() => streamResult(["Hel", "lo"]));
+    const stream = vi.fn(() => fullStreamResult([
+      { type: "text-start", id: "t1" },
+      { type: "text-delta", id: "t1", text: "Hel" },
+      { type: "text-delta", id: "t1", text: "lo" },
+      { type: "text-end", id: "t1" },
+    ]));
     const executor = new AiSdkExecutor({
       model: fakeModel(),
       generateText: generate as never,
@@ -410,8 +415,12 @@ describe("AiSdkExecutor", () => {
       "streaming",
     ]);
     expect(streamUpdates.map((update) => update.streamSeq)).toEqual([0, 1, 2]);
-    expect(output.frames).toEqual([
+    // text-end enqueues the completed segment as its own frame during the run.
+    expect(output.frames).toBeUndefined();
+    expect(frames).toEqual([
       {
+        generatorId: "runtime-1",
+        activationId: "activation-1",
         messages: [
           {
             type: "assistant",
@@ -424,7 +433,6 @@ describe("AiSdkExecutor", () => {
         ],
       },
     ]);
-    expect(frames).toEqual([]);
   });
 
   it("preserves a native preamble as a distinct frame before tool work", async () => {
@@ -1068,20 +1076,6 @@ function result(overrides: Record<string, unknown> = {}) {
     usage: undefined,
     finishReason: "stop",
     ...overrides,
-  };
-}
-
-function streamResult(chunks: string[]) {
-  return {
-    text: Promise.resolve(chunks.join("")),
-    steps: Promise.resolve([{ stepType: "initial" }]),
-    usage: Promise.resolve({ inputTokens: 1, outputTokens: 2, totalTokens: 3 }),
-    finishReason: Promise.resolve("stop"),
-    textStream: (async function* () {
-      for (const chunk of chunks) {
-        yield chunk;
-      }
-    })(),
   };
 }
 

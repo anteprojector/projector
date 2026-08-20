@@ -25,7 +25,7 @@ import {
   siteCharter,
 } from "../src/agent/charter";
 import { anonymousActor } from "./actors";
-import type { MessageActor } from "./messageActor";
+import { requireClientMessageId, type MessageActor } from "./messageActor";
 import { escapeConvexJson, restoreConvexJson } from "./convexJson";
 import { SITE_MODEL_ID, sitePromptExecutorConfig } from "./executorConfig";
 
@@ -296,10 +296,13 @@ function createStreamWriter(
   const persistedText = new Map<string, string>();
   const terminals = new Map<string, "cancelled" | "error">();
   const failed = new Set<string>();
-  let draining: Promise<void> | undefined;
   let lastWriteAt = 0;
+  // One serialization mechanism: every push chains a drain onto this tail.
+  // drainAll never rejects (both mutation calls are individually guarded),
+  // so the chain cannot wedge on an earlier failure.
+  let tail: Promise<void> = Promise.resolve();
 
-  const drain = async (): Promise<void> => {
+  const drainAll = async (): Promise<void> => {
     while (pending.size > 0 || terminals.size > 0) {
       const next = pending.entries().next().value as
         | [string, AiSdkStreamUpdate]
@@ -349,16 +352,6 @@ function createStreamWriter(
     }
   };
 
-  const ensureDrain = (): Promise<void> => {
-    if (!draining) {
-      draining = drain().finally(() => {
-        draining = undefined;
-        if (pending.size > 0 || terminals.size > 0) void ensureDrain();
-      });
-    }
-    return draining;
-  };
-
   return {
     push(update) {
       if (update.streamState === "streaming" && update.text.length > 0) {
@@ -368,16 +361,18 @@ function createStreamWriter(
         terminals.set(update.messageId, update.streamState);
       }
       if (pending.size === 0 && terminals.size === 0) return;
-      void ensureDrain();
+      tail = tail.then(drainAll);
     },
     async flush() {
       // Stream callbacks are deliberately out-of-band in the executor. Let
-      // the final callback enter this writer, then drain until it stays empty.
+      // the final callback enter this writer, then await the tail — looping
+      // in case a straggler push lands while an earlier drain settles.
       await Promise.resolve();
-      while (draining || pending.size > 0 || terminals.size > 0) {
-        await ensureDrain();
-        await Promise.resolve();
-      }
+      let settled: Promise<void>;
+      do {
+        settled = tail;
+        await settled;
+      } while (settled !== tail);
     },
   };
 }
@@ -438,7 +433,6 @@ async function persistFrameMessages(
       shouldPersistAssistantMessage(frame, message) &&
       text.trim()
     ) {
-      const streamSeq = readNumberField(message, "streamSeq");
       // postCard rides an assistant message as a data content part; lift it
       // onto the message row so the transcript renders the card (content
       // stays the prose equivalent, same doctrine as explainer widgets).
@@ -455,7 +449,6 @@ async function persistFrameMessages(
         // frame messages never carry streamState, so it must be set here or a
         // streamed message stays "streaming" forever.
         streamState: "complete",
-        ...(streamSeq !== undefined ? { streamSeq } : {}),
       });
     }
   }
@@ -488,17 +481,6 @@ function readStringField(value: unknown, key: string): string | undefined {
   return typeof field === "string" && field.length > 0 ? field : undefined;
 }
 
-function readNumberField(value: unknown, key: string): number | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const field = (value as Record<string, unknown>)[key];
-  return typeof field === "number" && Number.isFinite(field) ? field : undefined;
-}
-
-function requireClientMessageId(value: string): string {
-  const id = value.trim();
-  if (!id || id.length > 100) throw new Error("Invalid client message id");
-  return id;
-}
 
 function readMessageActor(message: FrameMessage): MessageActor | undefined {
   const actor = message.actor;

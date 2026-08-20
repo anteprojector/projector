@@ -9,6 +9,9 @@ export default defineSchema({
   sessions: defineTable({
     contextEpoch: v.number(),
     title: v.optional(v.string()),
+    // Authoritative artifact selection. A new artifact updates this pointer
+    // in the same transaction that inserts the immutable artifact row.
+    activeSurfaceVersion: v.optional(v.number()),
     syncState: v.optional(v.any()),
     // Reads are public. Writes belong to either the anonymous browser secret
     // or the GitHub identity that claims that secret after OAuth.
@@ -21,6 +24,18 @@ export default defineSchema({
     // crashed run only ever strands a timestamp the client ages out.
     workStartedAt: v.optional(v.number()),
   }),
+
+  // One durable membership edge per authenticated participant and session.
+  // Kept separate from sessions so collaborative rooms do not grow an
+  // unbounded participant array or contend on the session document.
+  sessionParticipants: defineTable({
+    userId: v.id("users"),
+    sessionId: v.id("sessions"),
+    firstParticipatedAt: v.number(),
+    lastParticipatedAt: v.number(),
+  })
+    .index("by_user_and_session", ["userId", "sessionId"])
+    .index("by_user_and_last_participated_at", ["userId", "lastParticipatedAt"]),
 
   frames: defineTable({
     referenceFrameId: v.optional(v.id("frames")),
@@ -90,11 +105,7 @@ export default defineSchema({
     createdAt: v.number(),
     idempotencyKey: v.optional(v.string()),
     streamState: v.optional(v.string()),
-    streamSeq: v.optional(v.number()),
-  })
-    .index("by_frame", ["frameId"])
-    .index("by_idempotency_key", ["idempotencyKey"])
-    .index("by_frame_idempotency_key", ["frameId", "idempotencyKey"]),
+  }).index("by_frame", ["frameId"]),
 
   messageIndex: defineTable({
     sessionId: v.id("sessions"),

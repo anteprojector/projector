@@ -11,13 +11,15 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
 import {
   getFrameIndexForSession,
   getLatestSessionFrameDoc,
 } from "./frameHistory";
 import { anonymousActor, authenticatedUser, githubActor } from "./actors";
 import { messageActorValidator, type MessageActor } from "./messageActor";
-import { hashGuestSecret, isValidGuestSecret } from "./access";
+import { guestSecretMatches } from "./access";
+import { recordParticipationInternal } from "./sessionParticipants";
 
 type DbCtx = MutationCtx | QueryCtx;
 type MessageDoc = Doc<"messages">;
@@ -25,6 +27,8 @@ type MessageDoc = Doc<"messages">;
 const MAX_SESSION_MESSAGES = 2000;
 // At the 250ms writer cadence this covers the full ten-minute action limit.
 const MAX_STREAM_DELTAS = 4096;
+// Reap abandoned streaming rows comfortably past the action time ceiling.
+const STREAM_REAP_DELAY_MS = 15 * 60 * 1000;
 
 const agentMessageValidator = v.object({
   id: v.id("messages"),
@@ -55,7 +59,6 @@ export type AddMessageArgs = {
   frameId?: Id<"frames">;
   idempotencyKey?: string;
   streamState?: string;
-  streamSeq?: number;
   widget?: string;
   card?: { title: string; source: string };
   updatedSurface?: boolean;
@@ -71,7 +74,6 @@ export const add = internalMutation({
     frameId: v.optional(v.id("frames")),
     idempotencyKey: v.optional(v.string()),
     streamState: v.optional(v.string()),
-    streamSeq: v.optional(v.number()),
     widget: v.optional(v.string()),
     card: v.optional(v.object({ title: v.string(), source: v.string() })),
     updatedSurface: v.optional(v.boolean()),
@@ -97,27 +99,31 @@ export const appendStreamDelta = internalMutation({
       .first();
     const existing = existingIndex ? await ctx.db.get(existingIndex.messageId) : null;
     if (existing && existing.streamState !== "streaming") return existing._id;
-    const messageId = existing
-      ? existing._id
-      : await addMessageInternal(ctx, {
-          sessionId,
-          role: "assistant",
-          content: "",
-          idempotencyKey: messageKey,
-          streamState: "streaming",
-          // The durable message's sequence guard only needs the initial value;
-          // delta ordering is guarded by the append-only delta index below.
-          streamSeq: 0,
-        });
+    let messageId: Id<"messages">;
+    if (existing) {
+      messageId = existing._id;
+    } else {
+      messageId = await addMessageInternal(ctx, {
+        sessionId,
+        role: "assistant",
+        content: "",
+        idempotencyKey: messageKey,
+        streamState: "streaming",
+      });
+      // The producing action can die without running any cleanup (hard
+      // timeout, crash), which would strand this row streaming forever and
+      // leak its deltas. Settle it after the action ceiling has safely
+      // passed; a normally finished stream makes this a no-op.
+      await ctx.scheduler.runAfter(STREAM_REAP_DELAY_MS, internal.messages.markStreamFailed, {
+        sessionId,
+        messageKey,
+        state: "error",
+      });
+    }
     if (!text) return messageId;
 
-    const latest = await ctx.db
-      .query("messageStreamDeltas")
-      .withIndex("by_message_and_stream_seq", (q) => q.eq("messageId", messageId))
-      .order("desc")
-      .first();
-    if (latest && latest.streamSeq >= streamSeq) return messageId;
-
+    // The action's stream writer is fully serialized, so deltas arrive in
+    // order; streamSeq is stored only as the deterministic sort key.
     await ctx.db.insert("messageStreamDeltas", {
       messageId,
       streamSeq,
@@ -160,86 +166,98 @@ export const markStreamFailed = internalMutation({
 });
 
 // Shared by the agent action (via the mutation) and sendCommand (directly):
-// idempotent, stream-seq-guarded message upsert.
+// idempotent message upsert keyed by messageIndex idempotency key.
 export async function addMessageInternal(
   ctx: MutationCtx,
   args: AddMessageArgs,
 ): Promise<Id<"messages">> {
-  {
-    const session = await ctx.db.get(args.sessionId);
-    if (!session) throw new Error("Session not found");
+  const session = await ctx.db.get(args.sessionId);
+  if (!session) throw new Error("Session not found");
 
-    const latestFrame = await getLatestSessionFrameDoc(ctx, args.sessionId);
-    const frameId = args.frameId ?? latestFrame?._id;
-    if (!frameId) throw new Error("Session has no frames");
-    const frameIndex = await getFrameIndexForSession(ctx, args.sessionId, frameId);
-    if (!frameIndex) throw new Error("Message frame is not indexed for session");
+  const latestFrame = await getLatestSessionFrameDoc(ctx, args.sessionId);
+  const frameId = args.frameId ?? latestFrame?._id;
+  if (!frameId) throw new Error("Session has no frames");
+  const frameIndex = await getFrameIndexForSession(ctx, args.sessionId, frameId);
+  if (!frameIndex) throw new Error("Message frame is not indexed for session");
 
-    if (args.idempotencyKey) {
-      const existingIndex = await ctx.db
-        .query("messageIndex")
-        .withIndex("by_session_idempotency_key", (q) =>
-          q.eq("sessionId", args.sessionId).eq("idempotencyKey", args.idempotencyKey),
-        )
-        .first();
-      const existing = existingIndex ? await ctx.db.get(existingIndex.messageId) : null;
+  if (args.idempotencyKey) {
+    const existingIndex = await ctx.db
+      .query("messageIndex")
+      .withIndex("by_session_idempotency_key", (q) =>
+        q.eq("sessionId", args.sessionId).eq("idempotencyKey", args.idempotencyKey),
+      )
+      .first();
+    const existing = existingIndex ? await ctx.db.get(existingIndex.messageId) : null;
 
-      if (existing) {
-        const existingSeq = typeof existing.streamSeq === "number" ? existing.streamSeq : -1;
-        const nextSeq = typeof args.streamSeq === "number" ? args.streamSeq : existingSeq;
-        if (nextSeq < existingSeq) {
-          return existing._id;
-        }
-
-        const patch: Partial<MessageDoc> = {
-          content: args.content,
-          frameId,
-        };
-        if (args.streamState !== undefined) patch.streamState = args.streamState;
-        if (args.streamSeq !== undefined) patch.streamSeq = args.streamSeq;
-        if (args.updatedSurface !== undefined) patch.updatedSurface = args.updatedSurface;
-        if (args.widget !== undefined) patch.widget = args.widget;
-        if (args.card !== undefined) patch.card = args.card;
-        if (args.actor !== undefined) patch.actor = args.actor;
-        if (args.clientMessageId !== undefined) patch.clientMessageId = args.clientMessageId;
-        await ctx.db.patch(existing._id, patch);
-        if (args.streamState === "complete") {
-          const deltas = await ctx.db
-            .query("messageStreamDeltas")
-            .withIndex("by_message_and_stream_seq", (q) => q.eq("messageId", existing._id))
-            .take(MAX_STREAM_DELTAS);
-          await Promise.all(deltas.map((delta) => ctx.db.delete(delta._id)));
-        }
-        await setDefaultSessionTitle(ctx, session, args.role, args.content);
-        return existing._id;
+    if (existing) {
+      const patch: Partial<MessageDoc> = {
+        content: args.content,
+        frameId,
+      };
+      if (args.streamState !== undefined) patch.streamState = args.streamState;
+      if (args.updatedSurface !== undefined) patch.updatedSurface = args.updatedSurface;
+      if (args.widget !== undefined) patch.widget = args.widget;
+      if (args.card !== undefined) patch.card = args.card;
+      if (args.actor !== undefined) patch.actor = args.actor;
+      if (args.clientMessageId !== undefined) patch.clientMessageId = args.clientMessageId;
+      await ctx.db.patch(existing._id, patch);
+      await recordMessageParticipation(
+        ctx,
+        args.sessionId,
+        args.role,
+        args.actor ?? existing.actor,
+        existing.createdAt,
+      );
+      if (args.streamState === "complete") {
+        const deltas = await ctx.db
+          .query("messageStreamDeltas")
+          .withIndex("by_message_and_stream_seq", (q) => q.eq("messageId", existing._id))
+          .take(MAX_STREAM_DELTAS);
+        await Promise.all(deltas.map((delta) => ctx.db.delete(delta._id)));
       }
+      await setDefaultSessionTitle(ctx, session, args.role, args.content);
+      return existing._id;
     }
-
-    const messageId = await ctx.db.insert("messages", {
-      role: args.role,
-      content: args.content,
-      frameId,
-      ...(args.actor !== undefined ? { actor: args.actor } : {}),
-      ...(args.clientMessageId !== undefined
-        ? { clientMessageId: args.clientMessageId }
-        : {}),
-      ...(args.widget !== undefined ? { widget: args.widget } : {}),
-      ...(args.card !== undefined ? { card: args.card } : {}),
-      ...(args.updatedSurface !== undefined ? { updatedSurface: args.updatedSurface } : {}),
-      ...(args.idempotencyKey !== undefined ? { idempotencyKey: args.idempotencyKey } : {}),
-      ...(args.streamState !== undefined ? { streamState: args.streamState } : {}),
-      ...(args.streamSeq !== undefined ? { streamSeq: args.streamSeq } : {}),
-      createdAt: Date.now(),
-    });
-    await ctx.db.insert("messageIndex", {
-      sessionId: args.sessionId,
-      messageId,
-      ...(args.idempotencyKey !== undefined ? { idempotencyKey: args.idempotencyKey } : {}),
-    });
-    await setDefaultSessionTitle(ctx, session, args.role, args.content);
-
-    return messageId;
   }
+
+  const createdAt = Date.now();
+  const messageId = await ctx.db.insert("messages", {
+    role: args.role,
+    content: args.content,
+    frameId,
+    ...(args.actor !== undefined ? { actor: args.actor } : {}),
+    ...(args.clientMessageId !== undefined
+      ? { clientMessageId: args.clientMessageId }
+      : {}),
+    ...(args.widget !== undefined ? { widget: args.widget } : {}),
+    ...(args.card !== undefined ? { card: args.card } : {}),
+    ...(args.updatedSurface !== undefined ? { updatedSurface: args.updatedSurface } : {}),
+    ...(args.idempotencyKey !== undefined ? { idempotencyKey: args.idempotencyKey } : {}),
+    ...(args.streamState !== undefined ? { streamState: args.streamState } : {}),
+    createdAt,
+  });
+  await ctx.db.insert("messageIndex", {
+    sessionId: args.sessionId,
+    messageId,
+    ...(args.idempotencyKey !== undefined ? { idempotencyKey: args.idempotencyKey } : {}),
+  });
+  await setDefaultSessionTitle(ctx, session, args.role, args.content);
+  await recordMessageParticipation(ctx, args.sessionId, args.role, args.actor, createdAt);
+
+  return messageId;
+}
+
+async function recordMessageParticipation(
+  ctx: MutationCtx,
+  sessionId: Id<"sessions">,
+  role: "user" | "assistant",
+  actor: MessageActor | undefined,
+  participatedAt: number,
+): Promise<void> {
+  if (role !== "user" || actor?.kind !== "github") return;
+  const userId = ctx.db.normalizeId("users", actor.id.slice("github:".length));
+  if (!userId) return;
+  await recordParticipationInternal(ctx, { userId, sessionId, participatedAt });
 }
 
 async function setDefaultSessionTitle(
@@ -253,62 +271,31 @@ async function setDefaultSessionTitle(
   if (title) await ctx.db.patch(session._id, { title });
 }
 
+// The transcript. Live stream text and viewer identity live in their own
+// queries (streamText, viewerActors) so per-delta writes and auth changes
+// never invalidate this one.
 export const list = query({
   args: {
     sessionId: v.id("sessions"),
-    guestSecret: v.optional(v.string()),
   },
-  returns: v.object({
-    viewerActorIds: v.array(v.string()),
-    messages: v.array(
-      v.object({
-        id: v.id("messages"),
-        role: v.union(v.literal("user"), v.literal("assistant")),
-        content: v.string(),
-        actor: v.optional(messageActorValidator),
-        clientMessageId: v.optional(v.string()),
-        createdAt: v.number(),
-        activationId: v.optional(v.string()),
-        streamState: v.optional(v.string()),
-        widget: v.optional(v.string()),
-        card: v.optional(v.object({ title: v.string(), source: v.string() })),
-        updatedSurface: v.optional(v.boolean()),
-      }),
-    ),
-  }),
-  handler: async (ctx, { sessionId, guestSecret }) => {
+  returns: v.array(
+    v.object({
+      id: v.id("messages"),
+      role: v.union(v.literal("user"), v.literal("assistant")),
+      content: v.string(),
+      actor: v.optional(messageActorValidator),
+      clientMessageId: v.optional(v.string()),
+      createdAt: v.number(),
+      activationId: v.optional(v.string()),
+      streamState: v.optional(v.string()),
+      widget: v.optional(v.string()),
+      card: v.optional(v.object({ title: v.string(), source: v.string() })),
+      updatedSurface: v.optional(v.boolean()),
+    }),
+  ),
+  handler: async (ctx, { sessionId }) => {
     const messages = await listMessagesForSession(ctx, sessionId);
     const canonicalActors = await canonicalGithubActors(ctx, messages);
-    const session = await ctx.db.get(sessionId);
-    const user = await authenticatedUser(ctx);
-    const viewerActorIds = user ? [user.actor.id] : [];
-    const ownsAnonymousActor =
-      session !== null &&
-      ((user !== null && session.ownerUserId === user.userId) ||
-        (guestSecret !== undefined &&
-          isValidGuestSecret(guestSecret) &&
-          session.guestSecretHash !== undefined &&
-          (await hashGuestSecret(guestSecret)) === session.guestSecretHash));
-    if (ownsAnonymousActor) {
-      viewerActorIds.push(anonymousActor(sessionId).id);
-    }
-    const liveContent = new Map(
-      await Promise.all(
-        messages
-          .filter((message) => message.streamState === "streaming")
-          .map(async (message) => {
-            const deltas = await ctx.db
-              .query("messageStreamDeltas")
-              .withIndex("by_message_and_stream_seq", (q) => q.eq("messageId", message._id))
-              .order("asc")
-              .take(MAX_STREAM_DELTAS);
-            return [
-              message._id,
-              message.content + deltas.map((delta) => delta.text).join(""),
-            ] as const;
-          }),
-      ),
-    );
     const frameIds = [
       ...new Set(
         messages.flatMap((message) => (message.frameId ? [message.frameId] : [])),
@@ -320,33 +307,73 @@ export const list = query({
         .filter((frame) => frame !== null)
         .map((frame) => [frame._id, frame.activationId] as const),
     );
-    return {
-      viewerActorIds,
-      messages: messages.map((message) => {
-        const activationId = message.frameId
-          ? activationByFrameId.get(message.frameId)
-          : undefined;
-        return {
-          id: message._id,
-          role: message.role,
-          content: liveContent.get(message._id) ?? message.content,
-          ...(message.actor !== undefined
-            ? { actor: canonicalActors.get(message.actor.id) ?? message.actor }
-            : {}),
-          ...(message.clientMessageId !== undefined
-            ? { clientMessageId: message.clientMessageId }
-            : {}),
-          createdAt: message.createdAt,
-          ...(activationId !== undefined ? { activationId } : {}),
-          ...(message.streamState !== undefined ? { streamState: message.streamState } : {}),
-          ...(message.widget !== undefined ? { widget: message.widget } : {}),
-          ...(message.card !== undefined ? { card: message.card } : {}),
-          ...(message.updatedSurface !== undefined
-            ? { updatedSurface: message.updatedSurface }
-            : {}),
-        };
-      }),
-    };
+    return messages.map((message) => {
+      const activationId = message.frameId
+        ? activationByFrameId.get(message.frameId)
+        : undefined;
+      return {
+        id: message._id,
+        role: message.role,
+        content: message.content,
+        ...(message.actor !== undefined
+          ? { actor: canonicalActors.get(message.actor.id) ?? message.actor }
+          : {}),
+        ...(message.clientMessageId !== undefined
+          ? { clientMessageId: message.clientMessageId }
+          : {}),
+        createdAt: message.createdAt,
+        ...(activationId !== undefined ? { activationId } : {}),
+        ...(message.streamState !== undefined ? { streamState: message.streamState } : {}),
+        ...(message.widget !== undefined ? { widget: message.widget } : {}),
+        ...(message.card !== undefined ? { card: message.card } : {}),
+        ...(message.updatedSurface !== undefined
+          ? { updatedSurface: message.updatedSurface }
+          : {}),
+      };
+    });
+  },
+});
+
+// Who the caller is in this session, as actor ids: their GitHub actor when
+// authenticated, plus the session's anonymous actor when they own it (creator
+// by guest secret, or the account that claimed it). Depends only on the
+// session doc and auth state — streaming writes never invalidate it.
+export const viewerActors = query({
+  args: {
+    sessionId: v.id("sessions"),
+    guestSecret: v.optional(v.string()),
+  },
+  returns: v.array(v.string()),
+  handler: async (ctx, { sessionId, guestSecret }) => {
+    const session = await ctx.db.get(sessionId);
+    const user = await authenticatedUser(ctx);
+    const viewerActorIds = user ? [user.actor.id] : [];
+    const ownsAnonymousActor =
+      session !== null &&
+      ((user !== null && session.ownerUserId === user.userId) ||
+        (await guestSecretMatches(session, guestSecret)));
+    if (ownsAnonymousActor) {
+      viewerActorIds.push(anonymousActor(sessionId).id);
+    }
+    return viewerActorIds;
+  },
+});
+
+// Live text for one streaming message: durable content plus the delta tail.
+// Subscribed per streaming row, so each 250ms delta write invalidates only
+// this small query — never the transcript.
+export const streamText = query({
+  args: { messageId: v.id("messages") },
+  returns: v.union(v.null(), v.string()),
+  handler: async (ctx, { messageId }) => {
+    const message = await ctx.db.get(messageId);
+    if (!message || message.streamState !== "streaming") return null;
+    const deltas = await ctx.db
+      .query("messageStreamDeltas")
+      .withIndex("by_message_and_stream_seq", (q) => q.eq("messageId", messageId))
+      .order("asc")
+      .take(MAX_STREAM_DELTAS);
+    return message.content + deltas.map((delta) => delta.text).join("");
   },
 });
 

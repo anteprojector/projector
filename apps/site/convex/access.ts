@@ -33,6 +33,21 @@ export async function hashGuestSecret(secret: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+// The one definition of "this caller holds the session's guest secret" —
+// shared by write authorization and viewer attribution so the two can never
+// disagree.
+export async function guestSecretMatches(
+  session: Doc<"sessions">,
+  guestSecret: string | undefined,
+): Promise<boolean> {
+  return (
+    guestSecret !== undefined &&
+    isValidGuestSecret(guestSecret) &&
+    session.guestSecretHash !== undefined &&
+    (await hashGuestSecret(guestSecret)) === session.guestSecretHash
+  );
+}
+
 export async function authorizeSessionWrite(
   ctx: MutationCtx,
   session: Doc<"sessions">,
@@ -44,17 +59,14 @@ export async function authorizeSessionWrite(
   // write, regardless of who created the session. Preserve ownerUserId only
   // as creator metadata for a guest who later signs in.
   if (user) {
-    if (session.ownerUserId === undefined && guestSecret !== undefined) {
-      const guestMatches =
-        isValidGuestSecret(guestSecret) &&
-        session.guestSecretHash !== undefined &&
-        (await hashGuestSecret(guestSecret)) === session.guestSecretHash;
-      if (guestMatches) {
-        await ctx.db.patch(session._id, {
-          ownerUserId: user.userId,
-          guestSecretHash: undefined,
-        });
-      }
+    if (
+      session.ownerUserId === undefined &&
+      (await guestSecretMatches(session, guestSecret))
+    ) {
+      await ctx.db.patch(session._id, {
+        ownerUserId: user.userId,
+        guestSecretHash: undefined,
+      });
     }
     return user.actor;
   }
@@ -63,12 +75,7 @@ export async function authorizeSessionWrite(
     throw new ConvexError(ACCESS_ERROR.authRequired);
   }
 
-  const guestMatches =
-    guestSecret !== undefined &&
-    isValidGuestSecret(guestSecret) &&
-    session.guestSecretHash !== undefined &&
-    (await hashGuestSecret(guestSecret)) === session.guestSecretHash;
-  if (!guestMatches) {
+  if (!(await guestSecretMatches(session, guestSecret))) {
     throw new ConvexError(ACCESS_ERROR.authRequired);
   }
 

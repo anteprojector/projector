@@ -172,10 +172,13 @@ export class AiSdkExecutor<
       });
     };
 
-    const closeSegment = (partId: string, enqueue = false): void => {
+    const closeSegment = (partId: string): void => {
       const segment = activeSegments.get(partId);
       if (!segment) return;
-      if (!enqueue || segment.enqueued || !segment.text.trim()) return;
+      // A closed part id must not resurrect this segment: text arriving under
+      // the same id later belongs to a fresh segment (and a fresh message).
+      activeSegments.delete(partId);
+      if (segment.enqueued || !segment.text.trim()) return;
       // Full-stream text boundaries are durable assistant-message boundaries.
       // Enqueue at text-end, before a following tool call can finish, so frame
       // replay has exactly the order the user observed during streaming.
@@ -232,16 +235,10 @@ export class AiSdkExecutor<
 
     const result = stream(input);
     try {
-      if (result.fullStream) {
-        for await (const part of result.fullStream) {
-          if (part.type === "text-start") startSegment(part.id);
-          if (part.type === "text-delta") appendSegment(part.id, part.text);
-          if (part.type === "text-end") closeSegment(part.id, true);
-        }
-      } else {
-        const segment = startSegment("text");
-        for await (const delta of result.textStream) appendSegment(segment.partId, delta);
-        closeSegment(segment.partId);
+      for await (const part of result.fullStream) {
+        if (part.type === "text-start") startSegment(part.id);
+        if (part.type === "text-delta") appendSegment(part.id, part.text);
+        if (part.type === "text-end") closeSegment(part.id);
       }
     } catch (error) {
       if (isAbortError(error) || request.signal?.aborted) {
@@ -272,7 +269,7 @@ export class AiSdkExecutor<
       if (finalText) {
         const segment = startSegment("text");
         appendSegment(segment.partId, finalText);
-        closeSegment(segment.partId, true);
+        closeSegment(segment.partId);
       }
     }
     const finishReason = await result.finishReason;

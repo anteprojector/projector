@@ -112,6 +112,11 @@ export async function getActiveSurfaceArtifact(
   ctx: DbCtx,
   sessionId: Id<"sessions">,
 ): Promise<Doc<"artifacts"> | null> {
+  const session = await ctx.db.get(sessionId);
+  if (session?.activeSurfaceVersion !== undefined) {
+    return await getSurfaceArtifact(ctx, sessionId, session.activeSurfaceVersion);
+  }
+
   const latestInstance = await ctx.db
     .query("projectorInstanceLog")
     .withIndex("by_session", (q) => q.eq("sessionId", sessionId))
@@ -251,6 +256,7 @@ export async function recordSurfaceArtifacts(
 
   const latest = await getLatestSurfaceArtifact(ctx, sessionId);
   let fallbackVersion = latest?.version ?? 0;
+  let activeVersion: number | undefined;
   for (const write of writes) {
     const version = write.version ?? ++fallbackVersion;
     const existing = await ctx.db
@@ -270,6 +276,10 @@ export async function recordSurfaceArtifacts(
       charterVersion: siteCharter.version,
       createdAt: Date.now(),
     });
+    activeVersion = version;
+  }
+  if (activeVersion !== undefined) {
+    await ctx.db.patch(sessionId, { activeSurfaceVersion: activeVersion });
   }
 }
 

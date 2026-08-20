@@ -162,13 +162,8 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15M13 6l6 6-6 6"/></svg>
       </button>
     </div>
-    <!-- Shown by boot.ts when localStorage holds past sessions. -->
-    <button class="talk-past" type="button" hidden>past conversations</button>
+    <span id="past-conversations"></span>
   </form>
-  <dialog class="past-dialog" aria-label="Past conversations">
-    <p class="past-head">past conversations</p>
-    <div class="past-list"></div>
-  </dialog>
   <!-- aria-live starts off: the resting cards below cycle on a timer, and a
        polite region would narrate every rotation. boot.ts flips it to polite
        the first time a change is visitor-driven (a hot word). -->

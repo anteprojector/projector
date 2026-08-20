@@ -10,6 +10,7 @@ import { mutation } from "./_generated/server";
 import { appendMachineFrameInternal } from "./sessions";
 import { authorizeSessionWrite, consumeAnonymousTurn } from "./access";
 import { addMessageInternal } from "./messages";
+import { requireClientMessageId } from "./messageActor";
 
 const TOPICS: Record<string, { ask: string; reply: string }> = {
   subagents: {
@@ -40,10 +41,7 @@ export const open = mutation({
     if (!session) throw new Error("Session not found");
     const actor = await authorizeSessionWrite(ctx, session, guestSecret);
     if (actor.kind === "anonymous") await consumeAnonymousTurn(ctx, session);
-    const normalizedClientMessageId = clientMessageId.trim();
-    if (!normalizedClientMessageId || normalizedClientMessageId.length > 100) {
-      throw new Error("Invalid client message id");
-    }
+    const normalizedClientMessageId = requireClientMessageId(clientMessageId);
 
     const userText = ask?.trim() || entry.ask;
     const frameId = await appendMachineFrameInternal(ctx, {

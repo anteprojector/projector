@@ -97,10 +97,6 @@ const setPanes = createAction({
 
 const appSurfaceSchema = z.object({
   version: z.number(),
-  // The artifact selected for the app pane. Optional lets existing durable
-  // instances interpret their latest written version as active until their
-  // first subsequent write or Labs selection records the pointer explicitly.
-  activeVersion: z.number().nullable().optional(),
   title: z.string(),
   lastError: z.string().nullable(),
 });
@@ -110,7 +106,6 @@ export const appSurfaceState = createState({
   schema: appSurfaceSchema,
   init: {
     version: 0,
-    activeVersion: null,
     title: "",
     lastError: null,
   } satisfies z.infer<typeof appSurfaceSchema>,
@@ -119,15 +114,10 @@ export const appSurfaceState = createState({
     render: (value) => {
       const surface = appSurfaceSchema.parse(value);
       if (surface.version === 0) return "app surface: none written yet";
-      const activeVersion = surface.activeVersion ?? surface.version;
-      const selection = activeVersion === surface.version
-        ? `v${activeVersion}`
-        : `v${activeVersion} selected (latest is v${surface.version})`;
       const error = surface.lastError
         ? ` — lastError: ${surface.lastError} (your surface is broken: getSurfaceSource, fix it, and writeAppSurface again)`
         : "";
-      const title = activeVersion === surface.version ? ` "${surface.title}"` : "";
-      return `app surface: ${selection}${title} (source retrievable with getSurfaceSource)${error}`;
+      return `app surface: v${surface.version} "${surface.title}" (source retrievable with getSurfaceSource)${error}`;
     },
   },
 });
@@ -225,7 +215,7 @@ A compile or runtime error in your surface lands in appSurface.lastError; the pr
   // updates here.
   run: ({ title, requestOpenPane }, ctx) => {
     const version = (ctx.state?.version ?? 0) + 1;
-    ctx.updateState?.(patchState({ version, activeVersion: version, title, lastError: null }));
+    ctx.updateState?.(patchState({ version, title, lastError: null }));
     if (requestOpenPane !== false) {
       ctx.updateStateAt?.(panesState, patchState({ app: true }));
     }

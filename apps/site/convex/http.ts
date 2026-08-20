@@ -1,6 +1,7 @@
 import { httpRouter } from "convex/server";
 import { auth } from "./auth";
 import { isValidGuestSecret } from "./access";
+import { normalizeClientMessageId } from "./messageActor";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { httpAction } from "./_generated/server";
@@ -89,8 +90,8 @@ async function readMessageBody(request: Request): Promise<AnonymousMessageBody |
     typeof value.clientMessageId !== "string"
   ) return null;
   const text = value.text.trim();
-  const clientMessageId = value.clientMessageId.trim();
-  if (!text || !clientMessageId || clientMessageId.length > 100) return null;
+  const clientMessageId = normalizeClientMessageId(value.clientMessageId);
+  if (!text || !clientMessageId) return null;
   return {
     sessionId: value.sessionId as AnonymousMessageBody["sessionId"],
     text,

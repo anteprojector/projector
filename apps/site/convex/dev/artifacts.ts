@@ -1,11 +1,7 @@
 import { v } from "convex/values";
-import type { ClientMachineMessage } from "@projectors/core/client";
-import { SITE_SOURCE_INSTANCE_ID } from "../../src/agent/charter";
 import { getSurfaceArtifact, readAppSurfaceSelection } from "../artifacts";
-import { githubActor } from "../actors";
 import { restoreConvexJson } from "../convexJson";
 import { mutation, query } from "../_generated/server";
-import { executeAuthorizedSessionCommand } from "../sessions";
 import { requireAdmin } from "./access";
 
 const historyEntryValidator = v.object({
@@ -27,7 +23,8 @@ export const history = query({
   ),
   handler: async (ctx, { sessionId }) => {
     await requireAdmin(ctx);
-    if (!(await ctx.db.get(sessionId))) return null;
+    const session = await ctx.db.get(sessionId);
+    if (!session) return null;
 
     const [latestInstance, artifacts] = await Promise.all([
       ctx.db
@@ -48,8 +45,8 @@ export const history = query({
       : null;
 
     return {
-      activeVersion: selection?.activeVersion ?? null,
-      latestVersion: selection?.latestVersion ?? artifacts[0]?.version ?? null,
+      activeVersion: session.activeSurfaceVersion ?? selection?.activeVersion ?? null,
+      latestVersion: artifacts[0]?.version ?? selection?.latestVersion ?? null,
       artifacts: artifacts.map((artifact) => ({
         version: artifact.version,
         title: artifact.title,
@@ -64,7 +61,7 @@ export const activate = mutation({
   args: { sessionId: v.id("sessions"), version: v.number() },
   returns: v.null(),
   handler: async (ctx, { sessionId, version }) => {
-    const user = await requireAdmin(ctx);
+    await requireAdmin(ctx);
     if (!Number.isSafeInteger(version) || version < 1) {
       throw new Error("Artifact version must be a positive integer");
     }
@@ -72,23 +69,7 @@ export const activate = mutation({
       throw new Error(`Surface artifact v${version} not found`);
     }
 
-    const message: ClientMachineMessage = {
-      type: "action",
-      kind: "request",
-      action: "command",
-      name: "updateState",
-      callId: crypto.randomUUID(),
-      input: {
-        address: { instanceId: SITE_SOURCE_INSTANCE_ID, stateKey: "appSurface" },
-        op: "patch",
-        value: { activeVersion: version, lastError: null },
-      },
-    };
-    await executeAuthorizedSessionCommand(ctx, {
-      sessionId,
-      message,
-      actor: githubActor(user),
-    });
+    await ctx.db.patch(sessionId, { activeSurfaceVersion: version });
     return null;
   },
 });

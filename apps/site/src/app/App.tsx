@@ -17,12 +17,12 @@ import {
 } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import type { MessageActor } from "../../convex/messageActor";
 import {
   createMachineEffigy,
   createOptimisticEffigy,
   type OptimisticEffigy,
 } from "@projectors/core/client";
-import { recordStoredSession } from "../sessions-store";
 import {
   AnonymousMessageError,
   getGuestSecret,
@@ -363,23 +363,64 @@ type LocalMessage = {
   pending?: boolean;
 };
 
-type MessageActor = {
-  id: string;
-  kind: "anonymous" | "github";
-  label: string;
-  profileUrl?: string;
+type PaneNotice =
+  | {
+      kind: "agent";
+      id: string;
+      order: number;
+      content: string;
+      pending: boolean;
+      messageId?: string;
+    }
+  | {
+      kind: "state-update";
+      id: string;
+      order: number;
+      content: string;
+    };
+
+type StateUpdatePaneNotice = Extract<PaneNotice, { kind: "state-update" }>;
+type PaneNoticeDisplay = PaneNotice | {
+  kind: "state-update-stack";
+  id: "state-update-stack";
+  order: number;
+  notices: StateUpdatePaneNotice[];
 };
 
-type PaneAgentNotice = {
-  id: string;
-  content: string;
-  pending?: boolean;
-};
+const MAX_VISIBLE_PANE_NOTICES = 4;
 
-type StateUpdateNotice = {
-  id: string;
-  content: string;
-};
+function prioritizePaneNotices(notices: PaneNotice[]): PaneNoticeDisplay[] {
+  const agentNotices = notices
+    .filter((notice): notice is Extract<PaneNotice, { kind: "agent" }> =>
+      notice.kind === "agent"
+    )
+    .slice(-MAX_VISIBLE_PANE_NOTICES);
+  const availableErrorSlots = MAX_VISIBLE_PANE_NOTICES - agentNotices.length;
+  if (availableErrorSlots <= 0) return agentNotices;
+
+  const errorNotices = notices.filter(
+    (notice): notice is StateUpdatePaneNotice => notice.kind === "state-update",
+  );
+  if (errorNotices.length <= availableErrorSlots) {
+    return [...agentNotices, ...errorNotices].sort((left, right) => left.order - right.order);
+  }
+
+  const individualCount = availableErrorSlots - 1;
+  const groupedCount = errorNotices.length - individualCount;
+  const grouped = errorNotices.slice(0, groupedCount);
+  const individual = individualCount > 0 ? errorNotices.slice(-individualCount) : [];
+  const errorStack: Extract<PaneNoticeDisplay, { kind: "state-update-stack" }> = {
+    kind: "state-update-stack",
+    id: "state-update-stack",
+    order: grouped[grouped.length - 1]?.order ?? 0,
+    notices: grouped,
+  };
+  return [
+    ...agentNotices,
+    errorStack,
+    ...individual,
+  ].sort((left, right) => left.order - right.order);
+}
 
 const pendingMessageKey = (sessionId: string) => `projector:pending-message:${sessionId}`;
 
@@ -426,6 +467,7 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
   const sendCommandRef = useRef(sendCommand);
   sendCommandRef.current = sendCommand;
   const beginPaneAgentNoticeRef = useRef<(callId: string) => void>(() => {});
+  const cancelPaneAgentNoticeRef = useRef<(callId: string) => void>(() => {});
   const stateUpdateRejectedRef = useRef<
     (event: { error: unknown; input: unknown }) => void
   >(() => {});
@@ -439,11 +481,14 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
       createMachineEffigy<any>(async (message) => {
         const id = sessionIdRef.current;
         if (!id) throw new Error("No active session");
-        const result = await sendCommandRef.current({ sessionId: id, message, guestSecret });
-        if (message.name === "appPanePing") {
-          beginPaneAgentNoticeRef.current(message.callId);
+        const isPanePing = message.name === "appPanePing";
+        if (isPanePing) beginPaneAgentNoticeRef.current(message.callId);
+        try {
+          return await sendCommandRef.current({ sessionId: id, message, guestSecret });
+        } catch (error) {
+          if (isPanePing) cancelPaneAgentNoticeRef.current(message.callId);
+          throw error;
         }
-        return result;
       }),
     );
   }
@@ -697,12 +742,14 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
     return () => removeEventListener("keydown", onType);
   }, []);
 
-  const serverMessageResult = useQuery(
+  const serverMessages = useQuery(
     api.messages.list,
-    sessionId ? { sessionId, guestSecret } : "skip",
+    sessionId ? { sessionId } : "skip",
   );
-  const serverMessages = serverMessageResult?.messages;
-  const viewerActorIds = serverMessageResult?.viewerActorIds ?? [];
+  const viewerActorIds = useQuery(
+    api.messages.viewerActors,
+    sessionId ? { sessionId, guestSecret } : "skip",
+  ) ?? [];
 
   const requestAuthentication = useCallback((draft: string) => {
     setInput(draft);
@@ -862,37 +909,52 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
   // a newly arriving agent turn. Existing messages establish the baseline;
   // only assistant rows first observed after that can become a notice. Stream
   // patches update the same notice without restarting its lifetime.
-  const [paneAgentNotice, setPaneAgentNotice] = useState<PaneAgentNotice | null>(null);
-  const [stateUpdateNotices, setStateUpdateNotices] = useState<StateUpdateNotice[]>([]);
-  const stateUpdateNoticeSequenceRef = useRef(0);
-  const stateUpdateNoticeTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
-  const dismissStateUpdateNotice = useCallback((noticeId: string) => {
-    const timer = stateUpdateNoticeTimersRef.current.get(noticeId);
+  const [paneNotices, setPaneNotices] = useState<PaneNotice[]>([]);
+  const paneNoticeSequenceRef = useRef(0);
+  const paneNoticeTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const dismissPaneNotice = useCallback((noticeId: string) => {
+    const timer = paneNoticeTimersRef.current.get(noticeId);
     if (timer) clearTimeout(timer);
-    stateUpdateNoticeTimersRef.current.delete(noticeId);
-    setStateUpdateNotices((current) => current.filter((notice) => notice.id !== noticeId));
+    paneNoticeTimersRef.current.delete(noticeId);
+    setPaneNotices((current) => current.filter((notice) => notice.id !== noticeId));
   }, []);
   stateUpdateRejectedRef.current = ({ error, input }) => {
-    const id = `state:${Date.now()}:${stateUpdateNoticeSequenceRef.current++}`;
-    setStateUpdateNotices((current) => [
+    const order = paneNoticeSequenceRef.current++;
+    const id = `state:${Date.now()}:${order}`;
+    setPaneNotices((current) => [
       ...current,
-      { id, content: formatStateUpdateRejection(error, input) },
+      {
+        kind: "state-update",
+        id,
+        order,
+        content: formatStateUpdateRejection(error, input),
+      },
     ]);
-    const timer = setTimeout(() => {
-      stateUpdateNoticeTimersRef.current.delete(id);
-      setStateUpdateNotices((current) => current.filter((notice) => notice.id !== id));
-    }, 12_000);
-    stateUpdateNoticeTimersRef.current.set(id, timer);
   };
   useEffect(() => {
-    setStateUpdateNotices([]);
-    for (const timer of stateUpdateNoticeTimersRef.current.values()) clearTimeout(timer);
-    stateUpdateNoticeTimersRef.current.clear();
+    setPaneNotices([]);
+    for (const timer of paneNoticeTimersRef.current.values()) clearTimeout(timer);
+    paneNoticeTimersRef.current.clear();
   }, [sessionId]);
+  useEffect(() => {
+    const activeIds = new Set(paneNotices.map((notice) => notice.id));
+    for (const [id, timer] of paneNoticeTimersRef.current) {
+      if (activeIds.has(id)) continue;
+      clearTimeout(timer);
+      paneNoticeTimersRef.current.delete(id);
+    }
+    for (const notice of paneNotices) {
+      if (paneNoticeTimersRef.current.has(notice.id)) continue;
+      if (notice.kind === "agent" && notice.pending) continue;
+      const lifetime = notice.kind === "agent" ? 10_000 : 12_000;
+      const timer = setTimeout(() => dismissPaneNotice(notice.id), lifetime);
+      paneNoticeTimersRef.current.set(notice.id, timer);
+    }
+  }, [dismissPaneNotice, paneNotices]);
   useEffect(
     () => () => {
-      for (const timer of stateUpdateNoticeTimersRef.current.values()) clearTimeout(timer);
-      stateUpdateNoticeTimersRef.current.clear();
+      for (const timer of paneNoticeTimersRef.current.values()) clearTimeout(timer);
+      paneNoticeTimersRef.current.clear();
     },
     [],
   );
@@ -902,11 +964,18 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
   }>({ sessionId: null, ids: new Set() });
   beginPaneAgentNoticeRef.current = (callId) => {
     if (!isNarrow || !layer) return;
-    setPaneAgentNotice({
-      id: `pending:${callId}`,
-      content: "",
-      pending: true,
+    const order = paneNoticeSequenceRef.current++;
+    setPaneNotices((current) => {
+      const id = `agent:${callId}`;
+      if (current.some((notice) => notice.id === id)) return current;
+      return [
+        ...current,
+        { kind: "agent", id, order, content: "", pending: true },
+      ];
     });
+  };
+  cancelPaneAgentNoticeRef.current = (callId) => {
+    dismissPaneNotice(`agent:${callId}`);
   };
   useEffect(() => {
     if (serverMessages === undefined) return;
@@ -919,7 +988,7 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
         sessionId,
         ids: new Set(assistantMessages.map((message) => String(message.id))),
       };
-      setPaneAgentNotice(null);
+      setPaneNotices((current) => current.filter((notice) => notice.kind !== "agent"));
       return;
     }
 
@@ -930,31 +999,53 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
       tracker.ids.add(id);
     }
 
-    setPaneAgentNotice((current) => {
-      if (newest && isNarrow && layer) {
-        return { id: String(newest.id), content: newest.content };
+    setPaneNotices((current) => {
+      let next = current.map((notice) => {
+        if (notice.kind !== "agent" || !notice.messageId) return notice;
+        const updated = assistantMessages.find(
+          (message) => String(message.id) === notice.messageId,
+        );
+        return updated ? { ...notice, content: updated.content } : notice;
+      });
+      if (!newest || !isNarrow || !layer) return next;
+      const messageId = String(newest.id);
+      if (next.some((notice) => notice.kind === "agent" && notice.messageId === messageId)) {
+        return next;
       }
-      if (!current) return null;
-      if (current.pending) return current;
-      const updated = assistantMessages.find((message) => String(message.id) === current.id);
-      return updated ? { ...current, content: updated.content } : null;
+      let pendingIndex = -1;
+      for (let index = next.length - 1; index >= 0; index -= 1) {
+        const notice = next[index];
+        if (notice?.kind === "agent" && notice.pending) {
+          pendingIndex = index;
+          break;
+        }
+      }
+      if (pendingIndex >= 0) {
+        next = next.map((notice, index) =>
+          index === pendingIndex && notice.kind === "agent"
+            ? { ...notice, messageId, content: newest.content, pending: false }
+            : notice,
+        );
+        return next;
+      }
+      const order = paneNoticeSequenceRef.current++;
+      return [
+        ...next,
+        {
+          kind: "agent",
+          id: `agent:${messageId}`,
+          order,
+          messageId,
+          content: newest.content,
+          pending: false,
+        },
+      ];
     });
   }, [serverMessages, sessionId, isNarrow, layer]);
   useEffect(() => {
     if (isNarrow && layer) return;
-    setPaneAgentNotice(null);
+    setPaneNotices((current) => current.filter((notice) => notice.kind !== "agent"));
   }, [isNarrow, layer]);
-  useEffect(() => {
-    // The cursor stays up while generation is pending. Once the first text
-    // arrives, replacing the pending notice with the real message starts the
-    // requested ten-second reading window.
-    if (!paneAgentNotice || paneAgentNotice.pending) return;
-    const noticeId = paneAgentNotice.id;
-    const timeout = setTimeout(() => {
-      setPaneAgentNotice((current) => (current?.id === noticeId ? null : current));
-    }, 10_000);
-    return () => clearTimeout(timeout);
-  }, [paneAgentNotice?.id]);
 
   // Stream state belongs to rows, but the blinking cursor belongs to the
   // transcript: only the newest live assistant row should own it. Multiple
@@ -997,18 +1088,10 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
   // stream completion and the action returning.
   const thinking =
     (waitingSince !== null || agentWorking) && !streaming && !finalResponseStarted;
-
-  // Every visited session lands in the device-local past-conversations list,
-  // titled by its first user message (deep links included — the title fills
-  // in once messages load).
   const firstUserText =
-    server.find((m) => m.role === "user")?.content ??
-    optimistic.find((m) => m.role === "user")?.content ??
+    server.find((message) => message.role === "user")?.content ??
+    optimistic.find((message) => message.role === "user")?.content ??
     "";
-  const threadTitle = session?.title?.trim() || firstUserText;
-  useEffect(() => {
-    if (sessionId) recordStoredSession(sessionId, threadTitle);
-  }, [sessionId, threadTitle]);
 
   // One turn at a time: less a chat feed than pages with an input at the
   // bottom. When the speaker changes, the new turn scrolls to the top of the
@@ -1031,6 +1114,7 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
       card: m.card,
       updatedSurface: m.updatedSurface === true,
       pending: m.role === "assistant" && m.id === pendingAssistantId,
+      streamingLive: m.streamState === "streaming",
     })),
     ...visibleOptimistic.map((m) => ({
       key: m.key,
@@ -1044,15 +1128,24 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
       card: undefined as { title: string; source: string } | undefined,
       updatedSurface: false,
       pending: false,
+      streamingLive: false,
     })),
   ];
   let latestTurnKey: string | null = null;
+  let latestTurnIsMine = false;
+  // Viewer-authored rows share one speaker id whether optimistic or durable,
+  // so the optimistic→server swap cannot move the turn key or reshuffle
+  // boundaries between two quick consecutive sends.
+  const speakerIdOf = (m: (typeof rendered)[number] | undefined) => {
+    if (!m) return undefined;
+    if (m.role === "assistant") return "projector";
+    if (m.isMine) return "me";
+    return m.actor?.id ?? m.clientMessageId;
+  };
   const items = rendered.map((m, i) => {
     const previous = rendered[i - 1];
-    const speakerId = m.role === "assistant" ? "projector" : m.actor?.id ?? m.clientMessageId;
-    const previousSpeakerId = previous?.role === "assistant"
-      ? "projector"
-      : previous?.actor?.id ?? previous?.clientMessageId;
+    const speakerId = speakerIdOf(m);
+    const previousSpeakerId = speakerIdOf(previous);
     const speakerStart = i === 0 || speakerId !== previousSpeakerId;
     // An autonomous activation has no visible user row to create a speaker
     // boundary. Its changed activation value arms a one-message latch: the
@@ -1069,6 +1162,7 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
         ? m.activationId ?? String(m.key)
         : m.clientMessageId ?? String(m.key);
       latestTurnKey = `${speakerId}:${boundaryId}`;
+      latestTurnIsMine = m.role === "user" && m.isMine === true;
     }
     return { ...m, turnStart };
   });
@@ -1080,6 +1174,7 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
   const atBottomRef = useRef(true);
   const followingBottomRef = useRef(false);
   const syncedOnce = useRef(false);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
 
   // Track actual bottom position, while treating wheel/touch/drag input as an
   // explicit request to stop following a multi-message assistant turn.
@@ -1089,6 +1184,7 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
     const readBottom = () => {
       const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= 2;
       if (!followingBottomRef.current || atBottom) atBottomRef.current = atBottom;
+      if (atBottom) setShowJumpToLatest(false);
     };
     const releaseFollow = () => {
       followingBottomRef.current = false;
@@ -1182,17 +1278,27 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
 
     const target = resize();
     if (turnChanged && target) {
-      const top =
-        target.getBoundingClientRect().top -
-        container.getBoundingClientRect().top +
-        container.scrollTop -
-        TURN_TOP_INSET;
-      const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
-      container.scrollTo({
-        top: Math.max(0, top),
-        behavior: syncedOnce.current && !still ? "smooth" : "instant",
-      });
-      syncedOnce.current = true;
+      // Another participant's turn must not yank a reader out of history:
+      // only page when the viewer was at the bottom, authored the turn
+      // themselves, or this is the initial sync. Otherwise offer a chip.
+      const shouldPage =
+        !syncedOnce.current || sessionChanged || wasAtBottom || latestTurnIsMine;
+      if (shouldPage) {
+        const top =
+          target.getBoundingClientRect().top -
+          container.getBoundingClientRect().top +
+          container.scrollTop -
+          TURN_TOP_INSET;
+        const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+        container.scrollTo({
+          top: Math.max(0, top),
+          behavior: syncedOnce.current && !still ? "smooth" : "instant",
+        });
+        syncedOnce.current = true;
+        setShowJumpToLatest(false);
+      } else {
+        setShowJumpToLatest(true);
+      }
     } else if (appendedWithinTurn && wasAtBottom) {
       followingBottomRef.current = true;
       container.scrollTo({
@@ -1209,7 +1315,25 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
       if (frame) cancelAnimationFrame(frame);
       observer.disconnect();
     };
-  }, [sessionId, latestTurnKey, items.length, items.map((item) => String(item.key)).join("\n")]);
+  }, [sessionId, latestTurnKey, items.map((item) => String(item.key)).join("\n")]);
+
+  const jumpToLatest = useCallback(() => {
+    setShowJumpToLatest(false);
+    const container = scrollRef.current;
+    if (!container) return;
+    const starts = container.querySelectorAll<HTMLElement>("[data-turn-start]");
+    const target = starts[starts.length - 1];
+    if (!target) return;
+    const top =
+      target.getBoundingClientRect().top -
+      container.getBoundingClientRect().top +
+      container.scrollTop -
+      TURN_TOP_INSET;
+    container.scrollTo({
+      top: Math.max(0, top),
+      behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth",
+    });
+  }, []);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1230,9 +1354,8 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
     field.style.height = `${field.scrollHeight}px`;
   }, [input]);
 
-  const revealPaneAgentNotice = useCallback(() => {
-    const messageId = paneAgentNotice?.id;
-    setPaneAgentNotice(null);
+  const revealPaneAgentNotice = useCallback((noticeId: string, messageId?: string) => {
+    dismissPaneNotice(noticeId);
     closeMobileLayer();
     if (!messageId) return;
     requestAnimationFrame(() => {
@@ -1244,7 +1367,7 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
         behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth",
       });
     });
-  }, [closeMobileLayer, paneAgentNotice?.id]);
+  }, [closeMobileLayer, dismissPaneNotice]);
 
   // Wide: the machine's pane state renders as side-by-side panes. Narrow:
   // the view-local layer decides what's on screen.
@@ -1252,8 +1375,10 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
   const showInspector = isNarrow
     ? layer === "inspector" || closingLayer === "inspector"
     : panes.inspector;
-  const visiblePaneAgentNotice = isNarrow && layer ? paneAgentNotice : null;
-  const hasPaneNotices = stateUpdateNotices.length > 0 || visiblePaneAgentNotice !== null;
+  const visiblePaneNotices = prioritizePaneNotices(
+    paneNotices.filter((notice) => notice.kind === "state-update" || (isNarrow && layer)),
+  );
+  const hasPaneNotices = visiblePaneNotices.length > 0;
 
   return (
     <div className="app">
@@ -1341,6 +1466,7 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
                   messageId={String(m.key)}
                   role={m.role}
                   content={m.content}
+                  streamingLive={m.streamingLive}
                   actor={m.actor}
                   isMine={m.isMine}
                   widget={m.widget}
@@ -1368,6 +1494,11 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
             onSubmit={submit}
             autoComplete="off"
           >
+            {showJumpToLatest && (
+              <button type="button" className="jump-latest" onClick={jumpToLatest}>
+                jump to latest ↓
+              </button>
+            )}
             {authPrompt && !isAuthenticated ? (
               <div className="auth-gate" role="dialog" aria-label="Continue with GitHub">
                 <div className="auth-gate-copy">
@@ -1437,67 +1568,175 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
             </span>
           </button>
         )}
-        {hasPaneNotices && (
-          <PaneNoticeStack
-            agent={visiblePaneAgentNotice}
-            stateUpdates={stateUpdateNotices}
-            onRevealAgent={revealPaneAgentNotice}
-            onDismissStateUpdate={dismissStateUpdateNotice}
-          />
-        )}
+        <PaneNoticeStack
+          notices={visiblePaneNotices}
+          onRevealAgent={revealPaneAgentNotice}
+          onDismiss={dismissPaneNotice}
+        />
       </div>
     </div>
   );
 }
 
 function PaneNoticeStack({
-  agent,
-  stateUpdates,
+  notices,
   onRevealAgent,
-  onDismissStateUpdate,
+  onDismiss,
 }: {
-  agent: PaneAgentNotice | null;
-  stateUpdates: StateUpdateNotice[];
-  onRevealAgent: () => void;
-  onDismissStateUpdate: (noticeId: string) => void;
+  notices: PaneNoticeDisplay[];
+  onRevealAgent: (noticeId: string, messageId?: string) => void;
+  onDismiss: (noticeId: string) => void;
 }) {
+  const noticesRef = useRef(notices);
+  noticesRef.current = notices;
+  const [renderedNotices, setRenderedNotices] = useState<Array<{
+    notice: PaneNoticeDisplay;
+    exiting: boolean;
+  }>>([]);
+
+  // Keep removed notices mounted just long enough for their measured slot to
+  // collapse. The stack itself stays mounted even when empty, so the last
+  // notice gets the same exit motion as every other notice.
+  useLayoutEffect(() => {
+    setRenderedNotices((current) => {
+      const incoming = new Map(notices.map((notice) => [notice.id, notice]));
+      const next = notices.map((notice) => ({ notice, exiting: false }));
+      for (const rendered of current) {
+        if (!incoming.has(rendered.notice.id)) next.push({ ...rendered, exiting: true });
+      }
+      return next.sort((left, right) => left.notice.order - right.notice.order);
+    });
+  }, [notices]);
+
+  const removeExitedNotice = useCallback((noticeId: string) => {
+    if (noticesRef.current.some((notice) => notice.id === noticeId)) return;
+    setRenderedNotices((current) =>
+      current.filter((rendered) => rendered.notice.id !== noticeId),
+    );
+  }, []);
+
   return (
     <div className="pane-notice-stack" aria-label="Application notices">
-      {stateUpdates.map((notice) => (
-        <div className="pane-state-notice" role="alert" key={notice.id}>
-          <span className="pane-agent-notice-role">state update rejected</span>
-          <span className="pane-agent-notice-copy">{notice.content}</span>
-          <button
-            type="button"
-            onClick={() => onDismissStateUpdate(notice.id)}
-            aria-label="Dismiss state update error"
-          >
-            ×
-          </button>
-        </div>
-      ))}
-      {agent && (
-        <button
-          className="pane-agent-notice"
-          type="button"
-          onClick={onRevealAgent}
-          data-pending={agent.pending ? "" : undefined}
-          aria-label={
-            agent.pending
-              ? "Projector is responding"
-              : "Open the conversation to read projector's new message"
-          }
+      {renderedNotices.map(({ notice, exiting }) => (
+        <PaneNoticeSlot
+          key={notice.id}
+          notice={notice}
+          exiting={exiting}
+          onExited={removeExitedNotice}
         >
-          {agent.pending ? (
-            <span className="pane-agent-notice-cursor" aria-hidden="true" />
+          {notice.kind === "state-update-stack" ? (
+            <div className="pane-notice pane-state-notice pane-state-notice-stack" role="alert">
+              <span className="pane-notice-role">
+                state update rejected
+                <span className="pane-notice-count">{notice.notices.length}</span>
+              </span>
+              <span className="pane-notice-copy">
+                {notice.notices[notice.notices.length - 1]?.content}
+              </span>
+              <button
+                type="button"
+                onClick={() => notice.notices.forEach((item) => onDismiss(item.id))}
+                aria-label={`Dismiss ${notice.notices.length} state update errors`}
+              >
+                ×
+              </button>
+            </div>
+          ) : notice.kind === "state-update" ? (
+            <div className="pane-notice pane-state-notice" role="alert">
+              <span className="pane-notice-role">state update rejected</span>
+              <span className="pane-notice-copy">{notice.content}</span>
+              <button
+                type="button"
+                onClick={() => onDismiss(notice.id)}
+                aria-label="Dismiss state update error"
+              >
+                ×
+              </button>
+            </div>
           ) : (
-            <>
-              <span className="pane-agent-notice-role">projector</span>
-              <span className="pane-agent-notice-copy">{agent.content}</span>
-            </>
+            <button
+              className="pane-notice pane-agent-notice"
+              type="button"
+              onClick={() => onRevealAgent(notice.id, notice.messageId)}
+              data-pending={notice.pending ? "" : undefined}
+              aria-label={
+                notice.pending
+                  ? "Projector is responding"
+                  : "Open the conversation to read projector's new message"
+              }
+            >
+              {notice.pending ? (
+                <span className="pane-notice-cursor" aria-hidden="true" />
+              ) : (
+                <>
+                  <span className="pane-notice-role">projector</span>
+                  <span className="pane-notice-copy">{notice.content}</span>
+                </>
+              )}
+            </button>
           )}
-        </button>
-      )}
+        </PaneNoticeSlot>
+      ))}
+    </div>
+  );
+}
+
+function PaneNoticeSlot({ notice, exiting, onExited, children }: {
+  notice: PaneNoticeDisplay;
+  exiting: boolean;
+  onExited: (noticeId: string) => void;
+  children: ReactNode;
+}) {
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [contentHeight, setContentHeight] = useState(0);
+  const [entered, setEntered] = useState(false);
+
+  useLayoutEffect(() => {
+    const content = contentRef.current;
+    if (!content) return;
+    const measure = () => {
+      const nextHeight = content.offsetHeight;
+      setContentHeight((current) => current === nextHeight ? current : nextHeight);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(content);
+    const frame = requestAnimationFrame(() => setEntered(true));
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!exiting) {
+      setEntered(true);
+      return;
+    }
+    setEntered(false);
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      onExited(notice.id);
+      return;
+    }
+    const timeout = setTimeout(() => onExited(notice.id), 300);
+    return () => clearTimeout(timeout);
+  }, [exiting, notice.id, onExited]);
+
+  const open = entered && !exiting;
+  return (
+    <div
+      className="pane-notice-slot"
+      data-open={open ? "" : undefined}
+      style={{ height: open ? contentHeight : 0 }}
+    >
+      <div
+        className={`pane-notice-slot-content${
+          notice.kind === "state-update-stack" ? " pane-notice-slot-content-stacked" : ""
+        }`}
+        ref={contentRef}
+      >
+        {children}
+      </div>
     </div>
   );
 }
@@ -1677,10 +1916,12 @@ function ArtifactHistoryLab({ sessionId }: { sessionId: Id<"sessions"> }) {
   );
 }
 
-function Message({ messageId, role, content, actor, isMine, widget, card, api, pending, turnStart, onAsk, onOpenAppPane }: {
+function Message({ messageId, role, content, streamingLive, actor, isMine, widget, card, api: surfaceApi, pending, turnStart, onAsk, onOpenAppPane }: {
   messageId?: string;
   role: "user" | "assistant";
   content: string;
+  /** Row is mid-stream: its live text arrives via the per-message tail query. */
+  streamingLive?: boolean;
   actor?: MessageActor;
   isMine?: boolean;
   widget?: string;
@@ -1691,6 +1932,14 @@ function Message({ messageId, role, content, actor, isMine, widget, card, api, p
   onAsk?: (text: string) => void;
   onOpenAppPane?: () => void;
 }) {
+  // Live stream text is deliberately not part of the transcript query: each
+  // streaming row subscribes to its own small tail here, so 250ms delta
+  // writes invalidate only this message, never the whole thread.
+  const liveText = useQuery(
+    api.messages.streamText,
+    streamingLive && messageId ? { messageId: messageId as Id<"messages"> } : "skip",
+  );
+  const body = (streamingLive ? liveText : undefined) ?? content;
   // Rich renderings replace the prose (the prose is the LLM-facing
   // equivalent): an agent-authored card first, then prebuilt explainer
   // widgets. Unknown widget ids fall back to the prose.
@@ -1715,11 +1964,11 @@ function Message({ messageId, role, content, actor, isMine, widget, card, api, p
           {role === "assistant" ? "projector" : isMine ? "you" : actor?.label ?? "anon"}
         </span>
       )}
-      {card && api
-        ? <CardMessage card={card} api={api} />
+      {card && surfaceApi
+        ? <CardMessage card={card} api={surfaceApi} />
         : Explainer && onAsk
           ? <Explainer onAsk={(text) => void onAsk(text)} />
-          : <p className="msg-body">{content}</p>}
+          : <p className="msg-body">{body}</p>}
       {/* This response also wrote the app surface; offered only while the
           pane isn't already on screen (the parent passes the handler). */}
       {onOpenAppPane && (

@@ -23,9 +23,12 @@ export function sitePromptExecutorConfig(model: LanguageModel): AiSdkExecutorCon
         label: message.actor.label,
         kind: message.actor.kind,
       });
+      // The charter tells the model this tag is trusted attribution, so a
+      // forged copy typed into the message body must not survive verbatim.
+      const text = message.text.replace(/<(\/?projector-actor)/g, "&lt;$1");
       return {
         role: "user",
-        content: `<projector-actor>${attribution}</projector-actor>\n${message.text}`,
+        content: `<projector-actor>${attribution}</projector-actor>\n${text}`,
       };
     },
   };

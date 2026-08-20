@@ -1257,8 +1257,9 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 .talk-go:hover { transform: translateX(0.125rem); }
 .talk-clear:focus-visible, .talk-go:focus-visible { outline: 2px solid var(--ink); outline-offset: 0.1875rem; }
 
-/* Past conversations: a quiet mono link under the composer (boot.ts unhides
-   it when localStorage holds sessions) and the picker dialog it opens. */
+/* Authenticated, Convex-backed conversation history. The mount disappears
+   from layout when signed out; its button remains part of the talk stack. */
+#past-conversations { display: contents; }
 .talk-past {
   margin-top: 0.875rem;
   border: 0;
@@ -1298,6 +1299,10 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   flex-direction: column;
   max-height: min(60vh, 20rem);
   overflow-y: auto;
+  /* Put the overlay track near the dialog edge while keeping that space on
+     the content side of the track, where it protects row text and controls. */
+  margin-right: -0.75rem;
+  padding-right: 0.75rem;
 }
 .past-row {
   display: flex;
@@ -1339,6 +1344,7 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   cursor: pointer;
 }
 .past-remove:hover { color: var(--ink); }
+.past-remove:disabled { cursor: wait; }
 .past-remove[data-confirm] {
   width: 4.5rem;
   color: var(--ink);
@@ -1442,7 +1448,11 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   }
   /* One column, two cards tall. Panels with more cards page through them on
      a timer (boot.ts), so nothing ever overflows the band. */
-  .explainer { grid-template-columns: 1fr; gap: 0.375rem; }
+  .explainer {
+    grid-template-columns: 1fr;
+    gap: 0.375rem;
+    width: min(100%, max(70%, 16rem));
+  }
   .explainer button { min-height: 0; }
   .explainer button[data-cycle-hidden] { display: none; }
   .foot-inner .end { margin-left: 0; }
@@ -1884,38 +1894,44 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 }
 .app-scroll,
 .app-pane-body,
-.app-inspector-body {
+.app-inspector-body,
+.past-list {
   scrollbar-gutter: auto;
 }
 @supports not selector(::-webkit-scrollbar) {
   .app-scroll,
   .app-pane-body,
-  .app-inspector-body {
+  .app-inspector-body,
+  .past-list {
     scrollbar-color: color-mix(in srgb, var(--ink) 24%, transparent) transparent;
     scrollbar-width: thin;
   }
 }
 .app-scroll::-webkit-scrollbar,
 .app-pane-body::-webkit-scrollbar,
-.app-inspector-body::-webkit-scrollbar {
+.app-inspector-body::-webkit-scrollbar,
+.past-list::-webkit-scrollbar {
   width: 0.25rem;
   height: 0.25rem;
   background: transparent;
 }
 .app-scroll::-webkit-scrollbar-track,
 .app-pane-body::-webkit-scrollbar-track,
-.app-inspector-body::-webkit-scrollbar-track {
+.app-inspector-body::-webkit-scrollbar-track,
+.past-list::-webkit-scrollbar-track {
   background: transparent;
 }
 .app-scroll::-webkit-scrollbar-thumb,
 .app-pane-body::-webkit-scrollbar-thumb,
-.app-inspector-body::-webkit-scrollbar-thumb {
+.app-inspector-body::-webkit-scrollbar-thumb,
+.past-list::-webkit-scrollbar-thumb {
   border-radius: 999px;
   background: color-mix(in srgb, var(--ink) 24%, transparent);
 }
 .app-scroll:hover::-webkit-scrollbar-thumb,
 .app-pane-body:hover::-webkit-scrollbar-thumb,
-.app-inspector-body:hover::-webkit-scrollbar-thumb {
+.app-inspector-body:hover::-webkit-scrollbar-thumb,
+.past-list:hover::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--ink) 42%, transparent);
 }
 .app-thread {
@@ -1931,6 +1947,31 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   flex: 0 0 auto;
   height: 7rem;
   pointer-events: none;
+}
+
+/* Offered instead of yanking the viewport when someone else starts a turn
+   while the reader is scrolled back in history. */
+.jump-latest {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 0.5rem;
+  padding: 0.375rem 0.875rem;
+  border: 1.5px solid var(--ink);
+  border-radius: 999px;
+  background: var(--bg);
+  box-shadow: 0.125rem 0.125rem 0 var(--shadow);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  animation: jump-latest-in 0.18s ease-out;
+}
+.jump-latest:hover {
+  background: var(--wash);
 }
 .msg { display: flex; flex-direction: column; gap: 0.25rem; }
 .msg-role {
@@ -1957,10 +1998,20 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 .msg-user .msg-body { font-weight: 500; }
 .msg-pending .msg-body::after {
   content: "▋";
-  color: var(--accent);
-  animation: msg-blink 1s steps(2) infinite;
+  color: var(--spec-v);
+  animation:
+    msg-blink 1s steps(2) infinite,
+    msg-spectrum 7.2s linear infinite;
 }
 @keyframes msg-blink { 50% { opacity: 0; } }
+@keyframes msg-spectrum {
+  0%, 100% { color: var(--spec-r); }
+  16.667% { color: var(--spec-o); }
+  33.333% { color: var(--spec-y); }
+  50% { color: var(--spec-g); }
+  66.667% { color: var(--spec-b); }
+  83.333% { color: var(--spec-v); }
+}
 
 /* Rich explainer widgets: an assistant turn rendered as a diagram card. Same
    paper vocabulary as the rest of the app — hairline border, mono labels —
@@ -2344,15 +2395,23 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   right: auto;
   bottom: max(1rem, var(--app-safe-bottom));
   left: 1rem;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.5rem;
   width: min(calc(100% - 2rem), 32rem);
   pointer-events: none;
 }
-.pane-agent-notice,
-.pane-state-notice {
+.pane-notice-slot {
+  overflow: hidden;
+  will-change: height;
+  transition: height 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.pane-notice-slot:not([data-open]) { pointer-events: none; }
+.pane-notice-slot-content {
+  padding-top: 0.5rem;
+}
+.pane-notice-slot-content-stacked {
+  padding-right: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+.pane-notice {
   position: relative;
   display: flex;
   flex-direction: column;
@@ -2371,7 +2430,15 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   font: inherit;
   text-align: left;
   pointer-events: auto;
-  animation: pane-agent-notice-in 0.18s ease-out;
+  opacity: 0;
+  transform: translateY(0.625rem);
+  transition:
+    opacity 0.18s ease-out,
+    transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.pane-notice-slot[data-open] .pane-notice {
+  opacity: 1;
+  transform: translateY(0);
 }
 .pane-agent-notice {
   cursor: pointer;
@@ -2382,20 +2449,20 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   min-height: 2.625rem;
   padding: 0.6875rem;
 }
-.pane-agent-notice-cursor {
+.pane-notice-cursor {
   display: block;
   width: 0.4375rem;
   height: 1rem;
   background: var(--ink);
-  animation: pane-agent-notice-blink 0.9s steps(2, end) infinite;
+  animation: pane-notice-blink 0.9s steps(2, end) infinite;
 }
-.pane-agent-notice-role {
+.pane-notice-role {
   color: var(--ink);
   font: 600 0.625rem/1.2 var(--mono);
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
-.pane-agent-notice-copy {
+.pane-notice-copy {
   display: -webkit-box;
   overflow: hidden;
   font-size: 0.8125rem;
@@ -2409,7 +2476,26 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   border-color: var(--spec-r);
   background: color-mix(in srgb, var(--spec-r) 9%, var(--bg));
 }
-.pane-state-notice .pane-agent-notice-role { color: var(--spec-r); }
+.pane-state-notice .pane-notice-role { color: var(--spec-r); }
+.pane-state-notice-stack {
+  box-shadow:
+    0.25rem 0.25rem 0 var(--bg),
+    0.3125rem 0.3125rem 0 var(--spec-r),
+    0.4375rem 0.4375rem 0 var(--shadow);
+}
+.pane-notice-count {
+  display: inline-grid;
+  min-width: 1.125rem;
+  height: 1.125rem;
+  margin-left: 0.375rem;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--spec-r);
+  color: var(--bg);
+  font-size: 0.5625rem;
+  letter-spacing: 0;
+  vertical-align: middle;
+}
 .pane-state-notice > button {
   position: absolute;
   top: 0.375rem;
@@ -2433,16 +2519,17 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 }
 .pane-agent-notice:hover { border-color: var(--ink); }
 .pane-agent-notice:focus-visible { outline: 2px solid var(--ink); outline-offset: 0.1875rem; }
-@keyframes pane-agent-notice-in {
+@keyframes jump-latest-in {
   from { opacity: 0; transform: translateY(0.75rem); }
 }
-@keyframes pane-agent-notice-blink { 50% { opacity: 0; } }
+@keyframes pane-notice-blink { 50% { opacity: 0; } }
 @keyframes layer-in-left { from { transform: translateX(-2rem); opacity: 0; } }
 @keyframes layer-in-right { from { transform: translateX(2rem); opacity: 0; } }
 @keyframes layer-out-left { to { transform: translateX(-2rem); opacity: 0; } }
 @keyframes layer-out-right { to { transform: translateX(2rem); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
-  .app-pane, .app-inspector, .pane-agent-notice, .pane-state-notice, .pane-agent-notice-cursor { animation: none; }
+  .app-pane, .app-inspector, .jump-latest, .pane-notice-cursor { animation: none; }
+  .pane-notice-slot, .pane-notice { transition: none; }
   .app-body[data-layer-closing="app"] .app-pane,
   .app-body[data-layer-closing="inspector"] .app-inspector { opacity: 0; }
 }

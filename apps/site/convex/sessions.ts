@@ -170,8 +170,9 @@ export const get = query({
     // legacy read keeps pre-artifacts sessions rendering from the source their
     // snapshots still carry.
     const selection = readAppSurfaceSelection(latestInstance);
-    const artifact = selection?.activeVersion
-      ? await getSurfaceArtifact(ctx, sessionId, selection.activeVersion)
+    const activeVersion = session.activeSurfaceVersion ?? selection?.activeVersion;
+    const artifact = activeVersion
+      ? await getSurfaceArtifact(ctx, sessionId, activeVersion)
       : await getLatestSurfaceArtifact(ctx, sessionId);
     const surface = artifact
       ? { version: artifact.version, title: artifact.title, source: artifact.source }
