@@ -6,6 +6,26 @@
 <title>projector — agent framework for evolutionary software</title>
 <meta name="description" content="An agent framework for state-complete agents. One shared model of the world, backed by a durable frame log, rendered through projections — every actor sees the slice meant for them.">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="preload" href="/assets/schibsted-grotesk.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/assets/caveat-600.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+  @font-face {
+    font-family: "Schibsted Grotesk";
+    font-style: normal;
+    font-weight: 400 700;
+    font-display: optional;
+    src: url("/assets/schibsted-grotesk.woff2") format("woff2");
+    unicode-range: U+0000-00FF;
+  }
+  @font-face {
+    font-family: "Caveat";
+    font-style: normal;
+    font-weight: 600;
+    font-display: optional;
+    src: url("/assets/caveat-600.woff2") format("woff2");
+    unicode-range: U+0000-00FF;
+  }
+</style>
 <link rel="stylesheet" href="/src/site.css">
 <meta name="color-scheme" content="light dark">
 <script>
@@ -18,6 +38,7 @@
     document.documentElement.dataset.theme = "dark";
   }
   document.documentElement.dataset.variant = "f";
+
   // Deep link straight into a conversation: hide the marketing page before
   // first paint and let boot.ts load the app eagerly. The marketing DOM stays
   // in place underneath so "back to /" is a cheap reveal, not a reload.
@@ -130,7 +151,9 @@
       </div>
     </div>
     <nav class="nav-links">
+      <!-- Hidden with the Why section below; both are coming back.
       <a href="#why">Why</a>
+      -->
       <a href="#docs">Docs</a>
       <button class="theme" type="button" data-mode="light" aria-label="Theme: light">
         <svg class="i-light" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3.1"/><path d="M8 .9v1.8M8 13.3v1.8M15.1 8h-1.8M2.7 8H.9M13 3l-1.3 1.3M4.3 11.7 3 13M13 13l-1.3-1.3M4.3 4.3 3 3"/></svg>
@@ -173,31 +196,31 @@
        the first time a change is visitor-driven (a hot word). -->
   <div class="talk-explainers" aria-live="off">
     <div class="explainer" data-explainer="framework" aria-hidden="true">
-      <button type="button" data-prompt="Lorem: classify the fox?"><span class="explainer-title">typescript</span><span class="explainer-copy">Lorem animalium: vulpes habitat inter silvas et campos.</span></button>
-      <button type="button" data-prompt="Lorem: describe the honeybee colony?"><span class="explainer-title">component based</span><span class="explainer-copy">Lorem apium: colonia diligenter favos per prata construit.</span></button>
-      <button type="button" data-prompt="Lorem: catalogue the river otter?" data-demo="subagents"><span class="explainer-title">context projection</span><span class="explainer-copy">Lorem lutrarum: turmae ludunt iuxta ripas aquae dulcis.</span></button>
-      <button type="button" data-prompt="Lorem: identify the barn owl?"><span class="explainer-title">state complete</span><span class="explainer-copy">Lorem avium: noctua tacitis alis per tenebras venatur.</span></button>
+      <button type="button" data-prompt="Why TypeScript?"><span class="explainer-title"><span class="mark-anchor">typescript<span class="ts-mark" aria-hidden="true">TS</span></span></span><span class="explainer-copy">Fully typed end to end, frontend and backend.</span></button>
+      <button type="button" data-prompt="Components... as in React?"><span class="explainer-title">component based</span><span class="explainer-copy">Local reasoning for agents. Compose, nest, and reuse them.</span></button>
+      <button type="button" data-prompt="Context projection?" data-demo="subagents"><span class="explainer-title">context projection</span><span class="explainer-copy">Model the full resolution of reality, then choose how it projects to the llm.</span></button>
+      <button type="button" data-prompt="State complete?"><span class="explainer-title">state <span class="mark-anchor">complete<span class="card-mark doc-mark" role="link" data-link="https://github.com/anteprojector/projector/blob/main/packages/projector/docs/state-complete.md" title="State complete — projector docs" aria-label="State complete doc on GitHub"><svg viewBox="0 0 16 20" aria-hidden="true"><path class="doc-page" d="M2.5 1.5h7l4 4v13h-11z"/><path class="doc-fold" d="M9.5 1.5v4h4"/><path class="doc-l1" d="M5 8.5h6"/><path class="doc-l2" d="M5 11h6"/><path class="doc-l3" d="M5 13.5h6"/><path class="doc-l4" d="M5 16h6"/></svg></span></span></span><span class="explainer-copy">Frame log + app state + configuration. All replayable, forkable, testable state.</span></button>
     </div>
     <div class="explainer" data-explainer="evolutionary" aria-hidden="true">
-      <button type="button" data-prompt="Lorem: trace the horse lineage?"><span class="explainer-title">self assembly</span><span class="explainer-copy">Lorem equorum: formae per aetates variant et pergunt.</span></button>
-      <button type="button" data-prompt="Lorem: explain finch adaptation?"><span class="explainer-title">evolutionary search</span><span class="explainer-copy">Lorem avium: rostra variantur secundum semina insularum.</span></button>
+      <button type="button" data-prompt="The app assembles itself?"><span class="explainer-title">self assembly</span><span class="explainer-copy">The agent can modify itself, and the app adapts to the user.</span></button>
+      <button type="button" data-prompt="Evolution... in my software?"><span class="explainer-title">evolutionary <span class="mark-anchor">search<span class="card-mark wiki-mark" role="link" data-link="https://en.wikipedia.org/wiki/Evolutionary_algorithm" title="Evolutionary algorithm — Wikipedia" aria-label="Evolutionary algorithm on Wikipedia"><svg viewBox="0 0 30 30" aria-hidden="true"><path d="M29 6.428c0 .098-.03.188-.094.27-.062.08-.13.122-.205.122-.612.058-1.115.257-1.505.595-.39.338-.793.983-1.21 1.935L19.63 23.667c-.042.133-.16.2-.35.2a.39.39 0 0 1-.348-.2l-3.568-7.438-4.096 7.435a.39.39 0 0 1-.35.2c-.182 0-.303-.067-.36-.2L4.315 9.35c-.39-.894-.802-1.518-1.234-1.873-.43-.355-1.03-.574-1.804-.658-.066 0-.13-.037-.187-.106a.36.36 0 0 1-.09-.24c0-.226.066-.34.2-.34.556 0 1.14.025 1.746.075.565.05 1.097.072 1.596.072.507 0 1.105-.025 1.796-.075a28.2 28.2 0 0 1 1.92-.076c.132 0 .198.115.198.344 0 .228-.04.342-.124.342-.557.04-.995.183-1.315.425-.32.243-.48.56-.48.953 0 .2.067.45.2.75l5.092 11.68 2.99-5.56-2.732-5.718c-.49-1.028-.894-1.69-1.21-1.986-.315-.297-.793-.478-1.432-.545-.06 0-.116-.035-.17-.104a.377.377 0 0 1-.08-.24c0-.226.057-.34.174-.34.556 0 1.067.024 1.533.074.448.05.926.074 1.433.074.498 0 1.025-.026 1.582-.076a19.55 19.55 0 0 1 1.694-.076c.133 0 .2.115.2.343 0 .23-.042.342-.125.342-1.113.075-1.67.392-1.67.952 0 .25.13.64.386 1.166l1.806 3.665 1.8-3.345c.248-.477.373-.878.373-1.204 0-.768-.557-1.177-1.67-1.227-.1 0-.15-.117-.15-.346 0-.08.025-.16.075-.232.05-.074.1-.11.15-.11.4 0 .89.024 1.47.074.557.05 1.014.075 1.37.075.258 0 .636-.02 1.135-.06.63-.058 1.16-.087 1.582-.087.1 0 .15.097.15.293 0 .26-.092.392-.274.392-.645.065-1.17.244-1.56.536-.396.293-.888.957-1.478 1.99l-2.39 4.43 3.236 6.6 4.79-11.128c.166-.41.25-.786.25-1.128 0-.82-.558-1.253-1.67-1.303-.1 0-.15-.115-.15-.344 0-.227.074-.34.224-.34.406 0 .887.025 1.444.075.515.048.947.073 1.296.073.365 0 .79-.026 1.27-.075.498-.05.946-.076 1.345-.076.117 0 .175.097.175.293z"/></svg></span></span></span><span class="explainer-copy">A new form of software development, inspired by evolution.</span></button>
     </div>
     <div class="explainer" data-explainer="apps" aria-hidden="true">
-      <button type="button" data-prompt="Lorem: survey the coral reef?"><span class="explainer-title">multi-actor</span><span class="explainer-copy">Lorem marinum: polypi parvi ingentia scopulorum regna struunt.</span></button>
-      <button type="button" data-prompt="Lorem: describe dolphin pods?"><span class="explainer-title">client server unification</span><span class="explainer-copy">Lorem delphinorum: greges navigant, vocant, et ludunt.</span></button>
-      <button type="button" data-prompt="Lorem: catalogue the nautilus?"><span class="explainer-title">endogenous state</span><span class="explainer-copy">Lorem molluscorum: camerae spirales corpus pelagicum portant.</span></button>
-      <button type="button" data-prompt="Lorem: imagine a changing interface?"><span class="explainer-title">generative ui</span><span class="explainer-copy">Lorem generativum: formae novae ex statu ipso oriuntur.</span></button>
+      <button type="button" data-prompt="Who are the actors?"><span class="explainer-title">multi-actor</span><span class="explainer-copy">All agentic applications are multiplayer: the user and the llm.</span></button>
+      <button type="button" data-prompt="No client/server split?"><span class="explainer-title">client server unification</span><span class="explainer-copy">Ship agentic features atomically across the client and server.</span></button>
+      <button type="button" data-prompt="Endogenous... state?"><span class="explainer-title">endogenous state</span><span class="explainer-copy">Application state is more powerful when the agent owns it.</span></button>
+      <button type="button" data-prompt="UI on the fly?"><span class="explainer-title">generative ui</span><span class="explainer-copy">Made useful because endogenous state is the hard part.</span></button>
     </div>
     <!-- These join the resting rotation without belonging to a headline
          category yet. Keeping them in a template makes that distinction
          explicit while giving boot.ts real card markup to clone. -->
     <template id="default-card-bonuses">
-      <button type="button" data-prompt="How do composable dimensions work?"><span class="explainer-title">composable dimensions</span></button>
-      <button type="button" data-prompt="How does state concurrency work?"><span class="explainer-title">state concurrency</span></button>
-      <button type="button" data-prompt="How does Projector provide end-to-end type safety?"><span class="explainer-title">end to end type safety</span></button>
-      <button type="button" data-prompt="What is a durable frame log?"><span class="explainer-title">durable frame log</span></button>
-      <button type="button" data-prompt="How does work scheduling work?"><span class="explainer-title">work scheduling</span></button>
-      <button type="button" data-prompt="How do coordinated subagents work?" data-demo="subagents"><span class="explainer-title">coordinated subagents</span></button>
+      <button type="button" data-prompt="Composable dimensions?"><span class="explainer-title">composable dimensions</span><span class="explainer-copy">Separate the base agent configuration from its thread configuration. Project into one at runtime.</span></button>
+      <button type="button" data-prompt="Can we both edit at once?"><span class="explainer-title">state concurrency</span><span class="explainer-copy">Allow the llm and the user to share state.</span></button>
+      <button type="button" data-prompt="Typed end to end?"><span class="explainer-title">end to end type safety</span></button>
+      <button type="button" data-prompt="Every frame, forever?"><span class="explainer-title">durable frame <span class="mark-anchor">log<span class="card-mark doc-mark" role="link" data-link="https://github.com/anteprojector/projector/blob/main/packages/projector/docs/durable-frame-log.md" title="Durable frame log — projector docs" aria-label="Durable frame log doc on GitHub"><svg viewBox="0 0 16 20" aria-hidden="true"><path class="doc-page" d="M2.5 1.5h7l4 4v13h-11z"/><path class="doc-fold" d="M9.5 1.5v4h4"/><path class="doc-l1" d="M5 8.5h6"/><path class="doc-l2" d="M5 11h6"/><path class="doc-l3" d="M5 13.5h6"/><path class="doc-l4" d="M5 16h6"/></svg></span></span></span><span class="explainer-copy">Every step recorded, including state updates, work scheduling, and tool calls.</span></button>
+      <button type="button" data-prompt="Work scheduling?"><span class="explainer-title">work scheduling</span></button>
+      <button type="button" data-prompt="How do agents coordinate?" data-demo="subagents"><span class="explainer-title">coordinated subagents</span><span class="explainer-copy">Agents are systems and need proper coordination primitives.</span></button>
     </template>
   </div>
 </section>
@@ -207,27 +230,28 @@
   <div class="grid">
     <article class="feature">
       <span class="num">01</span>
-      <h3>Fauna completa</h3>
-      <p>Lorem animalium: elephantus memoriam longam servat, dum mus parvus sub radicibus quiete habitat.</p>
+      <h3>Charter</h3>
+      <p>One typed declaration of everything the agent is: its nodes, actions, and state.</p>
     </article>
     <article class="feature">
       <span class="num">02</span>
-      <h3>Vestigia durabilia</h3>
-      <p>Lorem luporum: vestigia per nivem pergunt, a prima silva usque ad ultimam vallem.</p>
+      <h3>Nodes</h3>
+      <p>Composable units of behavior. Each brings its own state, instructions, and actions.</p>
     </article>
     <article class="feature">
       <span class="num">03</span>
-      <h3>Oculi diversi</h3>
-      <p>Lorem avium: aquila montes desuper spectat, talpa autem terram obscuram subtus cognoscit.</p>
+      <h3>Actions</h3>
+      <p>What the agent can do. Tools for the llm, commands for the app — one typed surface.</p>
     </article>
     <article class="feature">
       <span class="num">04</span>
-      <h3>Grex concordis</h3>
-      <p>Lorem gregum: zebra et gnu eandem viam sequuntur, trans campos latos atque flumina.</p>
+      <h3>Projection</h3>
+      <p>How nodes and actions decide to merge and present themselves for a single inference.</p>
     </article>
   </div>
 </section>
 
+<!-- The Why section is hidden for now; it will be coming back.
 <section id="why" class="why">
   <p class="label">Why</p>
   <p>
@@ -241,15 +265,20 @@
     cantus longissimos mittunt. Quaelibet bestia suam viam invenit.
   </p>
 </section>
+-->
+
 
 <section class="box">
-  <div class="box-head"><span>terminal</span><span>projector replay</span></div>
-<pre><code><span class="p">$</span> projector replay --tail
-<span class="l">0041</span>  <span class="m">user.message</span>   "add oat milk to the list"
-<span class="l">0042</span>  <span class="b">state.todos</span>    +{ title: "oat milk" }
-<span class="l">0043</span>  <span class="m">agent.tool</span>     grocery.search("oat milk")
-<span class="l">0044</span>  <span class="m">agent.say</span>      "added — want the barista kind?"
-<span class="q">      replayed 44/44 frames ·</span> <span class="g">state identical ✓</span></code></pre>
+  <div class="box-head"><span>projector log</span><button type="button" data-prompt="How do time travel, branching, and replay work?" data-demo="timetravel">time travel, branch, replay</button></div>
+<pre><code><span class="p">$</span> projector log --tail
+<span class="l">0040</span>  <span class="g">work.activate</span>      "restock the pantry"
+<span class="l">0041</span>  <span class="m">user.message</span>       "add oat milk to the list"
+<span class="l">0042</span>  <span class="b">state.todos</span>        +{ title: "oat milk" }
+<span class="l">0043</span>  <span class="m">agent.tool</span>         grocery.search("oat milk")
+<span class="l">0044</span>  <span class="m">assistant.message</span>  "added — want the barista kind?"
+<span class="l">0045</span>  <span class="m">user.command</span>       todos.archive("eggs")
+<span class="l">0046</span>  <span class="g">work.complete</span>      done · 7 frames
+<span class="q">      replayed 46/46 frames ·</span> <span class="g">state identical ✓</span></code></pre>
 </section>
 
 <section id="docs" class="docs">
@@ -269,7 +298,7 @@
     <span>MIT</span>
     <span>pre-release</span>
     <a href="https://www.npmjs.com/package/@projectors/core">@projectors/core</a>
-    <a class="end" href="https://github.com/anteprojector/projector">@anteprojector/projector</a>
+    <a class="end" href="https://github.com/anteprojector/projector">@anteprojector</a>
   </div>
 </footer>
 

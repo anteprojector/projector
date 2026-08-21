@@ -319,7 +319,14 @@ for (const prompt of document.querySelectorAll<HTMLButtonElement>("[data-prompt]
     if (e.pointerType !== "mouse") return;
     previewAsk(ask);
   });
-  prompt.addEventListener("click", () => {
+  prompt.addEventListener("click", (e) => {
+    // Citation marks sit inside the button (a link can't); clicking one opens
+    // its reference instead of submitting the card's prompt.
+    const mark = (e.target as HTMLElement).closest<HTMLElement>("[data-link]");
+    if (mark) {
+      window.open(mark.dataset.link, "_blank", "noopener");
+      return;
+    }
     commitPreview();
     talkInput.value = ask;
     pendingTopic = prompt.dataset.demo;

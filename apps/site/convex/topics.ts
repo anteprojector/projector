@@ -21,6 +21,15 @@ const TOPICS: Record<string, { ask: string; reply: string }> = {
       "Delegation here is projection — each child sees the slice of state and instructions meant for it, same world, different view.",
     ].join("\n\n"),
   },
+  // Stub: the real time-travel explainer (and its widget) is still to come.
+  timetravel: {
+    ask: "How do time travel, branching, and replay work?",
+    reply: [
+      "Every session is a durable frame log — every message, state update, and unit of work lands as a frame.",
+      "That makes three things cheap: rewind to any frame (time travel), fork a new session from it (branch), and re-run the log deterministically to the same state (replay).",
+      "A fuller walkthrough of this is coming — ask me anything about it in the meantime.",
+    ].join("\n\n"),
+  },
 };
 
 export const open = mutation({
