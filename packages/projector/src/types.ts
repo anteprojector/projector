@@ -369,6 +369,8 @@ export type Action<
   name: TName;
   description?: string;
   inputSchema?: z.ZodType<I>;
+  /** The executor must supply this action's native tool representation and execution. */
+  executorOwned?: boolean;
   run?: (input: I, ctx: ActionContext<S, TDataContent, z.output<TParams>>) => O | Promise<O>;
 };
 
@@ -378,6 +380,7 @@ export type AnyAction<TParams extends AnyParamsSchema = AnyParamsSchema> = {
   name: string;
   description?: string;
   inputSchema?: z.ZodType<any>;
+  executorOwned?: boolean;
   run?: (input: any, ctx: any) => any | Promise<any>;
 };
 

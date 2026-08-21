@@ -1,5 +1,7 @@
+import { openai } from "@ai-sdk/openai";
 import type { AiSdkExecutorConfig } from "@projectors/aisdk-executor";
 import type { LanguageModel } from "ai";
+import { WEB_SEARCH_ACTION_NAME } from "../src/agent/charter";
 import { env } from "./_generated/server";
 
 export const SITE_MODEL_ID = env.OPENAI_MODEL ?? "gpt-5.6-sol";
@@ -13,6 +15,12 @@ export function sitePromptExecutorConfig(model: LanguageModel): AiSdkExecutorCon
   return {
     model,
     maxOutputTokens: 4096,
+    executorActions: {
+      [WEB_SEARCH_ACTION_NAME]: openai.tools.webSearch({
+        externalWebAccess: true,
+        searchContextSize: "medium",
+      }),
+    },
     providerOptions: { openai: { parallelToolCalls: true } },
     messageToModelMessage: (message) => {
       if (message.type !== "user" || !message.actor || message.text === undefined) {

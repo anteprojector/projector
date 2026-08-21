@@ -435,6 +435,78 @@ describe("AiSdkExecutor", () => {
     ]);
   });
 
+  it("records provider-executed action calls and results as frames", async () => {
+    const frames: FrameDraft[] = [];
+    const stream = vi.fn(() => fullStreamResult([
+      {
+        type: "tool-call",
+        toolCallId: "web-1",
+        toolName: "webSearch",
+        input: {},
+        providerExecuted: true,
+      },
+      {
+        type: "tool-result",
+        toolCallId: "web-1",
+        toolName: "webSearch",
+        input: {},
+        output: {
+          action: { type: "search", queries: ["projector agent framework"] },
+          sources: [{ type: "url", url: "https://example.com/projector" }],
+        },
+        providerExecuted: true,
+      },
+    ]));
+    const executor = new AiSdkExecutor({
+      model: fakeModel(),
+      streamText: stream as never,
+      stream: true,
+      executorActions: {
+        webSearch: { type: "provider", id: "openai.web_search" } as never,
+      },
+    });
+
+    await executor.run(request({
+      inference: inference({
+        tools: [{ state: null, name: "webSearch", executorOwned: true }],
+      }),
+      enqueueFrame: enqueueTo(frames),
+    }));
+
+    expect(frames).toEqual([
+      {
+        generatorId: "runtime-1",
+        activationId: "activation-1",
+        inert: true,
+        messages: [{
+          type: "action",
+          kind: "request",
+          action: "tool",
+          name: "webSearch",
+          input: {},
+          callId: "web-1",
+        }],
+      },
+      {
+        generatorId: "runtime-1",
+        activationId: "activation-1",
+        inert: true,
+        messages: [{
+          type: "action",
+          kind: "result",
+          action: "tool",
+          name: "webSearch",
+          callId: "web-1",
+          success: true,
+          value: {
+            action: { type: "search", queries: ["projector agent framework"] },
+            sources: [{ type: "url", url: "https://example.com/projector" }],
+          },
+        }],
+      },
+    ]);
+  });
+
   it("preserves a native preamble as a distinct frame before tool work", async () => {
     const frames: FrameDraft[] = [];
     const streamUpdates: any[] = [];
@@ -520,6 +592,48 @@ describe("AiSdkExecutor", () => {
     );
     expect(Object.keys(lowered).sort()).toEqual(["always", "deferred_rare", "tool_search"]);
     expect(Object.keys(lowered)).not.toContain("rare");
+  });
+
+  it("requires an executor record for every projected executor-owned action", () => {
+    const webSearch = {
+      state: null,
+      name: "webSearch",
+      executorOwned: true,
+      inputSchema: z.object({}),
+    };
+    const requestInput = request({ inference: inference({ tools: [webSearch] }) });
+
+    expect(() => buildAiSdkTools(requestInput, config())).toThrow(
+      /executor-owned action "webSearch" has no matching executor action/,
+    );
+  });
+
+  it("lowers an executor-owned action to its matching executor tool", () => {
+    const webSearch = {
+      state: null,
+      name: "webSearch",
+      executorOwned: true,
+      inputSchema: z.object({}),
+    };
+    const providerTool = { type: "provider", id: "openai.web_search" } as never;
+    const lowered = buildAiSdkTools(
+      request({ inference: inference({ tools: [webSearch] }) }),
+      config({ executorActions: { webSearch: providerTool } }),
+    );
+
+    expect(lowered).toEqual({ webSearch: providerTool });
+  });
+
+  it("rejects deferred exposure for executor-owned actions", () => {
+    const webSearch = Object.assign(
+      { state: null, name: "webSearch", executorOwned: true, inputSchema: z.object({}) },
+      { [Symbol.for("projector.actionExposure")]: "deferred" },
+    );
+
+    expect(() => buildAiSdkTools(
+      request({ inference: inference({ tools: [webSearch] }) }),
+      config({ executorActions: { webSearch: {} as never } }),
+    )).toThrow(/executor-owned action "webSearch" cannot be deferred/);
   });
 
   it("converts projected actions into tools and executes action.run with fresh context", async () => {

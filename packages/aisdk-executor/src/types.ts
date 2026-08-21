@@ -93,6 +93,8 @@ export type AiSdkExecutorConfig<
   messageToModelMessage?: (message: ActorMessage<TDataContent>) => import("ai").ModelMessage | undefined;
 
   deferredTools?: AiSdkDeferredToolsLowering<TDataContent>;
+  /** Native/provider tools implementing projected Actions declared executorOwned. */
+  executorActions?: ToolSet;
 
   maxOutputTokens?: number;
   /** Number of retries the AI SDK performs on retryable errors (default 2). */
