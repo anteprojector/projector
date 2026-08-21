@@ -2,7 +2,6 @@ import { v } from "convex/values";
 import { getSurfaceArtifact, readAppSurfaceSelection } from "../artifacts";
 import { restoreConvexJson } from "../convexJson";
 import { mutation, query } from "../_generated/server";
-import { requireAdmin } from "./access";
 
 const historyEntryValidator = v.object({
   version: v.number(),
@@ -22,7 +21,6 @@ export const history = query({
     }),
   ),
   handler: async (ctx, { sessionId }) => {
-    await requireAdmin(ctx);
     const session = await ctx.db.get(sessionId);
     if (!session) return null;
 
@@ -61,7 +59,6 @@ export const activate = mutation({
   args: { sessionId: v.id("sessions"), version: v.number() },
   returns: v.null(),
   handler: async (ctx, { sessionId, version }) => {
-    await requireAdmin(ctx);
     if (!Number.isSafeInteger(version) || version < 1) {
       throw new Error("Artifact version must be a positive integer");
     }

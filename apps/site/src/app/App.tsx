@@ -244,10 +244,12 @@ export function App({ client, actionsUrl, initialMessage, initialTopic, sessionI
 // the chrome shouldn't change vocabulary.
 function AppNav({
   sessionId,
+  sessionMode = false,
   isAdmin = false,
   onOpenDev,
 }: {
   sessionId?: string;
+  sessionMode?: boolean;
   isAdmin?: boolean;
   onOpenDev?: () => void;
 }) {
@@ -257,12 +259,12 @@ function AppNav({
     else location.assign("/");
   };
   return (
-    <header className="app-nav">
+    <header className={`app-nav${sessionMode ? " app-nav-active-session" : ""}`}>
       <div className="app-nav-left">
         <a className="nav-brand" href="/" onClick={exit}>projector</a>
         {(sessionId || isAdmin) && (
           <div className="app-nav-context">
-            {sessionId && <span className="app-nav-session">s/{sessionId.slice(0, 12)}</span>}
+            {sessionId && <span className="app-nav-session">s/{sessionId.slice(0, 5)}</span>}
             {isAdmin && (
               <button
                 className="dev-panel-trigger"
@@ -277,16 +279,7 @@ function AppNav({
           </div>
         )}
       </div>
-      <div className="start" aria-label="Project actions">
-        <div className="steps">
-          <InstallStep />
-          <a className="step step-github" href="https://github.com/markov-machines/markov-machines" aria-label="Star markov-machines on GitHub">
-            <svg className="i-gh" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.27-.01-1.17-.02-2.12-3.2.7-3.88-1.36-3.88-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.76 2.69 1.25 3.35.96.1-.75.4-1.25.72-1.54-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18.92-.26 1.91-.39 2.9-.39.98 0 1.97.13 2.9.39 2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.12 3.05.74.81 1.18 1.83 1.18 3.09 0 4.42-2.69 5.39-5.25 5.67.41.36.78 1.06.78 2.14 0 1.55-.01 2.79-.01 3.17 0 .31.21.67.8.56A11.52 11.52 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z"/></svg>
-            <span className="step-body"><span className="step-label">GitHub</span><code>Star</code></span>
-            <span className="step-act step-stars"><svg className="i-star" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.9 6 6.5.9-4.7 4.6 1.1 6.5L12 17.9 6.2 21l1.1-6.5L2.6 9.9 9.1 9z"/></svg><span className="count">1</span><span className="vh">stars</span></span>
-          </a>
-        </div>
-      </div>
+      <div className="app-nav-actions-slot" data-app-nav-actions />
       <nav className="nav-links app-nav-links">
         <a href="/#why">Why</a>
         <a href="/#docs">Docs</a>
@@ -301,25 +294,6 @@ function PaneCloseIcon() {
     <svg className="pane-toggle-close" viewBox="0 0 24 24" aria-hidden="true">
       <path d="M6 6l12 12M18 6 6 18" />
     </svg>
-  );
-}
-
-function InstallStep() {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText("npm i @projectors/core");
-      setCopied(true);
-      setTimeout(() => setCopied(false), 3000);
-    } catch {}
-  };
-  // data-copy is inert here (the landing's copy script ran before this
-  // mounted) but keys the same hide-on-mobile CSS as the landing's step.
-  return (
-    <button className="step" type="button" data-copy="" data-copied={copied ? "" : undefined} onClick={() => void copy()}>
-      <span className="step-body"><span className="step-label">Install</span><code>npm i @projectors/core</code></span>
-      <span className="step-act"><span className="vh">Copy</span><svg className="i-copy" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg><svg className="i-done" viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5 10-11"/></svg></span>
-    </button>
   );
 }
 
@@ -387,7 +361,7 @@ type PaneNoticeDisplay = PaneNotice | {
   notices: StateUpdatePaneNotice[];
 };
 
-const MAX_VISIBLE_PANE_NOTICES = 4;
+const MAX_VISIBLE_PANE_NOTICES = 3;
 
 function prioritizePaneNotices(notices: PaneNotice[]): PaneNoticeDisplay[] {
   const agentNotices = notices
@@ -1220,6 +1194,7 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
     const composer = composerRef.current;
     const spacer = bottomSpacerRef.current;
     if (!container || !thread || !composer || !spacer) return;
+    const noticeHost = composer.closest<HTMLElement>(".app-body");
 
     const previous = previousTranscriptRef.current;
     const sessionChanged = previous.initialized && previous.sessionId !== (sessionId ?? null);
@@ -1251,6 +1226,7 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
       }
 
       const composerClearance = composer.getBoundingClientRect().height;
+      noticeHost?.style.setProperty("--app-composer-height", `${composerClearance}px`);
       const messages = thread.querySelectorAll<HTMLElement>(".msg");
       const lastMessage = messages[messages.length - 1];
       const messageRunHeight = lastMessage
@@ -1314,6 +1290,7 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
     return () => {
       if (frame) cancelAnimationFrame(frame);
       observer.disconnect();
+      noticeHost?.style.removeProperty("--app-composer-height");
     };
   }, [sessionId, latestTurnKey, items.map((item) => String(item.key)).join("\n")]);
 
@@ -1384,6 +1361,7 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
     <div className="app">
       <AppNav
         sessionId={sessionId ?? undefined}
+        sessionMode
         isAdmin={isAdmin}
         onOpenDev={() => setDevPanelOpen(true)}
       />
@@ -1448,7 +1426,7 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
         {showApp && (
           <AppPane
             sessionId={sessionId}
-            showLabs={isAdmin}
+            showLabs
             width={panes.appWidth}
             onResizeStart={startResize("app")}
             surface={surface}
@@ -1537,7 +1515,13 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
                   // but don't summon it merely by opening an existing session.
                   autoFocus={Boolean(initialMessage) || !isNarrow}
                 />
-                <button className="talk-mic" type="button" disabled title="voice — coming soon" aria-label="Voice input, coming soon">
+                <button
+                  className="talk-mic"
+                  type="button"
+                  onClick={() => window.alert("voice coming soon")}
+                  title="voice — coming soon"
+                  aria-label="Voice input, coming soon"
+                >
                   <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
                 </button>
                 <button className="talk-go" type="submit" aria-label="Send">

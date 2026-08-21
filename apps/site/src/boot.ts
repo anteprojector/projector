@@ -11,6 +11,16 @@ const talkCard = talk.querySelector<HTMLElement>(".talk-card")!;
 const talkInput = talk.querySelector<HTMLInputElement>(".talk-input")!;
 const talkClear = talk.querySelector<HTMLButtonElement>(".talk-clear")!;
 const talkMic = talk.querySelector<HTMLButtonElement>(".talk-mic")!;
+const projectActions = document.querySelector<HTMLElement>(".page .start")!;
+const projectActionsHome = projectActions.parentNode!;
+const projectActionsHomeNext = projectActions.nextSibling;
+
+const mountProjectActions = () => {
+  document.querySelector<HTMLElement>("[data-app-nav-actions]")?.append(projectActions);
+};
+const restoreProjectActions = () => {
+  projectActionsHome.insertBefore(projectActions, projectActionsHomeNext);
+};
 
 let appPromise: Promise<AppModule> | null = null;
 
@@ -47,6 +57,7 @@ const enterApp = (
     // Mounts synchronously (flushSync inside) so the view transition's new
     // snapshot already contains the conversation with the composer in place.
     mod.launch(opts);
+    mountProjectActions();
   }).then(() => root.classList.remove("launching"));
 };
 
@@ -57,6 +68,7 @@ const exitApp = async () => {
   // and replays its original beam → wash intro.
   root.classList.add("light-reset");
   await withTransition(() => {
+    restoreProjectActions();
     delete root.dataset.app;
     page.inert = false;
     mod.unmount();
@@ -314,6 +326,7 @@ if (root.dataset.app) {
   loadApp().then((mod) => {
     page.inert = true;
     mod.launch({ sessionId: sessionId === "new" ? undefined : sessionId });
+    mountProjectActions();
   });
 }
 
