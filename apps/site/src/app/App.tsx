@@ -301,16 +301,8 @@ function PaneCloseIcon() {
 // persist the choice, and keep the (hidden) marketing button's icon in sync
 // so nothing is stale when the visitor goes back.
 function ThemeToggle() {
-  const effective = () =>
-    document.documentElement.dataset.theme ??
-    (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const effective = () => document.documentElement.dataset.theme ?? "dark";
   const [mode, setMode] = useState(effective);
-  useEffect(() => {
-    const sysDark = matchMedia("(prefers-color-scheme: dark)");
-    const paint = () => setMode(effective());
-    sysDark.addEventListener("change", paint);
-    return () => sysDark.removeEventListener("change", paint);
-  }, []);
   const toggle = () => {
     const next = effective() === "dark" ? "light" : "dark";
     document.documentElement.dataset.theme = next;

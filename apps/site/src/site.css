@@ -381,10 +381,14 @@ body {
 @media (max-width: 775px) {
   :root[data-variant^="f"] .light .l-glow { opacity: 0.45; }
   :root[data-variant^="f"] .light .l-core { opacity: 0.5; }
+  /* Both the focused spectrum and its post-scroll diffuse state derive from
+     this value, so they gain intensity together on compact dark screens. */
+  :root[data-theme="dark"] { --spec-a: 0.25; }
   :root[data-theme="dark"][data-variant^="f"] .light .l-glow { opacity: 0.26; }
   :root[data-theme="dark"][data-variant^="f"] .light .l-core { opacity: 1; }
 }
 @media (max-width: 775px) and (prefers-color-scheme: dark) {
+  :root:not([data-theme]) { --spec-a: 0.25; }
   :root:not([data-theme])[data-variant^="f"] .light .l-glow { opacity: 0.26; }
   :root:not([data-theme])[data-variant^="f"] .light .l-core { opacity: 1; }
 }

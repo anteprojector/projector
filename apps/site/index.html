@@ -9,12 +9,14 @@
 <link rel="stylesheet" href="/src/site.css">
 <meta name="color-scheme" content="light dark">
 <script>
-  // Applied before first paint so the theme never flashes. No stored choice
-  // means follow the system.
+  // Applied before first paint so the theme never flashes. Honor an explicit
+  // choice; otherwise start in dark mode.
   try {
     var t = localStorage.getItem("theme");
-    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
-  } catch (e) {}
+    document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark";
+  } catch (e) {
+    document.documentElement.dataset.theme = "dark";
+  }
   document.documentElement.dataset.variant = "f";
   // Deep link straight into a conversation: hide the marketing page before
   // first paint and let boot.ts load the app eagerly. The marketing DOM stays
@@ -664,8 +666,7 @@
   // currently in effect; the choice persists.
   {
     const btn = document.querySelector(".theme");
-    const sysDark = matchMedia("(prefers-color-scheme: dark)");
-    const effective = () => document.documentElement.dataset.theme || (sysDark.matches ? "dark" : "light");
+    const effective = () => document.documentElement.dataset.theme || "dark";
     const paint = () => {
       btn.dataset.mode = effective();
       btn.setAttribute("aria-label", "Theme: " + effective());
@@ -676,7 +677,6 @@
       try { localStorage.setItem("theme", next); } catch {}
       paint();
     });
-    sysDark.addEventListener("change", paint);
     paint();
   }
 
