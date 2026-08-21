@@ -20,6 +20,7 @@ import {
   GET_SURFACE_SOURCE_ACTION_NAME,
   READ_SESSION_ARTIFACTS_ACTION_NAME,
   READ_SESSION_MESSAGES_ACTION_NAME,
+  REPO_BASH_ACTION_NAME,
   hydrateSiteInstance,
   readCardData,
   siteCharter,
@@ -28,6 +29,7 @@ import { anonymousActor } from "./actors";
 import { requireClientMessageId, type MessageActor } from "./messageActor";
 import { escapeConvexJson, restoreConvexJson } from "./convexJson";
 import { SITE_MODEL_ID, sitePromptExecutorConfig } from "./executorConfig";
+import { createRepoBash, type RepoBash } from "./repoBash";
 
 const STREAM_WRITE_INTERVAL_MS = 250;
 
@@ -234,6 +236,7 @@ function createExecutor(
   sessionId: Id<"sessions">,
   streamWriter: StreamWriter,
 ) {
+  let repoBash: RepoBash | undefined;
   return new AiSdkExecutor({
     ...sitePromptExecutorConfig(openai(SITE_MODEL_ID)),
     stream: true,
@@ -270,6 +273,12 @@ function createExecutor(
           },
         });
         return actionResult({ value: JSON.stringify(result) });
+      }
+      if (action.name === REPO_BASH_ACTION_NAME) {
+        repoBash ??= createRepoBash();
+        const command = readStringField(input, "command")?.trim();
+        if (!command) throw new Error("bash command is required");
+        return actionResult({ value: await repoBash.exec(command) });
       }
       return await action.run?.(input as never, context as never);
     },

@@ -10,8 +10,11 @@ Create `apps/site/.env.local` from `.env.local.example`, then start Convex:
 
 ```sh
 cd apps/site
-npx convex dev
+bun run convex
 ```
+
+This regenerates the read-only repository snapshot used by the demo agent
+before starting Convex.
 
 Set the model key in the Convex deployment environment, not in Vite:
 
