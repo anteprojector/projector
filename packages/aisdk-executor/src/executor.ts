@@ -5,7 +5,6 @@ import {
   stepCountIs,
   tool,
   type ModelMessage,
-  type PrepareStepFunction,
   type SystemModelMessage,
   type ToolSet,
 } from "ai";
@@ -34,6 +33,7 @@ import type {
   ExecutorRealizePromptRequest,
   ExecutorRunRequest,
   ExecutorRunResult,
+  FrameDraft,
   FrameMessage,
   ProjectorExecutor,
 } from "@projectors/core";
@@ -46,7 +46,6 @@ import type {
   AiSdkStreamUpdate,
 } from "./types.ts";
 
-const DEFAULT_MAX_STEPS = 5;
 const DYNAMIC_CONTEXT_TAG = "dynamic-context";
 const DYNAMIC_CONTEXT_SYSTEM_GUIDANCE = [
   `Application-provided dynamic context may appear in user messages inside <${DYNAMIC_CONTEXT_TAG}>...</${DYNAMIC_CONTEXT_TAG}>.`,
@@ -66,7 +65,6 @@ type RunState = { terminal: boolean };
 
 const nodeConfigSchema = z.object({
   maxOutputTokens: z.number().int().positive().optional(),
-  maxSteps: z.number().int().positive().optional(),
   temperature: z.number().optional(),
 });
 
@@ -87,21 +85,29 @@ export class AiSdkExecutor<
     const generate = this.config.generateText ?? generateText;
     const stream = this.config.streamText ?? streamText;
     const runState: RunState = { terminal: false };
-    const input = buildAiSdkInput(request, this.config, runState);
+    const buffered = bufferRequestFrames(request);
+    const input = buildAiSdkInput(buffered.request, this.config, runState);
     const startedAt = Date.now();
 
     try {
       if (shouldStream(this.config.stream, request)) {
-        return await this.runStreaming(request, stream, input as never, runState);
+        const result = await this.runStreaming(buffered.request, stream, input as never, runState);
+        return withBufferedFrames(result, buffered.frames);
       }
 
       const result = await generate(input);
-      recordProviderActionSteps(result.steps, request);
+      recordProviderActionSteps(result.steps, buffered.request);
 
       const text = typeof result.text === "string" ? result.text : "";
       return {
-        completionReason: completionReasonForFinish(runState, result.finishReason, this.config),
+        completionReason: completionReasonForFinish(
+          runState,
+          result.finishReason,
+          this.config,
+          hasProviderToolCalls(result.steps),
+        ),
         ...(text.trim() ? { value: text } : {}),
+        ...(buffered.frames.length ? { frames: buffered.frames } : {}),
         execution: executionReport(this.config, startedAt, result.usage),
       };
     } catch (error) {
@@ -138,6 +144,7 @@ export class AiSdkExecutor<
     };
     const segments: TextSegment[] = [];
     const activeSegments = new Map<string, TextSegment>();
+    let hasToolCalls = false;
 
     const startSegment = (partId: string): TextSegment => {
       const segment: TextSegment = {
@@ -241,6 +248,7 @@ export class AiSdkExecutor<
         if (part.type === "text-start") startSegment(part.id);
         if (part.type === "text-delta") appendSegment(part.id, part.text);
         if (part.type === "text-end") closeSegment(part.id);
+        if (part.type === "tool-call") hasToolCalls = true;
         recordProviderActionPart(part, request);
       }
     } catch (error) {
@@ -280,7 +288,7 @@ export class AiSdkExecutor<
     const frames = remainingFrames();
 
     return {
-      completionReason: completionReasonForFinish(runState, finishReason, this.config),
+      completionReason: completionReasonForFinish(runState, finishReason, this.config, hasToolCalls),
       ...(frames.length ? { frames } : {}),
       execution: executionReport(this.config, startedAt, usage),
     };
@@ -335,9 +343,6 @@ function buildAiSdkInput<TDataContent = never>(
     model: config.model,
     system: buildAiSdkSystemMessages(request.inference, config.model, config.promptCache),
     messages: buildAiSdkMessages(request.inference, config.messageToModelMessage),
-    prepareStep: request.refreshInference
-      ? buildPrepareStep(request.refreshInference, config)
-      : undefined,
     tools: hasTools ? tools : undefined,
     abortSignal: request.signal,
     maxOutputTokens: nodeConfig.maxOutputTokens ?? config.maxOutputTokens,
@@ -353,47 +358,13 @@ function buildAiSdkInput<TDataContent = never>(
       : undefined,
     providerOptions: config.providerOptions as never,
     toolChoice: config.toolChoice as never,
-    stopWhen: hasTools
-      ? [
-          stepCountIs(nodeConfig.maxSteps ?? config.maxSteps ?? DEFAULT_MAX_STEPS),
-          () => runState.terminal,
-        ]
-      : undefined,
+    stopWhen: hasTools ? stepCountIs(1) : undefined,
   };
 }
 
 function parseNodeConfig(config: unknown): AiSdkExecutorNodeConfig {
   if (config === undefined) return {};
   return nodeConfigSchema.parse(config);
-}
-
-/**
- * Re-projects history before every step after the first so messages arriving
- * mid-generation surface to the model per visibility rules. The re-projected
- * history excludes this run's own frames; the in-flight tool exchange is
- * re-appended from prior step response messages instead.
- */
-function buildPrepareStep<TDataContent>(
-  refreshInference: () => CompiledInference<TDataContent>,
-  config: AiSdkExecutorConfig<TDataContent>,
-): PrepareStepFunction {
-  return ({ stepNumber, steps }) => {
-    if (stepNumber === 0) return undefined;
-    const inference = refreshInference();
-    // step.response.messages is CUMULATIVE (the SDK snapshots all response
-    // messages so far into every step), so the last step already carries the
-    // whole in-flight exchange. Flat-mapping across steps re-sends earlier
-    // messages once per step — and hard-fails OpenAI Responses reasoning
-    // models with "Duplicate item found with id rs_…".
-    const lastStep = steps[steps.length - 1];
-    return {
-      system: buildAiSdkSystemMessages(inference, config.model, config.promptCache),
-      messages: [
-        ...buildAiSdkMessages(inference, config.messageToModelMessage),
-        ...(lastStep ? lastStep.response.messages : []),
-      ],
-    };
-  };
 }
 
 function asRunRequest<TDataContent>(
@@ -830,12 +801,51 @@ function completionReasonForFinish<TDataContent>(
   runState: RunState,
   finishReason: string | undefined,
   config: AiSdkExecutorConfig<TDataContent>,
+  hasToolCalls = false,
 ): ExecutorRunResult["completionReason"] {
   if (runState.terminal) return "terminal-action";
+  if (hasToolCalls) return "continue";
   if (finishReason && finishReason !== "stop" && config.debug) {
     console.warn(`[aisdk-executor] run finished with non-stop finishReason: ${finishReason}`);
   }
   return "done";
+}
+
+function hasProviderToolCalls(steps: unknown): boolean {
+  return Array.isArray(steps) && steps.some((step) =>
+    step !== null &&
+    typeof step === "object" &&
+    Array.isArray((step as { toolCalls?: unknown }).toolCalls) &&
+    (step as { toolCalls: unknown[] }).toolCalls.length > 0
+  );
+}
+
+function bufferRequestFrames<TDataContent>(request: ExecutorRunRequest<TDataContent>): {
+  request: ExecutorRunRequest<TDataContent>;
+  frames: FrameDraft<TDataContent>[];
+} {
+  const frames: FrameDraft<TDataContent>[] = [];
+  return {
+    frames,
+    request: {
+      ...request,
+      enqueueFrame: (frame) => {
+        frames.push(frame);
+        return { id: `buffered-${frames.length}`, ...frame };
+      },
+    },
+  };
+}
+
+function withBufferedFrames<TDataContent>(
+  result: ExecutorRunResult<TDataContent>,
+  buffered: FrameDraft<TDataContent>[],
+): ExecutorRunResult<TDataContent> {
+  const frames = [...buffered, ...(result.frames ?? [])];
+  return {
+    ...result,
+    ...(frames.length ? { frames } : {}),
+  };
 }
 
 function actorMessageToModelMessage(message: AnyActorMessage): ModelMessage {

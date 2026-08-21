@@ -706,7 +706,7 @@ export type Instance<TDataContent = never> = {
   children?: Instance<TDataContent>[];
 };
 
-export type CompletionReason = "done" | "cancelled" | "delegated" | "error" | "terminal-action";
+export type CompletionReason = "done" | "continue" | "cancelled" | "delegated" | "error" | "terminal-action";
 
 /**
  * "absorbed": a running generation projected the frame, so no follow-up work
@@ -716,7 +716,7 @@ export type CompletionReason = "done" | "cancelled" | "delegated" | "error" | "t
  * an already-decided turn. Neither is a completion to react to
  * (parent-completion triggers ignore "suppressed" like "cancelled").
  */
-export type WorkCompletionReason = "end-turn" | "done" | "cancelled" | "delegated" | "error" | "terminal-action" | "absorbed" | "suppressed";
+export type WorkCompletionReason = "end-turn" | "done" | "continued" | "cancelled" | "delegated" | "error" | "terminal-action" | "absorbed" | "suppressed";
 
 export type WorkActivationMessage = {
   type: "work";

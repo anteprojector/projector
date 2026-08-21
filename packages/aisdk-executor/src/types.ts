@@ -70,7 +70,6 @@ export type AiSdkPromptCacheConfig = false | { ttl?: "5m" | "1h" };
  */
 export type AiSdkExecutorNodeConfig = {
   maxOutputTokens?: number;
-  maxSteps?: number;
   temperature?: number;
 };
 
@@ -107,7 +106,6 @@ export type AiSdkExecutorConfig<
   seed?: number;
   providerOptions?: Record<string, unknown>;
 
-  maxSteps?: number;
   toolChoice?: unknown;
   toolStrict?: boolean;
 

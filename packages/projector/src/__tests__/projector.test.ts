@@ -1916,6 +1916,138 @@ describe("commands and instance mutations", () => {
 });
 
 describe("work scheduling", () => {
+  it("yields one continued step before starting its successor activation", async () => {
+    const calls: string[] = [];
+    const runtimeExecutor = {
+      run: async (request: ExecutorRunRequest) => {
+        calls.push(request.activationId);
+        if (calls.length === 1) {
+          return {
+            completionReason: "continue" as never,
+            frames: [{
+              messages: [
+                {
+                  type: "action" as const,
+                  kind: "request" as const,
+                  action: "tool" as const,
+                  name: "lookup",
+                  input: {},
+                  callId: "call-1",
+                },
+                {
+                  type: "action" as const,
+                  kind: "result" as const,
+                  action: "tool" as const,
+                  name: "lookup",
+                  callId: "call-1",
+                  success: true as const,
+                  value: "ok",
+                },
+              ],
+            }],
+          };
+        }
+        return { completionReason: "done" as const, value: "finished" };
+      },
+      realizePrompt: (request: { inference: unknown }) => ({ provider: "test", input: request.inference }),
+    };
+    const root = createNode({
+      key: "root",
+      runtime: { type: "generator", trigger: { type: "actor-frame" } },
+    });
+    const machine = createMachine({
+      id: "continued-step-demo",
+      instance: { id: "r", isSource: true, node: root },
+      charter: charter(),
+      executor: runtimeExecutor,
+    });
+    machine.enqueueFrame({ messages: [{ ...textUserMessage("go") }] });
+
+    const iterator = runMachine(machine)[Symbol.asyncIterator]();
+    await iterator.next();
+    await iterator.next();
+
+    const step = await iterator.next();
+    expect(calls).toHaveLength(1);
+    expect(step.value?.messages).toMatchObject([
+      { type: "action", kind: "request", name: "lookup" },
+      { type: "action", kind: "result", name: "lookup", success: true },
+      { type: "work", kind: "completion", reason: "continued" },
+      { type: "work", kind: "activation", generatorId: "instance:r" },
+    ]);
+
+    const final = await iterator.next();
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).not.toBe(calls[0]);
+    expect(final.value?.messages).toMatchObject([
+      { type: "assistant", text: "finished" },
+      { type: "work", kind: "completion", reason: "end-turn" },
+    ]);
+  });
+
+  it("reprojects added and removed tools for each continued step", async () => {
+    const base = createAction({ state: null, name: "base" });
+    const added = createAction({ state: null, name: "added" });
+    const initial = createNode({
+      key: "root",
+      tools: [base],
+      runtime: { type: "generator", trigger: { type: "actor-frame" } },
+    });
+    const withAdded = createNode({
+      key: "withAdded",
+      tools: [base, added],
+      runtime: { type: "generator", trigger: { type: "actor-frame" } },
+    });
+    const withoutAdded = createNode({
+      key: "withoutAdded",
+      tools: [base],
+      runtime: { type: "generator", trigger: { type: "actor-frame" } },
+    });
+    const registry = charter({
+      nodes: [initial, withAdded, withoutAdded],
+      actions: [base, added],
+    });
+    const seenTools: string[][] = [];
+    const runtimeExecutor = {
+      run: async (request: ExecutorRunRequest) => {
+        seenTools.push(request.inference.tools.map((tool) => tool.name).sort());
+        const next = seenTools.length === 1
+          ? withAdded
+          : seenTools.length === 2
+            ? withoutAdded
+            : undefined;
+        if (!next) return { completionReason: "done" as const };
+        return {
+          completionReason: "continue" as const,
+          frames: [{
+            messages: [{
+              type: "instance" as const,
+              kind: "transition" as const,
+              instanceId: "r",
+              node: serializeNode(next, registry),
+            }],
+          }],
+        };
+      },
+      realizePrompt: (request: { inference: unknown }) => ({ provider: "test", input: request.inference }),
+    };
+    const machine = createMachine({
+      id: "tool-reprojection-demo",
+      instance: { id: "r", isSource: true, node: initial },
+      charter: registry,
+      executor: runtimeExecutor,
+    });
+    machine.enqueueFrame({ messages: [{ ...textUserMessage("go") }] });
+
+    await collectFrames(runMachine(machine));
+
+    expect(seenTools).toEqual([
+      ["base"],
+      ["added", "base"],
+      ["base"],
+    ]);
+  });
+
   it("yields activation and completion work frames in host-gated order", async () => {
     const calls: string[] = [];
     const runtimeExecutor = {
@@ -2053,19 +2185,16 @@ describe("work scheduling", () => {
       { type: "user" },
       { type: "work", kind: "activation", generatorId: "instance:r" },
       { type: "assistant", content: textParts("instance:r"), text: "instance:r" },
-      { type: "work", kind: "completion" },
     ]);
     expect(calls).toEqual(["instance:r"]);
 
     await expect(assistant).resolves.toMatchObject({
-      value: { messages: [{ type: "assistant", content: textParts("instance:r"), text: "instance:r" }] },
-    });
-    expect(calls).toEqual(["instance:r"]);
-
-    const rootCompletion = await iterator.next();
-    expect(rootCompletion.value?.messages[0]).toMatchObject({
-      type: "work",
-      kind: "completion",
+      value: {
+        messages: [
+          { type: "assistant", content: textParts("instance:r"), text: "instance:r" },
+          { type: "work", kind: "completion" },
+        ],
+      },
     });
     expect(calls).toEqual(["instance:r"]);
 
@@ -2700,6 +2829,9 @@ describe("work scheduling", () => {
       { ...textUserMessage("hi") },
       { type: "work", kind: "activation" },
       { type: "action", kind: "result", action: "tool", name: "trace", callId: "trace-1", success: true, value: "ran" },
+    ]);
+    expect(frames[2]?.messages).toMatchObject([
+      { type: "action", kind: "result", action: "tool", name: "trace", callId: "trace-1", success: true, value: "ran" },
       {
         type: "assistant",
         content: textParts("hello from the model"),
@@ -2709,9 +2841,6 @@ describe("work scheduling", () => {
       { type: "work", kind: "completion", reason: "end-turn" },
     ]);
     expect(frames[2]).toMatchObject({
-      generatorId: "instance:r",
-    });
-    expect(frames[3]).toMatchObject({
       generatorId: "instance:r",
     });
   });

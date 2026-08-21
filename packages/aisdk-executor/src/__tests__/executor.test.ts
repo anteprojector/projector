@@ -165,7 +165,6 @@ describe("AI SDK prompt rendering", () => {
       model: fakeModel(),
       maxOutputTokens: 100,
       toolChoice: "auto",
-      maxSteps: 7,
     });
 
     expect(
@@ -304,7 +303,6 @@ describe("AiSdkExecutor", () => {
       seed: 123,
       providerOptions: { openai: { reasoningEffort: "low" } },
       toolChoice: "auto",
-      maxSteps: 7,
     });
 
     await executor.run(requestInput);
@@ -334,6 +332,31 @@ describe("AiSdkExecutor", () => {
     });
     expect(generateInput.tools.lookup).toBeDefined();
     expect(generateInput.stopWhen).toBeDefined();
+  });
+
+  it("runs one provider step and asks the machine to continue after tool calls", async () => {
+    const refreshInference = vi.fn(() => inference());
+    const generate = vi.fn(async () => result({
+      finishReason: "tool-calls",
+      steps: [{
+        stepType: "initial",
+        toolCalls: [{ toolCallId: "call-1", toolName: "lookup", input: {} }],
+      }],
+    }));
+    const executor = new AiSdkExecutor({
+      model: fakeModel(),
+      generateText: generate as never,
+    });
+
+    const output = await executor.run(request({
+      refreshInference,
+      inference: inference({ tools: [{ state: null, name: "lookup" }] }),
+    }));
+
+    const input = (generate.mock.calls as any)[0]?.[0];
+    expect(input.prepareStep).toBeUndefined();
+    expect(refreshInference).not.toHaveBeenCalled();
+    expect(output.completionReason).toBe("continue");
   });
 
   it("returns generated text for projector-owned output mapping", async () => {
@@ -415,9 +438,8 @@ describe("AiSdkExecutor", () => {
       "streaming",
     ]);
     expect(streamUpdates.map((update) => update.streamSeq)).toEqual([0, 1, 2]);
-    // text-end enqueues the completed segment as its own frame during the run.
-    expect(output.frames).toBeUndefined();
-    expect(frames).toEqual([
+    expect(frames).toEqual([]);
+    expect(output.frames).toEqual([
       {
         generatorId: "runtime-1",
         activationId: "activation-1",
@@ -466,14 +488,15 @@ describe("AiSdkExecutor", () => {
       },
     });
 
-    await executor.run(request({
+    const output = await executor.run(request({
       inference: inference({
         tools: [{ state: null, name: "webSearch", executorOwned: true }],
       }),
       enqueueFrame: enqueueTo(frames),
     }));
 
-    expect(frames).toEqual([
+    expect(frames).toEqual([]);
+    expect(output.frames).toEqual([
       {
         generatorId: "runtime-1",
         activationId: "activation-1",
@@ -529,18 +552,18 @@ describe("AiSdkExecutor", () => {
     const output = await executor.run(request({ enqueueFrame: enqueueTo(frames) }));
     await flushPromises();
 
-    expect(frames).toHaveLength(2);
-    expect(frames[0]?.messages[0]).toMatchObject({
+    expect(frames).toEqual([]);
+    expect(output.frames).toHaveLength(2);
+    expect(output.frames?.[0]?.messages[0]).toMatchObject({
       type: "assistant",
       text: "I’ll inspect the current state.",
       streamState: "complete",
     });
-    expect(frames[1]?.messages[0]).toMatchObject({
+    expect(output.frames?.[1]?.messages[0]).toMatchObject({
       type: "assistant",
       text: "Here’s what I found.",
       streamState: "complete",
     });
-    expect(output.frames).toBeUndefined();
     expect(new Set(streamUpdates.map((update) => update.messageId)).size).toBe(2);
   });
 
@@ -965,9 +988,7 @@ describe("AiSdkExecutor", () => {
   it("stops the tool loop and returns terminal-action when a tool result is terminal", async () => {
     const frames: FrameDraft[] = [];
     const generate = vi.fn(async (input: any) => {
-      expect(input.stopWhen[1]()).toBe(false);
       await input.tools.finish.execute({}, { toolCallId: "call-1" });
-      expect(input.stopWhen[1]()).toBe(true);
       return result({ text: "wrapping up", finishReason: "tool-calls" });
     });
     const executor = new AiSdkExecutor({
@@ -992,7 +1013,8 @@ describe("AiSdkExecutor", () => {
 
     expect(output.completionReason).toBe("terminal-action");
     expect(output.value).toBe("wrapping up");
-    expect(frames).toMatchObject([
+    expect(frames).toEqual([]);
+    expect(output.frames).toMatchObject([
       {
         messages: [
           { type: "action", kind: "request", name: "finish", callId: "call-1" },
@@ -1000,66 +1022,6 @@ describe("AiSdkExecutor", () => {
         ],
       },
     ]);
-  });
-
-  it("re-projects fresh history for each step after the first via prepareStep", async () => {
-    const generate = vi.fn(async () => result({ text: "done" }));
-    const refreshInference = vi.fn(() =>
-      inference({
-        preamble: ["fresh system"],
-        history: [
-          { ...textUserMessage("hello") },
-          { ...textUserMessage("arrived mid-step") },
-        ],
-      }),
-    );
-    const executor = new AiSdkExecutor({
-      model: fakeModel(),
-      generateText: generate as never,
-    });
-
-    await executor.run(
-      request({
-        refreshInference,
-        inference: inference({ history: [{ ...textUserMessage("hello") }] }),
-      }),
-    );
-
-    const input = (generate.mock.calls as any)[0]?.[0];
-    expect(input.prepareStep({ stepNumber: 0, steps: [], messages: [] })).toBeUndefined();
-    expect(refreshInference).not.toHaveBeenCalled();
-
-    const responseMessages = [
-      {
-        role: "assistant",
-        content: [{ type: "tool-call", toolCallId: "call-1", toolName: "lookup", input: {} }],
-      },
-      {
-        role: "tool",
-        content: [
-          {
-            type: "tool-result",
-            toolCallId: "call-1",
-            toolName: "lookup",
-            output: { type: "text", value: "ok" },
-          },
-        ],
-      },
-    ];
-    expect(
-      input.prepareStep({
-        stepNumber: 1,
-        steps: [{ response: { messages: responseMessages } }],
-        messages: [],
-      }),
-    ).toEqual({
-      system: "## System\n\nfresh system",
-      messages: [
-        { role: "user", content: "hello" },
-        { role: "user", content: "arrived mid-step" },
-        ...responseMessages,
-      ],
-    });
   });
 
   it("omits prepareStep when the request cannot re-project", async () => {
