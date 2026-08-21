@@ -25,6 +25,17 @@ export default defineSchema({
     workStartedAt: v.optional(v.number()),
   }),
 
+  // High-churn session metadata lives separately so message and artifact
+  // writes do not invalidate the main session document queries.
+  sessionEphemera: defineTable({
+    sessionId: v.id("sessions"),
+    lastActivityAt: v.number(),
+    messageCount: v.number(),
+    artifactCount: v.number(),
+  })
+    .index("by_session", ["sessionId"])
+    .index("by_last_activity_at", ["lastActivityAt"]),
+
   // One durable membership edge per authenticated participant and session.
   // Kept separate from sessions so collaborative rooms do not grow an
   // unbounded participant array or contend on the session document.

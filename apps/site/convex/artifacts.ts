@@ -20,6 +20,7 @@ import {
 import type { Doc, Id } from "./_generated/dataModel";
 import { restoreConvexJson } from "./convexJson";
 import { siteCharter } from "../src/agent/charter";
+import { recordSessionArtifacts } from "./sessionEphemera";
 
 type DbCtx = MutationCtx | QueryCtx;
 
@@ -257,6 +258,7 @@ export async function recordSurfaceArtifacts(
   const latest = await getLatestSurfaceArtifact(ctx, sessionId);
   let fallbackVersion = latest?.version ?? 0;
   let activeVersion: number | undefined;
+  let insertedCount = 0;
   for (const write of writes) {
     const version = write.version ?? ++fallbackVersion;
     const existing = await ctx.db
@@ -276,10 +278,16 @@ export async function recordSurfaceArtifacts(
       charterVersion: siteCharter.version,
       createdAt: Date.now(),
     });
+    insertedCount += 1;
     activeVersion = version;
   }
   if (activeVersion !== undefined) {
-    await ctx.db.patch(sessionId, { activeSurfaceVersion: activeVersion });
+    const session = await ctx.db.get(sessionId);
+    if (!session) throw new Error("Session not found");
+    await ctx.db.patch(sessionId, {
+      activeSurfaceVersion: activeVersion,
+    });
+    await recordSessionArtifacts(ctx, sessionId, insertedCount);
   }
 }
 
@@ -363,6 +371,7 @@ export const backfillSurfaceArtifacts = internalMutation({
             source: legacy.source,
             createdAt: Date.now(),
           });
+          await recordSessionArtifacts(ctx, session._id, 1);
         }
       }
 

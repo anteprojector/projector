@@ -22,7 +22,9 @@
   // first paint and let boot.ts load the app eagerly. The marketing DOM stays
   // in place underneath so "back to /" is a cheap reveal, not a reload.
   try {
-    if (/^\/s\//.test(location.pathname)) document.documentElement.dataset.app = "1";
+    if (/^\/s\//.test(location.pathname) || location.pathname === "/sessions") {
+      document.documentElement.dataset.app = "1";
+    }
   } catch (e) {}
 </script>
 </head>
@@ -145,7 +147,7 @@
   <!-- The three load-bearing words are hot: hovering previews a question in
        the composer, clicking/tapping sends it. Buttons, so the beam tracker
        and keyboard focus treat them like any other interactive target. -->
-  <h1>agent <button class="hot" type="button" data-topic="framework" data-ask="What kind of agent framework is this?" aria-pressed="false">framework</button> for <button class="hot" type="button" data-topic="evolutionary" data-ask="What makes software evolutionary?" aria-pressed="false">evolutionary</button> <button class="hot" type="button" data-topic="software" data-ask="What can I build with this?" aria-pressed="false">software</button></h1>
+  <h1>Agent <button class="hot" type="button" data-topic="framework" data-ask="What kind of agent framework is this?" aria-pressed="false">framework</button> for <button class="hot" type="button" data-topic="evolutionary" data-ask="What makes software evolutionary?" aria-pressed="false">evolutionary</button> <button class="hot" type="button" data-topic="apps" data-ask="What can I build with this?" aria-pressed="false">apps</button></h1>
 
   <!-- The primary CTA: not a button, a conversation. The demo agent is built
        with projector and knows it — the marketing page's input IS the first
@@ -171,36 +173,32 @@
        the first time a change is visitor-driven (a hot word). -->
   <div class="talk-explainers" aria-live="off">
     <div class="explainer" data-explainer="framework" aria-hidden="true">
-      <button type="button" data-prompt="Lorem: classify the fox?"><span class="explainer-title">Vulpes <span class="ts-mark" aria-hidden="true">LX</span></span><span class="explainer-copy">Lorem animalium: vulpes habitat inter silvas et campos.</span></button>
-      <button type="button" data-prompt="Lorem: describe the honeybee colony?"><span class="explainer-title">Apis socialis</span><span class="explainer-copy">Lorem apium: colonia diligenter favos per prata construit.</span></button>
-      <button type="button" data-prompt="Lorem: catalogue the river otter?" data-demo="subagents"><span class="explainer-title">Lutra fluviatilis</span><span class="explainer-copy">Lorem lutrarum: turmae ludunt iuxta ripas aquae dulcis.</span></button>
-      <button type="button" data-prompt="Lorem: identify the barn owl?"><span class="explainer-title">Tyto nocturna</span><span class="explainer-copy">Lorem avium: noctua tacitis alis per tenebras venatur.</span></button>
+      <button type="button" data-prompt="Lorem: classify the fox?"><span class="explainer-title">typescript</span><span class="explainer-copy">Lorem animalium: vulpes habitat inter silvas et campos.</span></button>
+      <button type="button" data-prompt="Lorem: describe the honeybee colony?"><span class="explainer-title">component based</span><span class="explainer-copy">Lorem apium: colonia diligenter favos per prata construit.</span></button>
+      <button type="button" data-prompt="Lorem: catalogue the river otter?" data-demo="subagents"><span class="explainer-title">context projection</span><span class="explainer-copy">Lorem lutrarum: turmae ludunt iuxta ripas aquae dulcis.</span></button>
+      <button type="button" data-prompt="Lorem: identify the barn owl?"><span class="explainer-title">state complete</span><span class="explainer-copy">Lorem avium: noctua tacitis alis per tenebras venatur.</span></button>
     </div>
     <div class="explainer" data-explainer="evolutionary" aria-hidden="true">
-      <button type="button" data-prompt="Lorem: trace the horse lineage?"><span class="explainer-title">Equus mutabilis</span><span class="explainer-copy">Lorem equorum: formae per aetates variant et pergunt.</span></button>
-      <button type="button" data-prompt="Lorem: explain finch adaptation?"><span class="explainer-title">Aves adaptivae</span><span class="explainer-copy">Lorem avium: rostra variantur secundum semina insularum.</span></button>
-      <button type="button" data-prompt="Lorem: compare the tortoise species?"><span class="explainer-title">Testudines variae</span><span class="explainer-copy">Lorem testudinum: naturae seligunt formas aptissimas.</span></button>
+      <button type="button" data-prompt="Lorem: trace the horse lineage?"><span class="explainer-title">self assembly</span><span class="explainer-copy">Lorem equorum: formae per aetates variant et pergunt.</span></button>
+      <button type="button" data-prompt="Lorem: explain finch adaptation?"><span class="explainer-title">evolutionary search</span><span class="explainer-copy">Lorem avium: rostra variantur secundum semina insularum.</span></button>
     </div>
-    <div class="explainer" data-explainer="software" aria-hidden="true">
-      <button type="button" data-prompt="Lorem: survey the coral reef?"><span class="explainer-title">Corallium fabrica</span><span class="explainer-copy">Lorem marinum: polypi parvi ingentia scopulorum regna struunt.</span></button>
-      <button type="button" data-prompt="Lorem: describe dolphin pods?"><span class="explainer-title">Delphini sociales</span><span class="explainer-copy">Lorem delphinorum: greges navigant, vocant, et ludunt.</span></button>
-      <button type="button" data-prompt="Lorem: catalogue the nautilus?"><span class="explainer-title">Nautilus</span><span class="explainer-copy">Lorem molluscorum: camerae spirales corpus pelagicum portant.</span></button>
+    <div class="explainer" data-explainer="apps" aria-hidden="true">
+      <button type="button" data-prompt="Lorem: survey the coral reef?"><span class="explainer-title">multi-actor</span><span class="explainer-copy">Lorem marinum: polypi parvi ingentia scopulorum regna struunt.</span></button>
+      <button type="button" data-prompt="Lorem: describe dolphin pods?"><span class="explainer-title">client server unification</span><span class="explainer-copy">Lorem delphinorum: greges navigant, vocant, et ludunt.</span></button>
+      <button type="button" data-prompt="Lorem: catalogue the nautilus?"><span class="explainer-title">endogenous state</span><span class="explainer-copy">Lorem molluscorum: camerae spirales corpus pelagicum portant.</span></button>
+      <button type="button" data-prompt="Lorem: imagine a changing interface?"><span class="explainer-title">generative ui</span><span class="explainer-copy">Lorem generativum: formae novae ex statu ipso oriuntur.</span></button>
     </div>
-    <!-- Resting cards: until the visitor engages, the band cycles through a
-         couple of things worth asking. Same machinery as the topic panels —
-         boot.ts rotates data-active and retires the cycle on first intent. -->
-    <div class="explainer explainer-rest" data-explainer="rest-0" aria-hidden="true">
-      <button type="button" data-prompt="Lorem: begin with the red panda?"><span class="explainer-title">Fauna incipit</span><span class="explainer-copy">Lorem animalium: panda rubra inter ramos quiescit.</span></button>
-      <button type="button" data-prompt="Lorem: show the smallest shrew?"><span class="explainer-title">Bestiola prima</span><span class="explainer-copy">Lorem minima: sorex parvus sub foliis celeriter currit.</span></button>
-    </div>
-    <div class="explainer explainer-rest" data-explainer="rest-1" aria-hidden="true">
-      <button type="button" data-prompt="Lorem: record the wolf tracks?"><span class="explainer-title">Vestigia</span><span class="explainer-copy">Lorem luporum: quodque vestigium in nive manet.</span></button>
-      <button type="button" data-prompt="Lorem: compare cats and civets?"><span class="explainer-title">Cur animalia?</span><span class="explainer-copy">Lorem comparatum: felidae et viverridae formis differunt.</span></button>
-    </div>
-    <div class="explainer explainer-rest" data-explainer="rest-2" aria-hidden="true">
-      <button type="button" data-prompt="Lorem: how do ants share a nest?" data-demo="subagents"><span class="explainer-title">Formicae</span><span class="explainer-copy">Lorem coloniae: formicae unum nidum operose communicant.</span></button>
-      <button type="button" data-prompt="Lorem: which animal comes first?"><span class="explainer-title">Faunam tempta</span><span class="explainer-copy">Hoc exemplum est — quaere de quolibet animali.</span></button>
-    </div>
+    <!-- These join the resting rotation without belonging to a headline
+         category yet. Keeping them in a template makes that distinction
+         explicit while giving boot.ts real card markup to clone. -->
+    <template id="default-card-bonuses">
+      <button type="button" data-prompt="How do composable dimensions work?"><span class="explainer-title">composable dimensions</span></button>
+      <button type="button" data-prompt="How does state concurrency work?"><span class="explainer-title">state concurrency</span></button>
+      <button type="button" data-prompt="How does Projector provide end-to-end type safety?"><span class="explainer-title">end to end type safety</span></button>
+      <button type="button" data-prompt="What is a durable frame log?"><span class="explainer-title">durable frame log</span></button>
+      <button type="button" data-prompt="How does work scheduling work?"><span class="explainer-title">work scheduling</span></button>
+      <button type="button" data-prompt="How do coordinated subagents work?" data-demo="subagents"><span class="explainer-title">coordinated subagents</span></button>
+    </template>
   </div>
 </section>
 

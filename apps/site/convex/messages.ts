@@ -20,6 +20,7 @@ import { anonymousActor, authenticatedUser, githubActor } from "./actors";
 import { messageActorValidator, type MessageActor } from "./messageActor";
 import { guestSecretMatches } from "./access";
 import { recordParticipationInternal } from "./sessionParticipants";
+import { recordSessionMessage } from "./sessionEphemera";
 
 type DbCtx = MutationCtx | QueryCtx;
 type MessageDoc = Doc<"messages">;
@@ -243,6 +244,7 @@ export async function addMessageInternal(
   });
   await setDefaultSessionTitle(ctx, session, args.role, args.content);
   await recordMessageParticipation(ctx, args.sessionId, args.role, args.actor, createdAt);
+  await recordSessionMessage(ctx, args.sessionId, createdAt);
 
   return messageId;
 }
