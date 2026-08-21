@@ -854,8 +854,8 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   text-align: left;
   cursor: pointer;
   transition:
-    gap 0.55s cubic-bezier(0.35, 0, 0.15, 1),
-    padding 0.55s cubic-bezier(0.35, 0, 0.15, 1),
+    gap 0.34s cubic-bezier(0.35, 0, 0.15, 1),
+    padding 0.34s cubic-bezier(0.35, 0, 0.15, 1),
     border-color 0.34s ease,
     transform 0.12s,
     box-shadow 0.34s ease;
@@ -899,7 +899,7 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
   margin-bottom: 0;
   opacity: 1;
   transition:
-    max-height 0.4s cubic-bezier(0.35, 0, 0.15, 1),
+    max-height 0.3s cubic-bezier(0.35, 0, 0.15, 1),
     opacity 0.24s ease;
 }
 .step-body code {
@@ -1570,7 +1570,7 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 ::view-transition-group(nav-github-label),
 ::view-transition-group(nav-github-text),
 ::view-transition-group(nav-github-action) {
-  animation-duration: 0.55s;
+  animation-duration: 0.34s;
   animation-timing-function: cubic-bezier(0.35, 0, 0.15, 1);
 }
 ::view-transition-group(nav-utilities) {
@@ -1590,7 +1590,7 @@ main { max-width: var(--wrap); margin: 0 auto; padding: 0 2.25rem; }
 }
 :root.light-reset::view-transition-new(nav-install-shell),
 :root.light-reset::view-transition-new(nav-github-shell) {
-  animation: nav-shell-in 0.55s ease-out both;
+  animation: nav-shell-in 0.34s ease-out both;
 }
 @keyframes nav-shell-out {
   to { opacity: 0; }
