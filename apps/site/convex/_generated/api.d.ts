@@ -23,6 +23,8 @@ import type * as frameHistory from "../frameHistory.js";
 import type * as http from "../http.js";
 import type * as messageActor from "../messageActor.js";
 import type * as messages from "../messages.js";
+import type * as repoBash from "../repoBash.js";
+import type * as sessionEphemera from "../sessionEphemera.js";
 import type * as sessionParticipants from "../sessionParticipants.js";
 import type * as sessions from "../sessions.js";
 import type * as topics from "../topics.js";
@@ -49,6 +51,8 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   messageActor: typeof messageActor;
   messages: typeof messages;
+  repoBash: typeof repoBash;
+  sessionEphemera: typeof sessionEphemera;
   sessionParticipants: typeof sessionParticipants;
   sessions: typeof sessions;
   topics: typeof topics;

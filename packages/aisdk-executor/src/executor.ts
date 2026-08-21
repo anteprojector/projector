@@ -15,6 +15,7 @@ import {
   actionExposure,
   assistantMessageFromTextOutput,
   createToolActionRequest,
+  createActionResultMessage,
   createUnboundActionContext,
   executeActionInvocation,
   hasActionOutputMessages,
@@ -95,6 +96,7 @@ export class AiSdkExecutor<
       }
 
       const result = await generate(input);
+      recordProviderActionSteps(result.steps, request);
 
       const text = typeof result.text === "string" ? result.text : "";
       return {
@@ -239,6 +241,7 @@ export class AiSdkExecutor<
         if (part.type === "text-start") startSegment(part.id);
         if (part.type === "text-delta") appendSegment(part.id, part.text);
         if (part.type === "text-end") closeSegment(part.id);
+        recordProviderActionPart(part, request);
       }
     } catch (error) {
       if (isAbortError(error) || request.signal?.aborted) {
@@ -585,6 +588,21 @@ export function buildAiSdkTools<TDataContent = never>(
     });
 
   for (const action of request.inference.tools) {
+    if (action.executorOwned) {
+      if (actionExposure(action) === "deferred") {
+        throw new Error(
+          `[aisdk-executor] executor-owned action "${action.name}" cannot be deferred`,
+        );
+      }
+      const executorTool = config.executorActions?.[action.name];
+      if (!executorTool) {
+        throw new Error(
+          `[aisdk-executor] executor-owned action "${action.name}" has no matching executor action`,
+        );
+      }
+      tools[action.name] = executorTool;
+      continue;
+    }
     if (actionExposure(action) === "deferred") {
       deferred.push(action);
       continue;
@@ -619,6 +637,87 @@ export function buildAiSdkTools<TDataContent = never>(
   }
 
   return tools;
+}
+
+function executorOwnedAction<TDataContent>(
+  request: ExecutorRunRequest<TDataContent>,
+  name: string,
+): AnyAction | undefined {
+  return request.inference.tools.find(
+    (action) => action.name === name && action.executorOwned === true,
+  );
+}
+
+function recordProviderActionPart<TDataContent>(
+  part: unknown,
+  request: ExecutorRunRequest<TDataContent>,
+): void {
+  if (!part || typeof part !== "object") return;
+  const record = part as Record<string, unknown>;
+  if (record.providerExecuted !== true) return;
+  const name = typeof record.toolName === "string" ? record.toolName : undefined;
+  const callId = typeof record.toolCallId === "string" ? record.toolCallId : undefined;
+  if (!name || !callId || !executorOwnedAction(request, name)) return;
+
+  if (record.type === "tool-call") {
+    request.enqueueFrame({
+      generatorId: request.generatorId,
+      activationId: request.activationId,
+      inert: true,
+      messages: [createToolActionRequest(name, record.input, callId)],
+    });
+    return;
+  }
+
+  if (record.type === "tool-error") {
+    const actionRequest = createToolActionRequest(name, record.input, callId);
+    request.enqueueFrame({
+      generatorId: request.generatorId,
+      activationId: request.activationId,
+      inert: true,
+      messages: [createActionResultMessage(actionRequest, {
+        success: false,
+        error: errorText(record.error),
+        callId,
+      })],
+    });
+    return;
+  }
+
+  if (record.type !== "tool-result" || record.preliminary === true) return;
+  const actionRequest = createToolActionRequest(name, record.input, callId);
+  request.enqueueFrame({
+    generatorId: request.generatorId,
+    activationId: request.activationId,
+    inert: true,
+    messages: [createActionResultMessage(actionRequest, {
+      success: true,
+      value: record.output,
+      callId,
+    })],
+  });
+}
+
+function errorText(value: unknown): string {
+  if (value instanceof Error) return value.message;
+  return typeof value === "string" ? value : JSON.stringify(value) || "Executor action failed";
+}
+
+function recordProviderActionSteps<TDataContent>(
+  steps: unknown,
+  request: ExecutorRunRequest<TDataContent>,
+): void {
+  if (!Array.isArray(steps)) return;
+  for (const step of steps) {
+    if (!step || typeof step !== "object") continue;
+    const record = step as Record<string, unknown>;
+    if (Array.isArray(record.toolCalls)) {
+      record.toolCalls.forEach((part) => recordProviderActionPart(part, request));
+    }
+    if (Array.isArray(record.toolResults)) {
+      record.toolResults.forEach((part) => recordProviderActionPart(part, request));
+    }
+  }
 }
 
 /**

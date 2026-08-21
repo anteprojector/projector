@@ -48,7 +48,12 @@ const withTransition = (mutate: () => void) => {
 
 const enterApp = (
   mod: AppModule,
-  opts: { initialMessage?: string; initialTopic?: string; sessionId?: string },
+  opts: {
+    initialMessage?: string;
+    initialTopic?: string;
+    sessionId?: string;
+    route?: "conversation" | "sessions";
+  },
 ) => {
   root.classList.add("launching");
   return withTransition(() => {
@@ -132,6 +137,29 @@ const commitPreview = () => {
   talkInput.placeholder = "hi";
 };
 const hotWords = [...document.querySelectorAll<HTMLButtonElement>(".hero h1 .hot")];
+const explainerBand = document.querySelector<HTMLElement>(".talk-explainers")!;
+const categoryCards = [
+  ...explainerBand.querySelectorAll<HTMLButtonElement>(
+    ".explainer:not(.explainer-rest) > button",
+  ),
+];
+const bonusCards = [
+  ...document
+    .querySelector<HTMLTemplateElement>("#default-card-bonuses")!
+    .content.querySelectorAll<HTMLButtonElement>("button"),
+];
+const defaultCards = [...categoryCards, ...bonusCards];
+for (let index = 0; index < defaultCards.length; index += 2) {
+  const panel = document.createElement("div");
+  panel.className = "explainer explainer-rest";
+  panel.dataset.explainer = `rest-${index / 2}`;
+  panel.setAttribute("aria-hidden", "true");
+  panel.append(defaultCards[index].cloneNode(true));
+  // An odd final card wraps to the first so the resting state always shows
+  // a pair while still visiting every default card in order.
+  panel.append(defaultCards[(index + 1) % defaultCards.length].cloneNode(true));
+  explainerBand.append(panel);
+}
 const explainers = [...document.querySelectorAll<HTMLElement>("[data-explainer]")];
 
 // On phones a panel is a single column two cards tall; a panel holding more
@@ -208,7 +236,7 @@ const restAdvance = () => {
   restIndex += 1;
 };
 const restResume = () => {
-  if (resting && restTimer === undefined) restTimer = setInterval(restAdvance, 7000);
+  if (resting && restTimer === undefined) restTimer = setInterval(restAdvance, 4900);
 };
 const restPause = () => {
   clearInterval(restTimer);
@@ -229,10 +257,9 @@ if (resting) {
       if (!resting) return;
       restAdvance();
       restResume();
-    }, 1200);
-    const band = document.querySelector<HTMLElement>(".talk-explainers");
-    band?.addEventListener("pointerenter", restPause);
-    band?.addEventListener("pointerleave", restResume);
+    }, 840);
+    explainerBand.addEventListener("pointerenter", restPause);
+    explainerBand.addEventListener("pointerleave", restResume);
   }
 }
 talkInput.addEventListener("input", () => {
@@ -252,7 +279,6 @@ talkClear.addEventListener("click", () => {
 });
 talkMic.addEventListener("click", () => window.alert("voice coming soon"));
 for (const hot of hotWords) {
-  const ask = hot.dataset.ask ?? "";
   // Touch has no hover, so the first tap plays the hover role: activate the
   // word, preview its question in the composer, and grow the send badge (CSS
   // on [data-active]). A second tap on the armed word sends. Mouse clicks
@@ -266,7 +292,7 @@ for (const hot of hotWords) {
     loadApp();
     if (e.pointerType !== "mouse") return;
     activateHotWord(hot);
-    previewAsk(ask);
+    previewAsk(hot.dataset.ask ?? "");
   });
   hot.addEventListener("pointerdown", (e) => {
     touchTap = e.pointerType !== "mouse";
@@ -277,12 +303,12 @@ for (const hot of hotWords) {
     activateHotWord(hot);
     if (touchTap && !armedAtTap) {
       touchTap = false;
-      previewAsk(ask);
+      previewAsk(hot.dataset.ask ?? "");
       return;
     }
     touchTap = false;
     commitPreview();
-    talkInput.value = ask;
+    talkInput.value = hot.dataset.ask ?? "";
     talk.requestSubmit();
   });
 }
@@ -293,7 +319,14 @@ for (const prompt of document.querySelectorAll<HTMLButtonElement>("[data-prompt]
     if (e.pointerType !== "mouse") return;
     previewAsk(ask);
   });
-  prompt.addEventListener("click", () => {
+  prompt.addEventListener("click", (e) => {
+    // Citation marks sit inside the button (a link can't); clicking one opens
+    // its reference instead of submitting the card's prompt.
+    const mark = (e.target as HTMLElement).closest<HTMLElement>("[data-link]");
+    if (mark) {
+      window.open(mark.dataset.link, "_blank", "noopener");
+      return;
+    }
     commitPreview();
     talkInput.value = ask;
     pendingTopic = prompt.dataset.demo;
@@ -322,20 +355,28 @@ addEventListener("keydown", (e) => {
 // Deep link (/s/:id): the head script already hid the marketing page before
 // paint; go straight into the conversation.
 if (root.dataset.app) {
-  const sessionId = location.pathname.split("/")[2];
+  const sessionsRoute = location.pathname === "/sessions";
+  const sessionId = sessionsRoute ? undefined : location.pathname.split("/")[2];
   loadApp().then((mod) => {
     page.inert = true;
-    mod.launch({ sessionId: sessionId === "new" ? undefined : sessionId });
+    mod.launch({
+      route: sessionsRoute ? "sessions" : "conversation",
+      sessionId: sessionId === "new" ? undefined : sessionId,
+    });
     mountProjectActions();
   });
 }
 
 // Back returns to the marketing page; forward re-enters the conversation.
 addEventListener("popstate", () => {
-  const inApp = /^\/s\//.test(location.pathname);
+  const inApp = /^\/s\//.test(location.pathname) || location.pathname === "/sessions";
   if (inApp && !root.dataset.app) {
-    const sessionId = location.pathname.split("/")[2];
-    loadApp().then((mod) => enterApp(mod, { sessionId: sessionId === "new" ? undefined : sessionId }));
+    const sessionsRoute = location.pathname === "/sessions";
+    const sessionId = sessionsRoute ? undefined : location.pathname.split("/")[2];
+    loadApp().then((mod) => enterApp(mod, {
+      route: sessionsRoute ? "sessions" : "conversation",
+      sessionId: sessionId === "new" ? undefined : sessionId,
+    }));
   } else if (!inApp && root.dataset.app) {
     void exitApp();
   }

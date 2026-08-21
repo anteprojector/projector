@@ -52,6 +52,7 @@ import {
 } from "./access";
 import { messageActorValidator } from "./messageActor";
 import type { MessageActor } from "./messageActor";
+import { initializeSessionEphemera } from "./sessionEphemera";
 import { escapeConvexJson, restoreConvexJson, stripClientSchemas } from "./convexJson";
 import {
   getFrameIndexForSession,
@@ -93,6 +94,7 @@ export const create = mutation({
         ? { ownerUserId: userId }
         : { guestSecretHash: await hashGuestSecret(guestSecret!) }),
     });
+    await initializeSessionEphemera(ctx, sessionId, now);
 
     const frameId = await ctx.db.insert("frames", {
       metadata: escapeConvexJson({ type: "init" }),

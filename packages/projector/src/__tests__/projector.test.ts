@@ -42,6 +42,7 @@ import {
   ROOT_GENERATOR_ID,
   collectContributors,
   type Action,
+  type AnyAction,
   type ActorMessage,
   type Charter,
   type CharterConfig,
@@ -486,6 +487,31 @@ describe("params", () => {
 });
 
 describe("action state requirements", () => {
+  it("makes executor ownership mutually exclusive with a local run", () => {
+    createAction({ state: null, name: "providerSearch", executorOwned: true });
+
+    if (false) {
+      // @ts-expect-error executor-owned actions cannot also declare a local implementation
+      createAction({
+        state: null,
+        name: "invalidProviderSearch",
+        executorOwned: true,
+        run: () => "should not run locally",
+      });
+    }
+
+    const createUncheckedAction = createAction as unknown as (
+      action: AnyAction,
+    ) => AnyAction;
+
+    expect(() => createUncheckedAction({
+      state: null,
+      name: "runtimeInvalidProviderSearch",
+      executorOwned: true,
+      run: () => "should not run locally",
+    })).toThrow(/cannot declare run/);
+  });
+
   it("types action contexts from the explicit action state descriptor", () => {
     const counterState = {
       key: "counter",
