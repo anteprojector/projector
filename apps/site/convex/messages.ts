@@ -19,7 +19,9 @@ import {
 import { anonymousActor, authenticatedUser, githubActor } from "./actors";
 import { messageActorValidator, type MessageActor } from "./messageActor";
 import { guestSecretMatches } from "./access";
+import { assertRunnerLease } from "./runnerShared";
 import { recordParticipationInternal } from "./sessionParticipants";
+import { recordSessionMessage } from "./sessionEphemera";
 
 type DbCtx = MutationCtx | QueryCtx;
 type MessageDoc = Doc<"messages">;
@@ -85,12 +87,16 @@ export const add = internalMutation({
 export const appendStreamDelta = internalMutation({
   args: {
     sessionId: v.id("sessions"),
+    // Runner lease fence: a zombie runner superseded by a newer generation
+    // must not keep streaming into the transcript.
+    generation: v.optional(v.number()),
     messageKey: v.string(),
     text: v.string(),
     streamSeq: v.number(),
   },
   returns: v.id("messages"),
-  handler: async (ctx, { sessionId, messageKey, text, streamSeq }) => {
+  handler: async (ctx, { sessionId, generation, messageKey, text, streamSeq }) => {
+    if (generation !== undefined) await assertRunnerLease(ctx, sessionId, generation);
     const existingIndex = await ctx.db
       .query("messageIndex")
       .withIndex("by_session_idempotency_key", (q) =>
@@ -136,11 +142,15 @@ export const appendStreamDelta = internalMutation({
 export const markStreamFailed = internalMutation({
   args: {
     sessionId: v.id("sessions"),
+    // Optional on purpose: the delayed reaper settles abandoned rows without
+    // holding any lease; a live runner passes its generation and is fenced.
+    generation: v.optional(v.number()),
     messageKey: v.string(),
     state: v.union(v.literal("cancelled"), v.literal("error")),
   },
   returns: v.null(),
-  handler: async (ctx, { sessionId, messageKey, state }) => {
+  handler: async (ctx, { sessionId, generation, messageKey, state }) => {
+    if (generation !== undefined) await assertRunnerLease(ctx, sessionId, generation);
     const index = await ctx.db
       .query("messageIndex")
       .withIndex("by_session_idempotency_key", (q) =>
@@ -243,6 +253,7 @@ export async function addMessageInternal(
   });
   await setDefaultSessionTitle(ctx, session, args.role, args.content);
   await recordMessageParticipation(ctx, args.sessionId, args.role, args.actor, createdAt);
+  await recordSessionMessage(ctx, args.sessionId, createdAt);
 
   return messageId;
 }

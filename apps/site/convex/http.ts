@@ -48,8 +48,8 @@ http.route({
         guestSecret,
         ipHash,
       });
-      await ctx.runAction(internal.agent.sendAnonymousMessage, body);
-      return jsonResponse(request, 200, { success: true });
+      const { itemId } = await ctx.runMutation(internal.inbox.sendAnonymous, body);
+      return jsonResponse(request, 200, { success: true, itemId });
     } catch (error) {
       const message = String(error);
       if (message.includes("AUTH_REQUIRED") || message.includes("GUEST_RATE_LIMITED")) {

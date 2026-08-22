@@ -15,7 +15,7 @@ export function getGuestSecret(): string {
 export async function sendAnonymousMessage(
   actionsUrl: string,
   args: { sessionId: string; text: string; clientMessageId: string; guestSecret: string },
-): Promise<void> {
+): Promise<{ itemId?: string }> {
   const response = await fetch(`${actionsUrl.replace(/\/$/, "")}/api/anonymous/message`, {
     method: "POST",
     headers: {
@@ -28,7 +28,10 @@ export async function sendAnonymousMessage(
       clientMessageId: args.clientMessageId,
     }),
   });
-  if (response.ok) return;
+  if (response.ok) {
+    const body = (await response.json().catch(() => null)) as { itemId?: unknown } | null;
+    return typeof body?.itemId === "string" ? { itemId: body.itemId } : {};
+  }
 
   const body = (await response.json().catch(() => null)) as { code?: unknown } | null;
   const code = typeof body?.code === "string" ? body.code : "MESSAGE_FAILED";

@@ -1,5 +1,7 @@
+import { openai } from "@ai-sdk/openai";
 import type { AiSdkExecutorConfig } from "@projectors/aisdk-executor";
 import type { LanguageModel } from "ai";
+import { WEB_SEARCH_ACTION_NAME } from "../src/agent/charter";
 import { env } from "./_generated/server";
 
 export const SITE_MODEL_ID = env.OPENAI_MODEL ?? "gpt-5.6-sol";
@@ -9,13 +11,30 @@ export const SITE_MODEL_ID = env.OPENAI_MODEL ?? "gpt-5.6-sol";
  * inspection. Execution-only concerns such as streaming and action dispatch
  * are layered on by the production executor.
  */
-export function sitePromptExecutorConfig(model: LanguageModel): AiSdkExecutorConfig {
+export function sitePromptExecutorConfig(
+  model: LanguageModel,
+): AiSdkExecutorConfig {
   return {
     model,
     maxOutputTokens: 4096,
-    providerOptions: { openai: { parallelToolCalls: true } },
+    executorActions: {
+      [WEB_SEARCH_ACTION_NAME]: openai.tools.webSearch({
+        externalWebAccess: true,
+        searchContextSize: "medium",
+      }),
+    },
+    providerOptions: {
+      openai: {
+        parallelToolCalls: true,
+        reasoningEffort: "low",
+      },
+    },
     messageToModelMessage: (message) => {
-      if (message.type !== "user" || !message.actor || message.text === undefined) {
+      if (
+        message.type !== "user" ||
+        !message.actor ||
+        message.text === undefined
+      ) {
         return undefined;
       }
       const attribution = JSON.stringify({

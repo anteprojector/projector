@@ -1,4 +1,9 @@
-import type { ClientCommandMeta, ClientInstance, ClientStateView, ClientToolMeta } from "@projectors/core/client";
+import type {
+  ClientCommandMeta,
+  ClientInstance,
+  ClientStateView,
+  ClientToolMeta,
+} from "@projectors/core/client";
 import { useQuery } from "convex/react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../../../convex/_generated/api";
@@ -66,7 +71,11 @@ export function DevPanel({
             <span className="dev-panel-eyebrow">developer</span>
             <h2>{tab === "instances" ? "instance tree" : "rendered prompt"}</h2>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close developer panel">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close developer panel"
+          >
             close
           </button>
         </header>
@@ -117,9 +126,7 @@ function PromptView({ prompts }: { prompts: CurrentPrompts }) {
 
   return (
     <div className="dev-prompt-view">
-      <p className="dev-prompt-note">
-        current · read-only
-      </p>
+      <p className="dev-prompt-note">current · read-only</p>
       {prompts.runtimes.map((runtime, index) => (
         <PromptRuntimeView
           key={runtime.generatorId}
@@ -143,11 +150,18 @@ function PromptRuntimeView({
   const system = input?.system;
   const messages = Array.isArray(input?.messages) ? input.messages : [];
   const config = input
-    ? Object.fromEntries(Object.entries(input).filter(([key]) => key !== "system" && key !== "messages"))
+    ? Object.fromEntries(
+        Object.entries(input).filter(
+          ([key]) => key !== "system" && key !== "messages",
+        ),
+      )
     : runtime.prompt.input;
 
   return (
-    <section className="dev-prompt-runtime" data-expanded={expanded ? "" : undefined}>
+    <section
+      className="dev-prompt-runtime"
+      data-expanded={expanded ? "" : undefined}
+    >
       <button
         type="button"
         className="dev-prompt-runtime-toggle"
@@ -164,7 +178,11 @@ function PromptRuntimeView({
       {expanded && (
         <div className="dev-prompt-runtime-body">
           <PromptSection title="system">
-            {system === undefined ? <MutedLine>empty</MutedLine> : <PromptContent value={system} />}
+            {system === undefined ? (
+              <MutedLine>empty</MutedLine>
+            ) : (
+              <PromptContent value={system} />
+            )}
           </PromptSection>
           <PromptSection title={`messages ${messages.length}`}>
             {messages.length === 0 ? (
@@ -186,7 +204,13 @@ function PromptRuntimeView({
   );
 }
 
-function PromptSection({ title, children }: { title: string; children: ReactNode }) {
+function PromptSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
   return (
     <section className="dev-prompt-section">
       <h3>{title}</h3>
@@ -195,9 +219,16 @@ function PromptSection({ title, children }: { title: string; children: ReactNode
   );
 }
 
-function PromptMessage({ message, index }: { message: unknown; index: number }) {
+function PromptMessage({
+  message,
+  index,
+}: {
+  message: unknown;
+  index: number;
+}) {
   const record = asRecord(message);
-  const role = typeof record?.role === "string" ? record.role : `message ${index + 1}`;
+  const role =
+    typeof record?.role === "string" ? record.role : `message ${index + 1}`;
   const content = record && "content" in record ? record.content : message;
   return (
     <div className="dev-prompt-message">
@@ -225,7 +256,12 @@ function InstanceNode({
   defaultExpanded?: boolean;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
-  const details = instance.states.length + instance.tools.length + instance.commands.length;
+  const details =
+    instance.preamble.length +
+    instance.recency.length +
+    instance.states.length +
+    instance.tools.length +
+    instance.commands.length;
   const childCount = instance.members.length + instance.children.length;
 
   return (
@@ -240,29 +276,79 @@ function InstanceNode({
         <span className="dev-tree-sign">{expanded ? "−" : "+"}</span>
         <span className="dev-tree-kind">{instance.kind}</span>
         <strong>{instance.nodeKey}</strong>
-        {instance.name && <span className="dev-tree-name">{instance.name}</span>}
-        <span className="dev-tree-runtime">{instance.contributor.runtimeType}</span>
+        {instance.name && (
+          <span className="dev-tree-name">{instance.name}</span>
+        )}
+        <span className="dev-tree-runtime">
+          {instance.contributor.runtimeType}
+        </span>
         <span className="dev-tree-id">{instance.contributor.id}</span>
-        <span className="dev-tree-count">{details} meta / {childCount} child</span>
+        <span className="dev-tree-count">
+          {details} meta / {childCount} child
+        </span>
       </button>
       {expanded && (
-        <div className="dev-tree-node-body" style={{ marginLeft: `${depth * 16 + 24}px` }}>
+        <div
+          className="dev-tree-node-body"
+          style={{ marginLeft: `${depth * 16 + 24}px` }}
+        >
           <Disclosure title="metadata">
             <KeyValueRows
               rows={[
                 ["address", addressLabel(instance.contributor.address)],
-                ...(instance.id ? [["instance id", instance.id] as [string, ReactNode]] : []),
+                ...(instance.id
+                  ? [["instance id", instance.id] as [string, ReactNode]]
+                  : []),
+                ...(instance.purpose
+                  ? [["purpose", instance.purpose] as [string, ReactNode]]
+                  : []),
               ]}
             />
           </Disclosure>
+          <ContentList title="preamble" parts={instance.preamble} />
+          <ContentList title="recency" parts={instance.recency} />
+          <InstanceList
+            title="members"
+            instances={instance.members}
+            depth={depth}
+          />
+          <InstanceList
+            title="children"
+            instances={instance.children}
+            depth={depth}
+          />
           <StateList states={instance.states} />
           <ActionList title="tools" actions={instance.tools} />
           <ActionList title="commands" actions={instance.commands} />
-          <InstanceList title="members" instances={instance.members} depth={depth} />
-          <InstanceList title="children" instances={instance.children} depth={depth} />
         </div>
       )}
     </div>
+  );
+}
+
+function ContentList({
+  title,
+  parts,
+}: {
+  title: string;
+  parts: ClientInstance["preamble"];
+}) {
+  if (parts.length === 0) return <MutedLine>{title} empty</MutedLine>;
+  return (
+    <TreeSection title={`${title} ${parts.length}`}>
+      {parts.map((part, index) => {
+        const record = asRecord(part);
+        const kind =
+          typeof record?.type === "string" ? record.type : `part ${index + 1}`;
+        const preview =
+          typeof record?.text === "string" ? record.text : jsonInline(part);
+        return (
+          <Disclosure key={`${title}:${index}`} title={kind} preview={preview}>
+            <JsonValue value={part} />
+          </Disclosure>
+        );
+      })}
+    </TreeSection>
   );
 }
 
@@ -279,7 +365,11 @@ function InstanceList({
   return (
     <TreeSection title={`${title} ${instances.length}`}>
       {instances.map((instance) => (
-        <InstanceNode key={instance.contributor.id} instance={instance} depth={depth + 1} />
+        <InstanceNode
+          key={instance.contributor.id}
+          instance={instance}
+          depth={depth + 1}
+        />
       ))}
     </TreeSection>
   );
@@ -295,7 +385,9 @@ function StateList({ states }: { states: ClientStateView[] }) {
           title={
             <span className="dev-tree-item-title">
               <strong>{state.key}</strong>
-              {state.projection && <span>{projectionLabel(state.projection)}</span>}
+              {state.projection && (
+                <span>{projectionLabel(state.projection)}</span>
+              )}
               <span>{addressLabel(state.address)}</span>
             </span>
           }
@@ -328,11 +420,16 @@ function ActionList({
             </span>
           }
           preview={
-            action.description ?? (action.inputSchema !== undefined ? "input schema" : undefined)
+            action.description ??
+            (action.inputSchema !== undefined ? "input schema" : undefined)
           }
         >
-          {action.description && <p className="dev-tree-description">{action.description}</p>}
-          {action.inputSchema !== undefined && <JsonValue value={action.inputSchema} />}
+          {action.description && (
+            <p className="dev-tree-description">{action.description}</p>
+          )}
+          {action.inputSchema !== undefined && (
+            <JsonValue value={action.inputSchema} />
+          )}
         </Disclosure>
       ))}
     </TreeSection>
@@ -350,8 +447,15 @@ function Disclosure({
 }) {
   const [expanded, setExpanded] = useState(false);
   return (
-    <div className="dev-tree-disclosure" data-expanded={expanded ? "" : undefined}>
-      <button type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
+    <div
+      className="dev-tree-disclosure"
+      data-expanded={expanded ? "" : undefined}
+    >
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
         <span className="dev-tree-sign">{expanded ? "−" : "+"}</span>
         <span className="dev-tree-disclosure-title">{title}</span>
         {preview && <span className="dev-tree-preview">{preview}</span>}
@@ -361,7 +465,13 @@ function Disclosure({
   );
 }
 
-function TreeSection({ title, children }: { title: string; children: ReactNode }) {
+function TreeSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
   return (
     <section className="dev-tree-section">
       <h3>{title}</h3>
@@ -401,7 +511,9 @@ function projectionLabel(projection: ClientStateView["projection"]): string {
     projection.exposure,
     projection.slot ? `slot:${projection.slot}` : undefined,
     projection.region ? `region:${projection.region}` : undefined,
-  ].filter(Boolean).join(" ");
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function jsonInline(value: unknown): string {
@@ -416,7 +528,8 @@ function jsonInline(value: unknown): string {
 function addressLabel(value: unknown): string {
   if (!value || typeof value !== "object") return String(value);
   const address = value as Record<string, unknown>;
-  if (address.type === "instance") return `instance:${String(address.instanceId)}`;
+  if (address.type === "instance")
+    return `instance:${String(address.instanceId)}`;
   if (address.type === "member" && Array.isArray(address.memberPath)) {
     return `member:${String(address.ownerInstanceId)}/${address.memberPath.join("/")}`;
   }

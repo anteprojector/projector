@@ -28,6 +28,7 @@ export function launch(opts: {
   initialMessage?: string;
   initialTopic?: string;
   sessionId?: string;
+  route?: "conversation" | "sessions";
 }): void {
   warm();
   const container = document.getElementById("app");
@@ -45,6 +46,7 @@ export function launch(opts: {
           initialMessage={opts.initialMessage}
           initialTopic={opts.initialTopic}
           sessionId={opts.sessionId}
+          route={opts.route}
         />
       </StrictMode>,
     );
