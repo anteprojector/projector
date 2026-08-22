@@ -18,12 +18,42 @@ export default defineSchema({
     guestSecretHash: v.optional(v.string()),
     ownerUserId: v.optional(v.id("users")),
     anonymousTurnUsedAt: v.optional(v.number()),
-    // Set when a client command schedules an agent wake (appPanePing), cleared
-    // when the run's frames persist. Presence bookkeeping, deliberately NOT
-    // machine state: the client shows the thinking indicator from it, and a
-    // crashed run only ever strands a timestamp the client ages out.
-    workStartedAt: v.optional(v.number()),
   }),
+
+  // User messages and client commands enter through this inbox and are
+  // materialized by the single lease-holding runner. An item is marked settled in the same
+  // mutation that persists the final frame carrying its content. Settled rows
+  // double as the durable command result the client awaits.
+  agentInbox: defineTable({
+    sessionId: v.id("sessions"),
+    // `topic` remains only so the development deployment can retain already
+    // settled historical rows; no code enqueues new topic items.
+    kind: v.union(v.literal("message"), v.literal("command"), v.literal("topic")),
+    // Escaped (convexJson): command payloads carry client machine messages.
+    payload: v.any(),
+    actor: messageActorValidator,
+    status: v.union(v.literal("pending"), v.literal("complete"), v.literal("error")),
+    // Command execution status, for the client's awaitable promise.
+    result: v.optional(v.any()),
+    error: v.optional(v.string()),
+    enqueuedAt: v.number(),
+  }).index("by_session_status", ["sessionId", "status"]),
+
+  // Single-runner lease: only the holder of the live generation may append
+  // work-bearing frames or make runner-originated writes. Complete inert turns
+  // may append directly in one OCC-serialized mutation. Claiming increments generation,
+  // so a stale runner's writes fail the fence in the mutation that would have
+  // committed them. Expiry only gates claiming; the fence is the generation.
+  runnerLease: defineTable({
+    sessionId: v.id("sessions"),
+    generation: v.number(),
+    // Lease rows are permanent so generation never resets. Optional while
+    // existing development rows migrate; every new claim writes it.
+    active: v.optional(v.boolean()),
+    expiresAt: v.number(),
+    renewedAt: v.number(),
+    consecutiveFailures: v.optional(v.number()),
+  }).index("by_session", ["sessionId"]),
 
   // High-churn session metadata lives separately so message and artifact
   // writes do not invalidate the main session document queries.
@@ -90,12 +120,17 @@ export default defineSchema({
     version: v.number(),
     title: v.string(),
     source: v.string(),
+    // Stable AI SDK tool call id. Retries return this same artifact instead of
+    // allocating another surface version.
+    callId: v.optional(v.string()),
     frameId: v.optional(v.id("frames")),
     // The charter version that authored this artifact — the hook for an
     // LLM-led migration pass if the surface contract ever changes.
     charterVersion: v.optional(v.string()),
     createdAt: v.number(),
-  }).index("by_session_kind_version", ["sessionId", "kind", "version"]),
+  })
+    .index("by_session_kind_version", ["sessionId", "kind", "version"])
+    .index("by_session_and_call_id", ["sessionId", "callId"]),
 
   messages: defineTable({
     frameId: v.optional(v.id("frames")),

@@ -3,7 +3,7 @@
 // not like they navigated somewhere else.
 
 import { ConvexAuthProvider, useAuthActions } from "@convex-dev/auth/react";
-import { ConvexReactClient, useAction, useMutation, useQuery } from "convex/react";
+import { ConvexReactClient, useConvex, useMutation, useQuery } from "convex/react";
 import { TextAlignStart } from "lucide-react";
 import {
   Component,
@@ -33,6 +33,8 @@ import { Inspector, PaneIcon } from "./Inspector";
 import { DevPanel } from "./dev/DevPanel";
 import { AppNav } from "./AppNav";
 import { AdminSessions } from "./AdminSessions";
+import { AgentResponse } from "./AgentResponse";
+import { awaitInboxItem } from "./awaitInboxItem";
 import { formatStateUpdateRejection } from "./state-update-notice";
 import { createSurfaceApi } from "./surface/api";
 import { SurfaceHost } from "./surface/Surface";
@@ -351,10 +353,11 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
     if (!isAdmin) setDevPanelOpen(false);
   }, [isAdmin]);
 
+  const convex = useConvex();
   const createSession = useMutation(api.sessions.create);
-  const sendMessage = useAction(api.agent.sendMessage);
+  const sendMessage = useMutation(api.inbox.send);
   const openTopic = useMutation(api.topics.open);
-  const sendCommand = useMutation(api.sessions.sendCommand);
+  const sendCommand = useMutation(api.inbox.sendCommand);
 
   const session = useQuery(api.sessions.get, sessionId ? { sessionId } : "skip");
 
@@ -365,6 +368,8 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
   sessionIdRef.current = sessionId;
   const sendCommandRef = useRef(sendCommand);
   sendCommandRef.current = sendCommand;
+  const convexRef = useRef(convex);
+  convexRef.current = convex;
   const beginPaneAgentNoticeRef = useRef<(callId: string) => void>(() => {});
   const cancelPaneAgentNoticeRef = useRef<(callId: string) => void>(() => {});
   const stateUpdateRejectedRef = useRef<
@@ -383,7 +388,11 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
         const isPanePing = message.name === "appPanePing";
         if (isPanePing) beginPaneAgentNoticeRef.current(message.callId);
         try {
-          return await sendCommandRef.current({ sessionId: id, message, guestSecret });
+          // Commands are queued for the session's single runner; the promise
+          // settles when the runner has durably executed the command (and
+          // rejects if it failed), not when the enqueue commits.
+          const { itemId } = await sendCommandRef.current({ sessionId: id, message, guestSecret });
+          return await awaitInboxItem(convexRef.current, itemId);
         } catch (error) {
           if (isPanePing) cancelPaneAgentNoticeRef.current(message.callId);
           throw error;
@@ -656,6 +665,18 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
     setWaitingSince(null);
   }, []);
 
+  // Fire-and-forget watch on a message turn's inbox item: the enqueue itself
+  // almost never fails, but the runner can reject the item at materialization
+  // (or die before a runner exists to claim it) — say so instead of sitting
+  // silent.
+  const watchTurnItem = useCallback((itemId: Id<"agentInbox">) => {
+    void awaitInboxItem(convexRef.current, itemId).catch(() => {
+      setSendError(
+        "that turn hit an error before projector could answer — anything it already did is in the frame log; try sending again",
+      );
+    });
+  }, []);
+
   const send = useCallback(
     async (text: string, topic?: string) => {
       const trimmed = text.trim();
@@ -701,19 +722,25 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
             guestSecret,
           });
         } else if (isAuthenticated) {
-          await sendMessage({
+          // Enqueue-only: the turn itself runs in the session's single runner.
+          // The thinking indicator flips on with the same transaction (a
+          // pending inbox item lights workStartedAt); the item watch surfaces
+          // an enqueue that the runner failed to materialize.
+          const { itemId } = await sendMessage({
             sessionId: id,
             text: trimmed,
             clientMessageId,
             guestSecret,
           });
+          watchTurnItem(itemId);
         } else if (actionsUrl) {
-          await sendAnonymousMessage(actionsUrl, {
+          const { itemId } = await sendAnonymousMessage(actionsUrl, {
             sessionId: id,
             text: trimmed,
             clientMessageId,
             guestSecret,
           });
+          if (itemId) watchTurnItem(itemId as Id<"agentInbox">);
         } else {
           throw new Error("Anonymous message endpoint isn't configured");
         }
@@ -751,6 +778,7 @@ function Conversation({ actionsUrl, initialMessage, initialTopic, sessionId: ses
       sendMessage,
       session?.anonymousTurnUsed,
       sessionId,
+      watchTurnItem,
     ],
   );
 
@@ -1877,7 +1905,9 @@ function Message({ messageId, role, content, streamingLive, actor, isMine, widge
         ? <CardMessage card={card} api={surfaceApi} />
         : Explainer && onAsk
           ? <Explainer onAsk={(text) => void onAsk(text)} />
-          : <p className="msg-body">{body}</p>}
+          : role === "assistant"
+            ? <AgentResponse markdown={body} phase={streamingLive ? "streaming" : "settled"} />
+            : <p className="msg-body">{body}</p>}
       {/* This response also wrote the app surface; offered only while the
           pane isn't already on screen (the parent passes the handler). */}
       {onOpenAppPane && (

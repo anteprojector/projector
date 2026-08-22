@@ -11,7 +11,9 @@ export const SITE_MODEL_ID = env.OPENAI_MODEL ?? "gpt-5.6-sol";
  * inspection. Execution-only concerns such as streaming and action dispatch
  * are layered on by the production executor.
  */
-export function sitePromptExecutorConfig(model: LanguageModel): AiSdkExecutorConfig {
+export function sitePromptExecutorConfig(
+  model: LanguageModel,
+): AiSdkExecutorConfig {
   return {
     model,
     maxOutputTokens: 4096,
@@ -21,9 +23,18 @@ export function sitePromptExecutorConfig(model: LanguageModel): AiSdkExecutorCon
         searchContextSize: "medium",
       }),
     },
-    providerOptions: { openai: { parallelToolCalls: true } },
+    providerOptions: {
+      openai: {
+        parallelToolCalls: true,
+        reasoningEffort: "low",
+      },
+    },
     messageToModelMessage: (message) => {
-      if (message.type !== "user" || !message.actor || message.text === undefined) {
+      if (
+        message.type !== "user" ||
+        !message.actor ||
+        message.text === undefined
+      ) {
         return undefined;
       }
       const attribution = JSON.stringify({

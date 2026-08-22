@@ -8,6 +8,7 @@
     "preview": "vite preview",
     "convex": "bun run repo:snapshot && convex dev",
     "repo:snapshot": "bun scripts/generate-repo-snapshot.ts",
+    "test": "vitest run",
     "typecheck": "tsgo"
   },
   "dependencies": {
@@ -22,6 +23,9 @@
     "lucide-react": "^1.32.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.1",
     "sucrase": "^3.35.1",
     "zod": "catalog:"
   },
@@ -30,6 +34,7 @@
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^5.1.0",
     "typescript": "^5",
-    "vite": "^7.3.2"
+    "vite": "^7.3.2",
+    "vitest": "^4.1.11"
   }
 }

@@ -7,10 +7,10 @@
 
 import { v } from "convex/values";
 import { mutation } from "./_generated/server";
-import { appendMachineFrameInternal } from "./sessions";
 import { authorizeSessionWrite, consumeAnonymousTurn } from "./access";
 import { addMessageInternal } from "./messages";
 import { requireClientMessageId } from "./messageActor";
+import { appendMachineFrameInternal } from "./sessions";
 
 const TOPICS: Record<string, { ask: string; reply: string }> = {
   subagents: {
@@ -53,10 +53,16 @@ export const open = mutation({
     const normalizedClientMessageId = requireClientMessageId(clientMessageId);
 
     const userText = ask?.trim() || entry.ask;
+
+    // This is already a complete turn, not work for the agent runner. Persist
+    // one inert frame so it becomes history without scheduling generation.
+    const userMessageId = crypto.randomUUID();
+    const assistantMessageId = crypto.randomUUID();
     const frameId = await appendMachineFrameInternal(ctx, {
       sessionId,
       session,
       frame: {
+        inert: true,
         metadata: { type: "topic", topic },
         messages: [
           {
@@ -64,16 +70,17 @@ export const open = mutation({
             text: userText,
             actor,
             clientMessageId: normalizedClientMessageId,
+            messageId: userMessageId,
           },
-          // Assistant messages default to audience "self", which is scoped to
-          // the frame's generator — and an app-authored frame has none, so the
-          // reply would be invisible to the model. This one was said to the
-          // whole room.
-          { type: "assistant", text: entry.reply, audience: "broadcast" },
+          {
+            type: "assistant",
+            text: entry.reply,
+            audience: "broadcast",
+            messageId: assistantMessageId,
+          },
         ],
       },
     });
-
     await addMessageInternal(ctx, {
       sessionId,
       role: "user",
@@ -81,7 +88,7 @@ export const open = mutation({
       actor,
       clientMessageId: normalizedClientMessageId,
       frameId,
-      idempotencyKey: `topic:${frameId}:user`,
+      idempotencyKey: `user:${userMessageId}`,
     });
     await addMessageInternal(ctx, {
       sessionId,
@@ -89,7 +96,7 @@ export const open = mutation({
       content: entry.reply,
       widget: topic,
       frameId,
-      idempotencyKey: `topic:${frameId}:assistant`,
+      idempotencyKey: `assistant:${assistantMessageId}`,
     });
 
     return null;

@@ -1,10 +1,8 @@
 // Generative UI artifacts: immutable, versioned rows holding agent-authored
-// TSX. writeAppSurface's source never enters machine state — the action
-// request in the frame log carries it, and recordSurfaceArtifacts (called
-// from the frame-persist mutation, so both the agent path and sendCommand hit
-// it) folds each successful write into a row here. State-schema evolution can
-// therefore never lose a surface, and an LLM-led migration only has to walk
-// this table.
+// TSX. writeAppSurface commits the artifact inside the tool call and returns
+// success only after this durable mutation completes. State-schema evolution
+// can therefore never lose a surface, and an LLM-led migration only has to
+// walk this table.
 
 import {
   paginationOptsValidator,
@@ -21,6 +19,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { restoreConvexJson } from "./convexJson";
 import { siteCharter } from "../src/agent/charter";
 import { recordSessionArtifacts } from "./sessionEphemera";
+import { assertRunnerLease } from "./runnerShared";
 
 type DbCtx = MutationCtx | QueryCtx;
 
@@ -139,6 +138,53 @@ export const activeSurfaceSource = internalQuery({
     return artifact
       ? { version: artifact.version, title: artifact.title, source: artifact.source }
       : null;
+  },
+});
+
+// The write itself is the tool side effect. The AI SDK tool call id makes it
+// idempotent across runner retries; a mutation failure throws through the tool
+// invocation, so no successful tool result is emitted.
+export const writeSurface = internalMutation({
+  args: {
+    sessionId: v.id("sessions"),
+    generation: v.number(),
+    callId: v.string(),
+    title: v.string(),
+    source: v.string(),
+  },
+  returns: v.object({ version: v.number() }),
+  handler: async (ctx, { sessionId, generation, callId, title, source }) => {
+    await assertRunnerLease(ctx, sessionId, generation);
+    const existing = await ctx.db
+      .query("artifacts")
+      .withIndex("by_session_and_call_id", (q) =>
+        q.eq("sessionId", sessionId).eq("callId", callId),
+      )
+      .unique();
+    if (existing) {
+      if (existing.title !== title || existing.source !== source) {
+        throw new Error("Tool call id was reused with different surface input");
+      }
+      return { version: existing.version };
+    }
+
+    const session = await ctx.db.get(sessionId);
+    if (!session) throw new Error("Session not found");
+    const latest = await getLatestSurfaceArtifact(ctx, sessionId);
+    const version = (latest?.version ?? 0) + 1;
+    await ctx.db.insert("artifacts", {
+      sessionId,
+      kind: "surface",
+      version,
+      title,
+      source,
+      callId,
+      charterVersion: siteCharter.version,
+      createdAt: Date.now(),
+    });
+    await ctx.db.patch(sessionId, { activeSurfaceVersion: version });
+    await recordSessionArtifacts(ctx, sessionId, 1);
+    return { version };
   },
 });
 

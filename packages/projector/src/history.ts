@@ -135,12 +135,14 @@ export function createActivationFrame<
   sourceFrameId,
   concurrencyKey,
   concurrency,
+  continuationState,
 }: {
   activationId: string;
   generatorId: GeneratorId;
   sourceFrameId: string;
   concurrencyKey: string;
   concurrency: RuntimeConcurrency;
+  continuationState?: unknown;
 }): FrameDraft<TDataContent> {
   return {
     messages: [
@@ -152,6 +154,7 @@ export function createActivationFrame<
         sourceFrameId,
         concurrencyKey,
         concurrency,
+        ...(continuationState !== undefined ? { continuationState } : {}),
       } satisfies WorkActivationMessage) as FrameMessage<TDataContent>,
     ],
   };
